@@ -137,7 +137,10 @@ class CeResult:
         }
 
     def emit(self) -> None:
-        print("SCENARIO_RESULT " + json.dumps(self.payload(), ensure_ascii=False))
+        # default=str — python-oracledb 는 NUMBER 를 Decimal, TIMESTAMP 를 datetime 으로
+        # 돌려준다. 그 값이 하나라도 섞이면 json.dumps 가 TypeError 를 내고
+        # SCENARIO_RESULT 라인이 아예 안 나가 runner 가 "결과 미보고" 로 처리한다.
+        print("SCENARIO_RESULT " + json.dumps(self.payload(), ensure_ascii=False, default=str))
 
 
 # ── Oracle 접속 ──────────────────────────────────────────────────────
@@ -195,23 +198,45 @@ class Ora:
                 f"CURRENT_SCHEMA={cur!r} 가 suite.allowed_schema={want!r} 와 다르다. "
                 "대상 스키마가 아니면 한 줄도 쓰지 않는다.")
         self.res.obs("current_schema", cur, expected=want, matches=True)
-        # 어느 DB에 붙었는지 서버가 스스로 밝힌 값으로 남긴다(primary/standby 혼동 방지).
-        try:
-            role, dbun, inst = qrow(conn,
-                                    "SELECT SYS_CONTEXT('USERENV','DATABASE_ROLE'),"
-                                    "       SYS_CONTEXT('USERENV','DB_UNIQUE_NAME'),"
-                                    "       SYS_CONTEXT('USERENV','INSTANCE_NAME') FROM DUAL")
-            self.res.obs("database_role", role, expected="PRIMARY",
-                         matches=(str(role).upper() == "PRIMARY"),
-                         note=f"db_unique_name={dbun} instance={inst}. "
-                              "쓰기 fixture는 primary 에서만 만든다.")
-            if "STANDBY" in str(role).upper():
+
+        # **접속한 DB 가 정말 대상 DB 인지 서버에게 묻는다.**
+        # runner 의 --observed-env 는 운영자 자기신고라 CE_DSN 이 어디를 가리키는지
+        # 보장하지 못한다. 여기서 서버가 돌려준 DB_UNIQUE_NAME 을 기대값과 대조한다.
+        role, dbun, inst = qrow(conn,
+                                "SELECT SYS_CONTEXT('USERENV','DATABASE_ROLE'),"
+                                "       SYS_CONTEXT('USERENV','DB_UNIQUE_NAME'),"
+                                "       SYS_CONTEXT('USERENV','INSTANCE_NAME') FROM DUAL")
+        expected_dbun = str(self.res.cfg.get("expected_primary_db_unique_name") or "")
+        if expected_dbun and str(dbun or "").upper() != expected_dbun.upper():
+            raise Unavailable(
+                f"DB_UNIQUE_NAME={dbun!r} 가 기대값 {expected_dbun!r} 와 다르다. "
+                "CE_DSN 이 대상 환경을 가리키지 않는다 — 한 줄도 쓰지 않는다.")
+        if not expected_dbun:
+            raise Unavailable(
+                "expected_primary_db_unique_name 이 전달되지 않았다. 신원 확인 없이 쓰지 않는다.")
+        for pat in (self.res.cfg.get("forbidden_name_patterns") or []):
+            blob = f"{dbun} {inst} {cur}".upper()
+            if str(pat).upper() in blob:
                 raise Unavailable(
-                    f"DATABASE_ROLE={role} — standby 는 읽기 전용이라 fixture 를 만들 수 없다.")
-        except Unavailable:
-            raise
+                    f"운영 식별자 패턴 {pat!r} 이 서버 관측값({blob})에 있다 — 중단한다.")
+        if str(role or "").upper() != "PRIMARY":
+            raise Unavailable(
+                f"DATABASE_ROLE={role} — 쓰기 fixture 는 primary 에서만 만든다.")
+        self.res.obs("db_identity",
+                     {"db_unique_name": dbun, "instance_name": inst, "database_role": role},
+                     expected={"db_unique_name": expected_dbun, "database_role": "PRIMARY"},
+                     matches=True, note="서버가 돌려준 값과 기대값을 대조해 통과했다.")
+
+        # 시간 축을 서버 기준으로 고정한다. SESSIONTIMEZONE 이 DB 와 다르면 naive
+        # TIMESTAMP 와 SYSTIMESTAMP 비교가 통째로 어긋난다(CE03·CE04 의 자격 술어).
+        try:
+            ex(conn, "ALTER SESSION SET TIME_ZONE = DBTIMEZONE")
         except Exception as e:  # noqa: BLE001
-            self.res.obs("database_role", None, note=f"조회 실패: {scrub(e)}")
+            self.res.obs("session_tz_pin_failed", scrub(e))
+        stz, dtz = qrow(conn, "SELECT SESSIONTIMEZONE, DBTIMEZONE FROM DUAL")
+        self.res.obs("timezone", {"session": str(stz), "db": str(dtz)},
+                     expected={"session": str(dtz)}, matches=(str(stz) == str(dtz)),
+                     note="다르면 naive TIMESTAMP 컬럼과 SYSTIMESTAMP 비교가 어긋난다.")
 
     def close_all(self) -> None:
         for c in self._conns:
@@ -267,9 +292,10 @@ class Fixture:
         fx.table("WM_SRC", "id NUMBER PRIMARY KEY, wm TIMESTAMP(6)")
     나가면서 DROP → USER_OBJECTS 로 prefix 잔여를 재확인한다."""
 
-    def __init__(self, res: CeResult, conn):
+    def __init__(self, res: CeResult, conn, ora=None):
         self.res = res
         self.conn = conn
+        self.ora = ora          # 정리 전에 보조 세션의 트랜잭션을 풀기 위해 필요하다
         self.tables: list[str] = []
 
     def name(self, suffix: str) -> str:
@@ -308,6 +334,20 @@ class Fixture:
     def __exit__(self, *exc):
         self.res.cleanup["attempted"] = True
         ok = True
+        # 보조 세션이 미commit 트랜잭션을 쥐고 있으면 DROP 이 ORA-00054 로 실패해
+        # CE_ 객체가 그대로 남는다(CE02 는 일부러 commit 하지 않은 writer 를 둔다).
+        # 그래서 **정리 첫 순서로** 다른 세션을 전부 rollback 한다.
+        for c in getattr(self.ora, "_conns", []) or []:
+            try:
+                c.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self.conn.rollback()
+            with self.conn.cursor() as cur:
+                cur.execute("ALTER SESSION SET DDL_LOCK_TIMEOUT = 15")
+        except Exception:  # noqa: BLE001
+            pass
         for n in reversed(self.tables):
             try:
                 self.drop(n)

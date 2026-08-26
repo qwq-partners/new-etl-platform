@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _ce import (  # noqa: E402
     Fixture, Unavailable, ex, q1, qall, run_main, server_now,
-    OUTCOME_HOLDS, OUTCOME_REPRODUCED,
+    OUTCOME_HOLDS, OUTCOME_NOT_OBSERVED, OUTCOME_REPRODUCED,
 )
 
 MAX_ATTEMPTS = 5
@@ -47,7 +47,7 @@ def body(res, ora):
     ora.verify_schema(conn)
     res.obs("server_time_start", server_now(conn))
 
-    with Fixture(res, conn) as fx:
+    with Fixture(res, conn, ora) as fx:
         try:
             src = fx.table("RS_SRC", "pk NUMBER PRIMARY KEY, shard NUMBER, tag VARCHAR2(12)",
                            opts="ROWDEPENDENCIES")
@@ -96,7 +96,11 @@ def body(res, ora):
         ex(conn, f"INSERT INTO {cur_t} VALUES(1, :v)", v=int(s1))
         conn.commit()
         res.obs("shard_cursors", {"0": int(s0), "1": int(s1)},
-                note="shard 별 독립 cursor. 스윕 시각이 달라 서로 어긋나 있다.")
+                note="shard 별 독립 cursor. **이 어긋난 상태는 구성한 것이다** — 스윕을 여러 번 "
+                     "돌려 자연 발생시키지 않았다. 따라서 이 실험이 보이는 것은 '어긋난 cursor 가 "
+                     "행을 잃는다'(조건부 불건전성)이지 '독립 cursor 는 반드시 어긋난다'가 아니다. "
+                     "후자는 shard 별 스윕 시각이 다를 수 있다는 사실에서 따라 나오며, 그 사실 "
+                     "자체는 병렬 스윕 설계에서 자명하다.")
 
         now_scn = int(commit_row(writer, src, pk + 3, 0, "NOW"))
         res.rows_written += 1
@@ -136,6 +140,14 @@ def body(res, ora):
         elif found_by is not None:
             res.outcome = OUTCOME_HOLDS
             res.obs("verdict_note", f"shard {found_by} 가 대상 행을 잡았다 — 이 구성에서는 구멍이 없다.")
+        else:
+            # shard 도 전역 창도 대상 행을 돌려주지 않았다. 그러면 잃어버린 원인이 cursor 어긋남이
+            # 아니라 fixture·SCN 해상도 쪽일 수 있으므로 재현을 주장하지 않는다.
+            res.outcome = OUTCOME_NOT_OBSERVED
+            res.obs("verdict_note",
+                    f"전역 단조 cursor 창 ({global_lo}, {now_scn}] 조차 대상 행(pk={target_pk})을 "
+                    "돌려주지 않았다 — 주입이 창 안에 놓였다는 전제가 성립하지 않으므로 "
+                    "shard cursor 결함으로 판정하지 않는다.")
 
 
 if __name__ == "__main__":

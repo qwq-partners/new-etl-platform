@@ -79,6 +79,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "standby_verified": {
+          "type": "boolean",
+          "description": "CE_STANDBY_DSN 으로 standby 신원을 서버에서 확인했는가. false 면 그 이름은 미검증 선언값이다."
+        },
+        "database_role": {
+          "type": "string",
+          "description": "preflight 가 서버에서 읽은 DATABASE_ROLE. PRIMARY 여야 한다."
+        },
+        "instance_name": {
+          "type": "string",
+          "description": "preflight 가 읽은 INSTANCE_NAME."
+        },
+        "session_timezone": {
+          "type": "string",
+          "description": "SESSIONTIMEZONE. DBTIMEZONE 과 다르면 시간 축 비교가 어긋날 수 있다."
+        },
+        "db_timezone": {
+          "type": "string",
+          "description": "DBTIMEZONE."
         }
       }
     },
@@ -163,7 +183,7 @@
           },
           "injection_evidence": {
             "type": "array",
-            "description": "injection_observed=true의 근거. 최소 1건 필요.",
+            "description": "injection_observed=true 의 근거. runner 는 outcome 이 passing 이려면 이 배열이 **1건 이상이고 각 항목의 kind 가 허용값**일 것을 요구한다(빈 배열이면 강등).",
             "items": {
               "type": "object",
               "required": [
@@ -188,7 +208,8 @@
                   "format": "date-time"
                 }
               }
-            }
+            },
+            "minItems": 0
           },
           "fixture": {
             "type": "object",

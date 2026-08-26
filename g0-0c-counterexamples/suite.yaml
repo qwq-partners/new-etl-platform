@@ -30,9 +30,10 @@ versions:
   runner: "1.0.0"
 
 budgets:
-  max_sessions: 12          # suite 전체가 동시에 여는 physical connection 상한
-  statement_timeout_s: 60
-  suite_timeout_s: 3600
+  max_sessions: 12          # 시나리오 하나가 동시에 여는 physical connection 상한
+  statement_timeout_s: 60   # 문장 하나 (conn.call_timeout)
+  scenario_timeout_s: 600   # 시나리오 하나 (subprocess timeout)
+  suite_timeout_s: 3600     # suite 전체 벽시계 예산. 소진되면 남은 시나리오를 실행하지 않는다
 
 # 모든 required_scenario가 실행되고, 각 시나리오가 자기 injection을 실제로
 # 관측했을 때만 suite가 PASS다. 시나리오 누락·injection 미관측은 PASS가 아니다.

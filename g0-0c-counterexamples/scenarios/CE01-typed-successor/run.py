@@ -64,7 +64,7 @@ def body(res, ora):
     res.obs("server_time_start", server_now(conn))
 
     cols = ", ".join(t[1] for t in TYPES)
-    with Fixture(res, conn) as fx:
+    with Fixture(res, conn, ora) as fx:
         tbl = fx.table("SUCC", f"case_id VARCHAR2(30) PRIMARY KEY, {cols}")
 
         oracle_defects, driver_losses, rows = [], [], []
@@ -82,8 +82,12 @@ def body(res, ora):
                 res.rows_written += 2
             except Exception as e:  # noqa: BLE001
                 conn.rollback()
-                rec["insert_error"] = f"ORA-{ora_error_code(e)}"
-                oracle_defects.append(f"{key}:insert")
+                code = ora_error_code(e)
+                rec["insert_error"] = f"ORA-{code}" if code is not None else f"CLIENT_SIDE:{type(e).__name__}"
+                if code is not None:
+                    oracle_defects.append(f"{key}:insert")
+                    res.evidence("ORA_ERROR",
+                                 f"{key}: M/successor 저장을 서버가 ORA-{code} 로 거부했다")
                 rows.append(rec)
                 continue
 
@@ -126,30 +130,45 @@ def body(res, ora):
                 rec["roundtrip_error"] = f"ORA-{ora_error_code(e)}"
                 driver_losses.append(key)
 
-            # ── 4. 최대 표현값에서의 overflow (ORA_ERROR 증거) ────────────
+            # ── 4. 최대 표현값에서의 overflow ────────────────────────────
+            #     **서버가 거부했다는 근거가 있을 때만** 결함으로 센다.
+            #     클라이언트 타임아웃(DPY-xxxx)처럼 ORA 코드가 없는 오류는
+            #     "Oracle 이 overflow 로 거부했다"의 근거가 아니다.
             try:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"INSERT INTO {tbl}(case_id, {col}) VALUES('MAXS', {max_expr} {max_op})")
                 conn.commit()
                 res.rows_written += 1
-                top = q1(conn, f"SELECT TO_CHAR({col}) FROM {tbl} WHERE case_id='MAXS'")
-                rec["max_successor_stored"] = str(top)
-                rec["max_successor_overflow"] = None
-                if top is not None and str(top).strip().lower().lstrip("+").startswith("inf"):
-                    rec["max_successor_overflow"] = "SILENT_INFINITY"
-                    oracle_defects.append(f"{key}:silent_infinity")
-                    res.evidence("ROW_STATE",
-                                 f"{key}: 최대값의 successor 가 오류 없이 {top} 로 저장됐다 — "
-                                 "무한대가 fence 로 들어가면 이후 모든 회차가 빈 구간이 된다")
+                stored = True
             except Exception as e:  # noqa: BLE001
                 conn.rollback()
+                stored = False
                 code = ora_error_code(e)
-                rec["max_successor_overflow"] = f"ORA-{code}"
-                oracle_defects.append(f"{key}:overflow")
-                res.evidence("ORA_ERROR",
-                             f"{key}: 최대 표현값의 successor 계산·저장이 ORA-{code} 로 거부됐다",
-                             at=server_now(conn))
+                if code is None:
+                    # 서버 오류가 아니다 — 판정에 넣지 않는다.
+                    rec["max_successor_error"] = f"CLIENT_SIDE: {type(e).__name__}"
+                    rec["max_successor_overflow"] = None
+                else:
+                    rec["max_successor_overflow"] = f"ORA-{code}"
+                    oracle_defects.append(f"{key}:overflow")
+                    res.evidence("ORA_ERROR",
+                                 f"{key}: 최대 표현값의 successor 계산·저장을 서버가 "
+                                 f"ORA-{code} 로 거부했다", at=server_now(conn))
+            if stored:
+                # 조회는 별도 try — 여기서 난 오류를 저장 거부로 오인하지 않는다.
+                try:
+                    top = q1(conn, f"SELECT TO_CHAR({col}) FROM {tbl} WHERE case_id='MAXS'")
+                    rec["max_successor_stored"] = str(top)
+                    rec["max_successor_overflow"] = None
+                    if top is not None and str(top).strip().lower().lstrip("+").startswith("inf"):
+                        rec["max_successor_overflow"] = "SILENT_INFINITY"
+                        oracle_defects.append(f"{key}:silent_infinity")
+                        res.evidence("ROW_STATE",
+                                     f"{key}: 최대값의 successor 가 오류 없이 {top} 로 저장됐다 — "
+                                     "무한대가 fence 로 들어가면 이후 모든 회차가 빈 구간이 된다")
+                except Exception as e:  # noqa: BLE001
+                    rec["max_successor_readback_error"] = f"{type(e).__name__}"
 
             with conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {tbl}")
@@ -168,9 +187,16 @@ def body(res, ora):
         res.obs("spark_layer_pending", True,
                 note="requires.spark_required=true 인데 Spark canonical 계층 하네스가 없다.")
 
-        allowlist_drop = sorted({d.split(":")[0] for d in oracle_defects})
-        res.obs("seal_allowlist_removals", allowlist_drop,
-                note="이 타입들은 typed_successor seal 대상에서 제외해야 한다.")
+        # pass_criteria 는 세 축(왕복 불일치 · successor(M) <= M · overflow)을 모두
+        # 제외 사유로 든다. 다만 드라이버 정밀도 탓인 왕복 손실은 Oracle 결함이 아니므로
+        # 확정 목록과 **보류 목록**을 나눠 낸다 — 보류는 G0-0B1 이후에 판정한다.
+        oracle_drop = sorted({d.split(":")[0] for d in oracle_defects})
+        driver_only = sorted({k for k in driver_losses if k not in oracle_drop})
+        res.obs("seal_allowlist_removals", oracle_drop,
+                note="서버 근거로 확정된 제외 대상이다.")
+        res.obs("seal_allowlist_removals_pending", driver_only,
+                note="왕복 손실이 관측됐으나 python-oracledb 한정일 수 있다. "
+                     "OJDBC/Spark(G0-0B1)에서 재확인하기 전에는 확정하지 않는다.")
 
         if oracle_defects:
             res.outcome = OUTCOME_REPRODUCED

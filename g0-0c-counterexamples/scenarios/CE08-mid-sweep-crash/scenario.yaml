@@ -4,7 +4,7 @@ traceability: [NEW-14]
 entrypoint: run.py
 requires:
   writable_fixture: true
-  connections: 1
+  connections: 2        # 부모 1 + SIGKILL 대상 자식 1(자식은 max_sessions 회계 밖이다)
   concurrent_writer: false
   crash_injection: true
   spark_required: true

@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _ce import (  # noqa: E402
     Fixture, ex, q1, qall, run_main, server_now,
-    OUTCOME_FAIL, OUTCOME_HOLDS, OUTCOME_REPRODUCED,
+    OUTCOME_FAIL, OUTCOME_HOLDS, OUTCOME_INCONCLUSIVE,
 )
 
 SAMPLE_MOD = 5          # MOD(pk,5)=0 → 20% 결정적 표본
@@ -64,7 +64,7 @@ def body(res, ora):
     ora.verify_schema(conn)
     res.obs("server_time_start", server_now(conn))
 
-    with Fixture(res, conn) as fx:
+    with Fixture(res, conn, ora) as fx:
         src = fx.table("TD_SRC", "pk NUMBER PRIMARY KEY, payload VARCHAR2(40)",
                        opts="ROWDEPENDENCIES")
         c1 = fx.table("TD_C1", "pk NUMBER PRIMARY KEY, h VARCHAR2(64)")
@@ -149,25 +149,52 @@ def body(res, ora):
         # ── 그 한계가 문서에 공시돼 있는가 ─────────────────────────────────
         doc = find_doc(res)
         if doc is None:
+            # pass_criteria 는 공시 여부로 HOLDS/FAIL 을 가른다. 그 검사를 못 했다면
+            # 이 시나리오는 자기 판정 기준을 평가하지 않은 것이다 — PASS 에 기여할 수 없다.
             res.obs("disclosure_check", "NOT_PERFORMED",
-                    note=f"{DOC_NAME} 을 찾지 못했다. CE_DOC_PATH 로 지정하면 검사한다.")
-            res.outcome = OUTCOME_REPRODUCED
+                    note=f"{DOC_NAME} 을 찾지 못했다. CE_DOC_PATH 로 경로를 주고 다시 실행하라.")
+            res.outcome = OUTCOME_INCONCLUSIVE
             res.obs("verdict_note",
-                    "탐지 공백은 재현됐으나 공시 여부를 확인하지 못했다 — HOLDS/FAIL 을 가르려면 "
-                    "CE_DOC_PATH 를 주고 다시 돌려라.")
+                    "탐지 공백 자체는 위 관측대로 재현됐으나, 공시 여부를 확인하지 못해 "
+                    "HOLDS/FAIL 을 가를 수 없다. CE_DOC_PATH 를 지정하고 재실행하라.")
             return
         text = doc.read_text(encoding="utf-8", errors="replace")
         hits = {t: bool(re.search(re.escape(t), text, re.IGNORECASE)) for t in DISCLOSURE_TERMS}
-        # 두 축이 모두 언급돼야 공시로 친다 — 한쪽만 있으면 다른 쪽 한계는 여전히 감춰져 있다.
-        transient_disclosed = any(hits[t] for t in TRANSIENT_TERMS)
-        reuse_disclosed = any(hits[t] for t in REUSE_TERMS)
-        disclosed = transient_disclosed and reuse_disclosed
+        # pass_criteria 는 **transient 미탐지 사실의 공시**로 HOLDS/FAIL 을 가른다.
+        # same-PK 재사용 축은 따로 보고만 하고 판정을 좌우하지 않는다(기준을 임의로 넓히지 않는다).
+        # **근접성 검사** — 1,738줄 문서 어딘가에 단어 하나가 있다는 사실은 공시가 아니다.
+        # transient 축 용어가 census/current-state 맥락어와 같은 근방(±NEAR자)에 있을 때만
+        # "이 한계를 공시했다" 로 본다. 근거 발췌를 함께 남겨 사람이 재판정할 수 있게 한다.
+        NEAR = 400
+        def near_context(terms):
+            out = []
+            for t in terms:
+                for m in re.finditer(re.escape(t), text, re.IGNORECASE):
+                    lo, hi = max(0, m.start() - NEAR), min(len(text), m.end() + NEAR)
+                    win = text[lo:hi]
+                    ctx = [c for c in CONTEXT_TERMS if re.search(re.escape(c), win, re.IGNORECASE)]
+                    if ctx:
+                        out.append({"term": t, "context_terms": ctx,
+                                    "excerpt": " ".join(win.split())[:300]})
+            return out
+
+        transient_ev = near_context(TRANSIENT_TERMS)
+        reuse_ev = near_context(REUSE_TERMS)
+        transient_disclosed = bool(transient_ev)
+        reuse_disclosed = bool(reuse_ev)
+        disclosed = transient_disclosed
+        res.obs("disclosure_excerpts",
+                {"transient": transient_ev[:3], "reuse": reuse_ev[:3]},
+                note="맥락어와 같은 근방에서 발견된 문장이다. 비어 있으면 용어가 문서에 "
+                     "등장하더라도 이 한계를 설명하는 맥락은 아니라는 뜻이다.")
         res.obs("disclosure_check",
                 {"doc": doc.name, "terms": hits,
                  "transient_axis": transient_disclosed, "reuse_axis": reuse_disclosed,
                  "disclosed": bool(disclosed)},
                 expected={"disclosed": True}, matches=bool(disclosed),
-                note="영문 용어만 찾으면 한국어 공시를 놓치므로 축마다 한/영 동의어를 함께 본다.")
+                note="판정은 transient 축의 공시 여부로만 가른다(pass_criteria). reuse_axis 는 "
+                     "same-PK 재사용 한계의 공시 여부를 함께 보고할 뿐 판정에 쓰지 않는다. "
+                     "영문 용어만 찾으면 한국어 공시를 놓치므로 축마다 한/영 동의어를 함께 본다.")
 
         if disclosed:
             res.outcome = OUTCOME_HOLDS
@@ -177,9 +204,11 @@ def body(res, ora):
         else:
             res.outcome = OUTCOME_FAIL
             res.obs("verdict_note",
-                    "current-state 대조가 transient·same-PK 재사용을 놓치는데 그 한계가 "
-                    f"{doc.name} 에 공시돼 있지 않다. 보증 축(delete_consistency·upsert_consistency)에 "
-                    "탐지 불가 범위를 명시해야 한다.")
+                    "current-state 대조가 transient 를 놓치는데 그 한계가 "
+                    f"{doc.name} 에 공시돼 있지 않다(same-PK 재사용 축 공시 = {reuse_disclosed}). "
+                    "보증 축(delete_consistency·upsert_consistency)에 탐지 불가 범위를 명시해야 한다 — "
+                    "`BOUNDED_LAG` 는 cycle 시점의 current-state 삭제 탐지이지 "
+                    "transient occurrence 보장이 아니라는 문장이 규범 문서에 있어야 한다.")
 
 
 if __name__ == "__main__":

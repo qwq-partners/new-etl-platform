@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _ce import (  # noqa: E402
     Fixture, ex, q1, qall, run_main, server_now,
-    OUTCOME_HOLDS, OUTCOME_REPRODUCED,
+    OUTCOME_INCONCLUSIVE, OUTCOME_REPRODUCED,
 )
 
 NROWS, NPART = 400, 4
@@ -70,7 +70,7 @@ def body(res, ora):
             note="partition 당 connection 구조는 재현하되 Spark JDBC 소스 자체는 띄우지 않는다. "
                  "OJDBC·Spark 계층의 추가 동작은 G0-0B1 이 서야 판정할 수 있다.")
 
-    with Fixture(res, ctl) as fx:
+    with Fixture(res, ctl, ora) as fx:
         src = fx.table("MC_SRC", "pk NUMBER PRIMARY KEY, part_key NUMBER, payload VARCHAR2(20)")
         ex(ctl, f"INSERT INTO {src} SELECT LEVEL, MOD(LEVEL,{NPART}), 'v0' "
                 f"FROM DUAL CONNECT BY LEVEL <= {NROWS}")
@@ -125,11 +125,14 @@ def body(res, ora):
                 note += (f" 단, READ ONLY 경로에서도 중복 {dup_ro}·누락 {miss_ro}건이 남았다 — "
                          "완화가 불충분하다.")
             res.obs("verdict_note", note)
-        elif dup_ro == 0 and miss_ro == 0:
-            res.outcome = OUTCOME_HOLDS
+        else:
+            # 반례가 재현되지 않은 실행이다. 완화책이 막은 것이 아니므로 PASS 가 아니다
+            # (README §6.4 — 1회 음성은 부재의 증거가 아니다).
+            res.outcome = OUTCOME_INCONCLUSIVE
             res.obs("verdict_note",
-                    "이 실행에서는 multi-connection 경로에서도 중복·누락이 관측되지 않았다. "
-                    "타이밍 의존이므로 반복 실행이 필요하다.")
+                    "multi-connection 경로에서 중복·누락이 관측되지 않았다. 이동 주입이 "
+                    "읽기 순서와 겹치지 않았을 수 있다 — 완화 성립이 아니라 반례 미재현이다. "
+                    "반복 실행 횟수를 기록하고 다시 돌려라.")
 
 
 if __name__ == "__main__":

@@ -12,19 +12,26 @@
 
 | 규칙 | 강제 지점 |
 |---|---|
-| 대상 환경이 아니면 실행하지 않는다 | `runner.enforce_guard()` — DB_UNIQUE_NAME·스키마 정확 일치, 빈 값 금지, 운영 식별자 패턴 차단. 위반 시 exit 2 |
-| 접속 계정이 `allowed_schema` 가 아니면 쓰지 않는다 | `_ce.Ora.verify_schema()` |
+| **신원은 서버에서 읽는다** | `runner.preflight()` 가 `CE_DSN` 으로 1회 접속해 `DB_UNIQUE_NAME`·`CURRENT_SCHEMA`·`DATABASE_ROLE` 을 읽는다. 운영자가 손으로 적는 값은 **교차 확인용**일 뿐 근거가 아니다 |
+| 대상 환경이 아니면 실행하지 않는다 | `runner.enforce_guard()` — 서버가 돌려준 값과 정확 일치, 빈 값 금지, 운영 식별자 패턴 차단. 위반 시 exit 2 |
+| 시나리오도 자기 접속 DB 를 재확인한다 | `_ce.Ora.verify_schema()` — `DB_UNIQUE_NAME ≠ 기대값`, `DATABASE_ROLE ≠ PRIMARY`, 금지 패턴 매치면 한 줄도 쓰지 않는다 |
+| 자격증명 실패로 계정이 잠기지 않는다 | preflight 1회 실패 → 즉시 SUITE_ABORT. 시나리오 9개가 각각 로그온을 시도하는 경로가 없다 |
+| 시간 축이 세션 TZ 에 흔들리지 않는다 | 접속 직후 `ALTER SESSION SET TIME_ZONE = DBTIMEZONE`, 시간 비교는 `CAST(SYSTIMESTAMP AS TIMESTAMP)` 로 통일 |
 | 모든 객체는 `object_prefix` 로 시작한다 | `_ce.Fixture.name()` — 벗어나면 예외 |
 | 끝나면 지운다. 남으면 그대로 보고한다 | `_ce.Fixture.__exit__()` → `USER_OBJECTS` 재조회. 잔여가 있으면 suite 는 PASS 불가 |
 | 비밀번호는 argv·로그·예외에 남기지 않는다 | 환경변수만 읽고, 예외 메시지는 `_ce.scrub()` 통과 |
 | 틀린 비밀번호를 재시도하지 않는다 | 접속 1회 실패 시 즉시 `Unavailable` (계정 잠금 방지) |
-| 증거 없는 판정을 주장하지 않는다 | 시나리오와 runner 양쪽에서 `INJECTION_NOT_OBSERVED` 로 강등 |
+| 증거 없는 판정을 주장하지 않는다 | 시나리오와 runner 양쪽에서 강등. runner 는 `injection_observed is True`(동일성)**이면서** `injection_evidence` 가 1건 이상이고 각 항목의 `kind` 가 허용값일 때만 passing outcome 을 인정한다 |
+| runner 가 자기 출력을 검증한다 | `validate_evidence()` 가 `evidence.schema.json` 으로 검사하고, 위반이 있으면 suite 는 PASS 가 아니다 |
 
 ## 2. 준비
 
 ```bash
-pip install oracledb
+pip install oracledb jsonschema
 ```
+
+`oracledb` 가 없으면 preflight 가 신원을 확인할 수 없으므로 **실행을 거부한다**(exit 2).
+`jsonschema` 가 없으면 evidence 를 검증하지 못했다는 사실이 결함으로 기록되고 PASS 가 되지 않는다.
 
 접속 정보는 **환경변수로만** 넘긴다.
 
@@ -50,11 +57,15 @@ python3 runner.py --suite suite.yaml --dry-run
 python3 runner.py --suite suite.yaml --out evidence.json --observed-env '{"primary_db_unique_name":"ETLPOC_PRI","standby_db_unique_name":"ETLPOC_STB","schema":"ETL_CE"}'
 ```
 
-`--observed-env` 는 **실제 접속에서 읽은 값**을 넣는다(추측 금지). primary 에서는
-`SELECT SYS_CONTEXT('USERENV','DB_UNIQUE_NAME'), SYS_CONTEXT('USERENV','CURRENT_SCHEMA') FROM DUAL`,
-standby 에서는 같은 질의를 standby DSN 으로 한 번 더 돌려 얻는다.
+`--observed-env` 는 **선택**이다. 주면 preflight 가 서버에서 읽은 값과 일치하는지
+교차 확인하고, 어긋나면 중단한다. 생략해도 신원은 서버에서 직접 읽는다.
 
-종료 코드: **0** suite PASS · **2** 가드 실패(SUITE_ABORT) · **3** PASS 아님 · **4** 내부 오류
+`CE_STANDBY_DSN` 을 주면 standby 신원도 서버에서 확인한다. 없으면 그 이름은
+**미검증 선언값**으로 기록된다(`environment.standby_verified = false`).
+
+종료 코드: **0** suite PASS · **2** 가드·preflight 실패(SUITE_ABORT) · **3** PASS 아님 · **4** 내부 오류
+
+DB 가 없거나 자격증명이 틀리면 **exit 2 에서 멈춘다** — 시나리오는 한 개도 실행되지 않는다.
 
 ## 4. 결과 값 다섯
 
@@ -65,6 +76,11 @@ standby 에서는 같은 질의를 standby DSN 으로 한 번 더 돌려 얻는�
 | `MITIGATION_FAIL` | 완화책이 있었으나 막지 못했다 | ✔ |
 | `INJECTION_NOT_OBSERVED` | 주입의 서버 측 근거가 없다 | ✘ |
 | `INCONCLUSIVE` | 환경·타이밍 때문에 판정 불가 | ✘ |
+
+**반례가 재현되지 않은 실행은 `MITIGATION_HOLDS` 가 아니다.** 완화책이 막은 것과
+주입이 읽기 순서와 겹치지 않은 것은 다르다. 전자만 `MITIGATION_HOLDS` 이고 후자는
+`INCONCLUSIVE`(또는 주입 자체가 안 됐으면 `INJECTION_NOT_OBSERVED`)로 떨어진다.
+1회 음성은 부재의 증거가 아니므로 반복 실행 횟수를 함께 기록하라.
 
 `injection_observed` 는 **서버가 보여 준 것**으로만 true 가 된다:
 ORA 오류 코드 / 독립 세션이 센 행 수의 변화 / `ORA_ROWSCN` / 서버 타임스탬프 /
@@ -96,3 +112,9 @@ SIGKILL 이후 서버에 남은 상태. "예외가 안 났다"·클라이언트 
 3. **운영 규모.** 여기 fixture 는 수백 행이다. 10k Job / 40k Run 규모의 경합은 G1 소관이다.
 4. **타이밍 의존.** CE06·CE07 은 실행마다 결과가 달라질 수 있다. 1회 음성은 부재의 증거가
    아니다 — 반복 실행 횟수와 함께 기록하라.
+5. **구성된 상태와 자연 발생의 구분.** CE07 은 어긋난 shard cursor 를 스윕으로 자연
+   발생시키지 않고 직접 구성한다. 따라서 보이는 것은 "어긋난 cursor 는 행을 잃는다"이지
+   "독립 cursor 는 반드시 어긋난다"가 아니다.
+6. **CE08 의 crash 모델.** 자식은 각 partition 을 commit 한 뒤 죽는다. 관측되는 잔여물은
+   미commit 조각이 아니라 **commit 된 부분 진행 상태**다. 미commit 조각이 남는 경로는
+   별도 실험이 필요하다.

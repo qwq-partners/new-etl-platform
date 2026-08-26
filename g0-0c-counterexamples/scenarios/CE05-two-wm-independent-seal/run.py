@@ -58,7 +58,7 @@ def body(res, ora):
     ora.verify_schema(conn)
     res.obs("server_time_start", server_now(conn))
 
-    with Fixture(res, conn) as fx:
+    with Fixture(res, conn, ora) as fx:
         src = fx.table("TW_SRC", "id NUMBER PRIMARY KEY, insert_dt TIMESTAMP(6), "
                                  "update_dt TIMESTAMP(6), grp VARCHAR2(6)")
         cur_t = fx.table("TW_CUR", "strategy VARCHAR2(8), axis VARCHAR2(1), "

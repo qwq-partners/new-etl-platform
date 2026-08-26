@@ -4,7 +4,7 @@ traceability: [F-09, NEW-05, NEW-25]
 entrypoint: run.py
 requires:
   writable_fixture: true
-  connections: 2
+  connections: 7        # control 1 + writer 1 + partition reader 4 + read-only 1
   concurrent_writer: true
   crash_injection: false
   spark_required: true

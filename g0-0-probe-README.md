@@ -56,6 +56,7 @@ EXIT
 EOF
 
 # (4) G0-0C01~C09 — **폐기용 쓰기 가능 환경에서만**. 운영계에서 실행 금지.
+#     runner 가 CE_DSN 으로 직접 접속해 DB_UNIQUE_NAME 을 확인한다(운영자 자기신고 아님).
 #     접속 정보는 환경변수로만 넘긴다(argv 금지). 자세한 것은 패키지 README 참조.
 cd g0-0c-counterexamples
 export CE_USER=ETL_CE CE_DSN='host:1521/etlpoc'

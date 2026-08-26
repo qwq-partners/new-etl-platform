@@ -19,17 +19,23 @@ from _ce import (  # noqa: E402
 )
 
 SUCC = "INTERVAL '0.000001' SECOND(1,6)"
+# wm·created_at 은 naive TIMESTAMP(6) 이므로 서버 벽시계 naive 값과만 비교한다.
+# SYSTIMESTAMP(TIMESTAMP WITH TIME ZONE)와 직접 비교하면 Oracle 이 naive 쪽을
+# SESSIONTIMEZONE 으로 승격해, 세션 TZ 가 서버 offset 과 다르면 축이 통째로 어긋난다.
+NOW = "CAST(SYSTIMESTAMP AS TIMESTAMP)"
 N_NULL, N_OK = 4, 8
 
 
-def cycle(res, conn, src, cur_t, sink, no):
-    low = q1(conn, f"SELECT low_wm FROM {cur_t} WHERE job='J'")
+def cycle(res, conn, src, cur_t, sink, no, job="J", label=""):
+    tag = f"{label}cycle{no}"
+    low = q1(conn, f"SELECT low_wm FROM {cur_t} WHERE job = :j", j=job)
     high = q1(conn, f"SELECT MAX(wm) + {SUCC} FROM {src}")
     if high is None:
-        res.obs(f"cycle{no}_high", None, note="MAX(wm) IS NULL → high 가 정의되지 않는다.")
+        res.obs(f"{tag}_high", None,
+                note="MAX(wm) IS NULL → high 가 정의되지 않아 cursor 를 전진시킬 수 없다.")
         return []
     if low is not None and high <= low:
-        res.obs(f"cycle{no}_submitted", 0, note="high==low → FINALIZED_NO_DATA")
+        res.obs(f"{tag}_submitted", 0, note="high==low → FINALIZED_NO_DATA")
         return []
     ids = [r[0] for r in qall(conn, f"SELECT id FROM {src} WHERE wm >= :lo AND wm < :hi ORDER BY id",
                               lo=low, hi=high)]
@@ -37,9 +43,9 @@ def cycle(res, conn, src, cur_t, sink, no):
         with conn.cursor() as c:
             c.executemany(f"INSERT INTO {sink}(cyc, id) VALUES(:1, :2)", [(no, i) for i in ids])
         res.rows_written += len(ids)
-    ex(conn, f"UPDATE {cur_t} SET low_wm = :hi WHERE job='J'", hi=high)
+    ex(conn, f"UPDATE {cur_t} SET low_wm = :hi WHERE job = :j", hi=high, j=job)
     conn.commit()
-    res.obs(f"cycle{no}_loaded", ids)
+    res.obs(f"{tag}_loaded", ids)
     return ids
 
 
@@ -48,7 +54,7 @@ def body(res, ora):
     ora.verify_schema(conn)
     res.obs("server_time_start", server_now(conn))
 
-    with Fixture(res, conn) as fx:
+    with Fixture(res, conn, ora) as fx:
         src = fx.table("NW_SRC",
                        "id NUMBER PRIMARY KEY, wm TIMESTAMP(6), created_at TIMESTAMP(6)")
         cur_t = fx.table("NW_CUR", "job VARCHAR2(10) PRIMARY KEY, low_wm TIMESTAMP(6)")
@@ -58,11 +64,13 @@ def body(res, ora):
 
         # 정상 8행 + wm NULL 4행. created_at 은 둘 다 채운다(다른 축의 존재를 보이기 위해).
         ex(conn, f"INSERT INTO {src} SELECT LEVEL, "
-                 f"TIMESTAMP '2026-08-01 00:00:00' + NUMTODSINTERVAL(LEVEL,'SECOND'), SYSTIMESTAMP "
+                 f"TIMESTAMP '2026-08-01 00:00:00' + NUMTODSINTERVAL(LEVEL,'SECOND'), {NOW} "
                  f"FROM DUAL CONNECT BY LEVEL <= {N_OK}")
-        ex(conn, f"INSERT INTO {src} SELECT 100+LEVEL, NULL, SYSTIMESTAMP "
+        ex(conn, f"INSERT INTO {src} SELECT 100+LEVEL, NULL, {NOW} "
                  f"FROM DUAL CONNECT BY LEVEL <= {N_NULL}")
         ex(conn, f"INSERT INTO {cur_t} VALUES('J', TIMESTAMP '2026-08-01 00:00:00')")
+        ex(conn, f"INSERT INTO {cur_t} VALUES('EMPTY', NULL)")
+        ex(conn, f"INSERT INTO {cur_t} VALUES('ALLNULL', NULL)")
         ex(conn, f"INSERT INTO {allnull_t} SELECT LEVEL, NULL FROM DUAL CONNECT BY LEVEL <= 3")
         conn.commit()
         res.rows_written += N_OK + N_NULL + 4
@@ -100,10 +108,10 @@ def body(res, ora):
 
         # ── Audit 이 그 행을 보는가 ────────────────────────────────────────
         audit_wm = q1(conn, f"SELECT COUNT(*) FROM {src} "
-                            f"WHERE wm BETWEEN TIMESTAMP '2026-08-01 00:00:00' AND SYSTIMESTAMP")
+                            f"WHERE wm BETWEEN TIMESTAMP '2026-08-01 00:00:00' AND {NOW}")
         audit_other = q1(conn, f"SELECT COUNT(*) FROM {src} "
-                               f"WHERE created_at BETWEEN SYSTIMESTAMP - INTERVAL '1' HOUR "
-                               f"AND SYSTIMESTAMP + INTERVAL '1' HOUR")
+                               f"WHERE created_at BETWEEN {NOW} - INTERVAL '1' HOUR "
+                               f"AND {NOW} + INTERVAL '1' HOUR")
         res.obs("audit_on_wm_axis_sees", audit_wm, expected=N_OK, matches=(audit_wm == N_OK),
                 note="Audit 이 같은 wm 축을 쓰면 NULL 행은 Audit 에서도 사라진다.")
         res.obs("audit_on_independent_axis_sees", audit_other, expected=N_OK + N_NULL,
@@ -111,14 +119,20 @@ def body(res, ora):
                 note="wm 과 독립인 축(여기서는 created_at)만이 NULL 행을 본다.")
 
         # ── bootstrap: 빈 테이블 / 전량 NULL 테이블 ────────────────────────
-        for label, t in (("empty", empty_t), ("all_null", allnull_t)):
+        for label, t, job in (("empty", empty_t, "EMPTY"), ("all_null", allnull_t, "ALLNULL")):
             mx = q1(conn, f"SELECT MAX(wm) FROM {t}")
             cnt = q1(conn, f"SELECT COUNT(*) FROM {t}")
             hi = q1(conn, f"SELECT MAX(wm) + {SUCC} FROM {t}")
+            # steps 4번 — 관측만 하지 말고 **첫 회차를 실제로 돌린다**.
+            loaded = cycle(res, conn, t, cur_t, sink, 1, job=job, label=f"{label}_")
+            after = q1(conn, f"SELECT low_wm FROM {cur_t} WHERE job = :j", j=job)
             res.obs(f"bootstrap_{label}",
-                    {"rows": cnt, "max_wm": str(mx), "high": str(hi)},
-                    note="high 가 NULL 이면 첫 회차의 상한이 정의되지 않는다. "
-                         "high=NULL 로 CAS 하면 이후 모든 비교가 UNKNOWN 이 된다.")
+                    {"rows": cnt, "max_wm": str(mx), "high": str(hi),
+                     "first_cycle_loaded": len(loaded), "cursor_after": str(after)},
+                    expected={"cursor_after": "None"}, matches=(after is None),
+                    note="첫 회차가 한 행도 못 싣고 cursor 도 전진하지 못한다. 이 상태로 "
+                         "무한 반복하면 원천에 데이터가 생겨도 진입점이 없다 — 초기 low 를 "
+                         "외부에서 주거나 wm NOT NULL 을 강제하는 bootstrap 규칙이 필요하다.")
 
         misses_load = set(never) == set(range(101, 101 + N_NULL))
         misses_audit = audit_wm == N_OK
