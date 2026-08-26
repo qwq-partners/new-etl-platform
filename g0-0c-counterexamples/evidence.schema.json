@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "g0-0c-counterexamples/evidence.schema.json",
+  "title": "G0-0C counterexample suite evidence",
+  "description": "시나리오 누락·injection 미관측은 PASS가 아니다. runner는 이 스키마로 자기 출력을 검증한 뒤 종료 코드를 정한다.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "suite_id",
+    "run_id",
+    "started_at",
+    "finished_at",
+    "environment",
+    "versions",
+    "artifact_sha256",
+    "scenarios",
+    "suite_verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "suite_id": {
+      "const": "G0-0C-COUNTEREXAMPLES"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "artifact_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "class",
+        "primary_db_unique_name",
+        "standby_db_unique_name",
+        "schema",
+        "object_prefix",
+        "guard_passed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "const": "DISPOSABLE_WRITABLE_PRIMARY_ADG"
+        },
+        "primary_db_unique_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "standby_db_unique_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "object_prefix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "guard_passed": {
+          "const": true
+        },
+        "guard_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "required": [
+        "oracle",
+        "ojdbc",
+        "spark",
+        "runner"
+      ],
+      "properties": {
+        "oracle": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ojdbc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spark": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 9,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "outcome",
+          "injection_observed",
+          "started_at",
+          "finished_at",
+          "fixture",
+          "observations",
+          "cleanup"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^CE0[1-9]$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "traceability": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outcome": {
+            "enum": [
+              "COUNTEREXAMPLE_REPRODUCED",
+              "MITIGATION_HOLDS",
+              "MITIGATION_FAIL",
+              "INJECTION_NOT_OBSERVED",
+              "INCONCLUSIVE"
+            ],
+            "description": "INJECTION_NOT_OBSERVED와 INCONCLUSIVE는 PASS가 아니다."
+          },
+          "injection_observed": {
+            "type": "boolean",
+            "description": "주입이 실제로 일어났다는 **직접 증거**가 있는가. 오류 부재나 로그 문구가 아니라 서버 상태·오류 코드·타임스탬프 같은 관측이어야 한다."
+          },
+          "injection_evidence": {
+            "type": "array",
+            "description": "injection_observed=true의 근거. 최소 1건 필요.",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "value"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "ORA_ERROR",
+                    "SERVER_STATE",
+                    "TIMING",
+                    "ROW_STATE",
+                    "LOG_WITH_SERVER_ID"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "fixture": {
+            "type": "object",
+            "required": [
+              "objects_created",
+              "rows_written"
+            ],
+            "properties": {
+              "objects_created": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rows_written": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sessions_peak": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "observations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "value"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {},
+                "expected": {},
+                "matches_expected": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "cleanup": {
+            "type": "object",
+            "required": [
+              "attempted",
+              "succeeded",
+              "leftover_objects"
+            ],
+            "properties": {
+              "attempted": {
+                "type": "boolean"
+              },
+              "succeeded": {
+                "type": "boolean"
+              },
+              "leftover_objects": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "leftover_objects가 비어 있지 않으면 suite_verdict는 PASS가 될 수 없다."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "suite_verdict": {
+      "type": "object",
+      "required": [
+        "pass",
+        "rule",
+        "required_missing",
+        "not_observed",
+        "inconclusive"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pass": {
+          "type": "boolean"
+        },
+        "rule": {
+          "const": "all_required_executed_and_injection_observed"
+        },
+        "required_missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "not_observed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inconclusive": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
