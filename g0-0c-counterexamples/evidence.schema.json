@@ -131,7 +131,7 @@
     },
     "scenarios": {
       "type": "array",
-      "minItems": 9,
+      "minItems": 1,
       "items": {
         "type": "object",
         "required": [
@@ -148,7 +148,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^CE0[1-9]$"
+            "pattern": "^CE[0-9]{2,3}$",
+            "description": "CE01~CE09 는 현재 required 목록이다. 시나리오 추가는 suite.yaml 의 required_scenarios 로 관리하며 스키마가 개수를 막지 않는다(이전 판의 ^CE0[1-9]$ 는 CE10 이상을 거부해 harness 를 9종으로 고정했다)."
           },
           "title": {
             "type": "string"
@@ -291,7 +292,8 @@
             ]
           }
         }
-      }
+      },
+      "description": "required_scenarios 를 모두 실행했는지는 runner 의 verdict 가 판정한다. 스키마는 하한만 본다."
     },
     "suite_verdict": {
       "type": "object",

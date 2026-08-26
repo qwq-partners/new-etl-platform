@@ -8,7 +8,13 @@
 --
 -- 범위: **대상 테이블을 스캔하지 않는다.** 데이터 사실 측정(fence 반례)은
 --       G0-0C(`g0-0c-fence-facts.sql`)로 분리했다. 여기서 대상 테이블에
---       닿는 것은 `WHERE ROWNUM = 1` 한 건과 `AS OF` 권한 확인 한 건뿐이다.
+--       닿는 것은 `WHERE ROWNUM = 1` 세 건과 `AS OF` 권한 확인 한 건뿐이다.
+--
+-- **이기종 원천 대응(§8)**: 원천 Oracle 은 버전·charset·옵션이 제각각이다.
+--       그래서 이 프로브는 **버전을 보고 기능을 추정하지 않는다**. 기능을 직접
+--       실행해 보고 SQLCODE 로 판정한다("probe the feature, not the version").
+--       버전은 맥락 기록용으로만 남긴다. 같은 19c 라도 charset·NLS·옵션이
+--       다르면 해시 정본화와 비교 의미가 달라지므로 그것들도 함께 잰다.
 --
 -- 안전 규칙
 --   1. 읽기 전용. DDL·DML·job 생성 0.
@@ -49,7 +55,11 @@ DECLARE
   v        VARCHAR2(4000);
   -- 정적 probe 호출 수. 값을 바꿀 때 이 상수도 함께 바꾼다.
   -- emitted != expected 이면 블록이 중간에 끊긴 것이므로 실패로 취급한다.
-  c_expected CONSTANT PLS_INTEGER := 56;
+  c_expected CONSTANT PLS_INTEGER := 78;   -- 실제 호출 수와 일치해야 한다
+  -- 주의: probe 를 더하거나 뺄 때 이 값을 반드시 함께 고쳐라. 확인 방법:
+  --   grep -cE "^  p_(scalar|stmt)\(" g0-0a-capability-inventory.sql
+  -- (v1 에서 57건을 56으로 선언해 두어 첫 실행이 manifest_ok=false 로
+  --  결과 전체 폐기가 될 상태였다. 2026-08-27 정정.)
   g_total  PLS_INTEGER := 0;
   g_fail   PLS_INTEGER := 0;
   g_interp PLS_INTEGER := 0;
@@ -214,13 +224,56 @@ BEGIN
   p_scalar('max_delay_zero.touch_target',       q'[SELECT TO_CHAR(COUNT(*)) FROM (SELECT 1 FROM &TARGET_OWNER..&TARGET_TABLE WHERE ROWNUM = 1)]');
   p_stmt  ('alter.STANDBY_MAX_DATA_DELAY.restore','ALTER SESSION SET STANDBY_MAX_DATA_DELAY = &MAX_DELAY_SEC');
 
+
+  DBMS_OUTPUT.PUT_LINE('--- 8. PORTABILITY / 이기종 원천 (버전 추정 금지, 기능 직접 실행) ---');
+  -- 8a. 맥락 기록용 버전·문자집합. PRODUCT_COMPONENT_VERSION·NLS_DATABASE_PARAMETERS 는
+  --     PUBLIC 에 열려 있어 권한이 필요 없다. V$VERSION 은 V$ 권한이 필요하므로 쓰지 않는다.
+  p_scalar('ver.product_component',      q'[SELECT version FROM PRODUCT_COMPONENT_VERSION WHERE ROWNUM = 1]');
+  p_scalar('nls.characterset',           q'[SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_CHARACTERSET']');
+  p_scalar('nls.nchar_characterset',     q'[SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_NCHAR_CHARACTERSET']');
+  p_scalar('nls.length_semantics',       q'[SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_LENGTH_SEMANTICS']');
+  p_scalar('nls.comp',                   q'[SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_COMP']');
+  p_scalar('nls.sort',                   q'[SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_SORT']');
+
+  -- 8b. 해시 정본화. STANDARD_HASH 는 12.1+ 다. 없으면 행 단위 해시 대조가 불가능해
+  --     Reconciliation 이 건수·PK 대조로 강등된다(ORA_HASH 는 32비트라 대체재가 아니다).
+  --     기대값은 SHA-256('abc') 의 표준 시험 벡터다 — charset 이 ASCII 호환인지도 함께 검증된다.
+  p_scalar('feat.standard_hash_sha256',  q'[SELECT RAWTOHEX(STANDARD_HASH('abc','SHA256')) FROM DUAL]',
+           'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD');
+  p_scalar('feat.ora_hash',              q'[SELECT TO_CHAR(ORA_HASH('abc')) FROM DUAL]');
+
+  -- 8c. 구문 이식성. 11g 에서는 FETCH FIRST 가 없어 ROWNUM 만 쓸 수 있다.
+  p_scalar('feat.fetch_first',           q'[SELECT TO_CHAR(1) FROM DUAL FETCH FIRST 1 ROWS ONLY]', '1');
+  p_scalar('feat.approx_count_distinct', q'[SELECT TO_CHAR(APPROX_COUNT_DISTINCT(1)) FROM DUAL]');
+  p_scalar('feat.listagg_on_overflow',   q'[SELECT LISTAGG('a', ',' ON OVERFLOW TRUNCATE) WITHIN GROUP (ORDER BY 1) FROM DUAL]', 'a');
+  p_scalar('feat.extended_varchar',      q'[SELECT TO_CHAR(LENGTH(CAST('x' AS VARCHAR2(32767)))) FROM DUAL]', '1');
+
+  -- 8d. typed_successor 의 전제. CE01 이 겨냥하는 fence granularity 가 이 원천에서 성립하는가.
+  p_scalar('feat.timestamp9_precision',  q'[SELECT TO_CHAR(CAST(TIMESTAMP '2026-01-01 00:00:00.123456789' AS TIMESTAMP(9)),'FF9') FROM DUAL]', '123456789');
+  p_scalar('feat.interval_ns_successor', q'[SELECT TO_CHAR(TIMESTAMP '2026-01-01 00:00:00.000000000' + INTERVAL '0.000000001' SECOND(1,9),'FF9') FROM DUAL]', '000000001');
+
+  -- 8e. 변경 탐지 축. ROWDEPENDENCIES 가 DISABLED 면 ORA_ROWSCN 은 블록 단위라
+  --     행 단위 SCN 으로 쓸 수 없다(CE07 의 전제). 이건 테이블 생성 시 결정되며 사후 변경 불가다.
+  p_scalar('feat.ora_rowscn_target',     q'[SELECT TO_CHAR(ORA_ROWSCN) FROM &TARGET_OWNER..&TARGET_TABLE WHERE ROWNUM = 1]');
+  p_scalar('feat.rowdependencies_target',q'[SELECT dependencies FROM all_tables WHERE owner = '&TARGET_OWNER' AND table_name = '&TARGET_TABLE']');
+
+  -- 8f. 패키지·뷰 가시성. **실행하지 않고 존재 여부만 본다**(SLEEP 을 실제로 부르지 않는다).
+  --     보이지 않는다 = 권한이 없거나 그 버전에 없다. 둘을 구분하려면 ver.* 와 함께 읽어라.
+  p_scalar('pkg.dbms_session_sleep',     q'[SELECT TO_CHAR(COUNT(*)) FROM all_procedures WHERE owner='SYS' AND object_name='DBMS_SESSION' AND procedure_name='SLEEP']');
+  p_scalar('pkg.dbms_lock',              q'[SELECT TO_CHAR(COUNT(*)) FROM all_objects WHERE owner='SYS' AND object_name='DBMS_LOCK']');
+  p_scalar('pkg.dbms_flashback',         q'[SELECT TO_CHAR(COUNT(*)) FROM all_objects WHERE owner='SYS' AND object_name='DBMS_FLASHBACK']');
+  -- 아래 둘은 **이미 grant 를 받았는지** 확인하는 용도다. ORA-00942 면 아직 없다는 뜻이고
+  --   그 자체가 요청서에 넣을 근거가 된다. 각 1행만 읽으므로 부하가 없다.
+  p_scalar('view.v_dataguard_stats',     q'[SELECT TO_CHAR(COUNT(*)) FROM v$dataguard_stats WHERE ROWNUM = 1]');
+  p_scalar('view.v_database',            q'[SELECT TO_CHAR(COUNT(*)) FROM v$database WHERE ROWNUM = 1]');
+
   DBMS_OUTPUT.PUT_LINE('{"probe_summary":{"expected":'||c_expected||
                        ',"emitted":'||g_total||
                        ',"manifest_ok":'||CASE WHEN g_total = c_expected THEN 'true' ELSE 'false' END||
                        ',"total":'||g_total||
                        ',"query_failed":'||g_fail||
                        ',"value_mismatch":'||g_interp||
-                       ',"note":"manifest_ok=false 이면 블록이 중간에 끊긴 것이므로 결과 전체를 폐기한다. query_failed>0 은 정상일 수 있다(권한 없음 = 측정 결과). value_mismatch>0 은 반드시 조사하라."}}');
+                       ',"note":"manifest_ok=false 이면 블록이 중간에 끊긴 것이므로 결과 전체를 폐기한다. query_failed>0 은 정상일 수 있다(권한 없음·구버전 미지원 = 그 자체가 측정 결과다). §8 의 실패는 대개 버전 차이이므로 ver.product_component 와 함께 읽어라. value_mismatch>0 은 반드시 조사하라."}}');
 END;
 /
 
