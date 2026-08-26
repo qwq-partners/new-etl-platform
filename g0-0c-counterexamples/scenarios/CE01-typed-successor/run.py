@@ -1,34 +1,185 @@
 #!/usr/bin/env python3
-"""CE01 — typed_successor round-trip과 overflow
+"""CE01 — typed_successor 왕복과 overflow (F-01, NEW-01)
 
-**미구현 스텁이다.** 이 파일은 fixture·주입·정리를 소유해야 하며, 구현 전에는
-runner에 INJECTION_NOT_OBSERVED를 보고해 suite가 PASS로 넘어가지 않게 한다.
+fence 가 [low, successor(M)) 반개구간을 쓰는 한, successor(M) 이 타입마다
+**정의되고 · 단조이고 · 무손실로 왕복하는지**가 설계의 전제다. 이 시나리오는 그
+전제를 타입별로 깨 본다.
 
-구현 시 반드시 지킬 것
-  1. suite.yaml의 object_prefix를 모든 객체 이름에 붙인다.
-  2. 마지막에 반드시 정리하고 leftover_objects를 정확히 보고한다.
-  3. injection_observed는 **서버 측 관측**(오류 코드·행 상태·타이밍)으로만 true.
-     로그 문구나 "예외가 안 났다"는 근거가 아니다.
-  4. 결과는 마지막 줄에 SCENARIO_RESULT <json> 한 줄로 출력한다.
+관측 축 셋
+  1. server_successor_gt — 서버가 successor(M) > M 을 인정하는가. NUMBER·BINARY_DOUBLE
+     처럼 고정 granularity 가 없는 타입에서는 successor(M) == M 이 된다(설계 결함).
+  2. store_overflow      — 최대 표현값에서 successor 계산·저장이 ORA 오류를 내는가.
+  3. client_roundtrip    — 값이 클라이언트를 거쳐 되돌아와도 같은가.
+     **주의**: 3번은 python-oracledb 한정이다. OJDBC·Spark canonical 계층은
+     G0-0B1 이 서기 전에는 이 하네스가 덮지 못하며, 여기서 관측된 왕복 손실을
+     설계 결함으로 승격하지 않는다(driver_scoped=true 로 표시한다).
 """
-import json, sys
+import sys
+from pathlib import Path
 
-def main() -> int:
-    cfg = json.loads(sys.argv[sys.argv.index("--suite") + 1]) if "--suite" in sys.argv else {}
-    result = {
-        "outcome": "INJECTION_NOT_OBSERVED",
-        "injection_observed": False,
-        "injection_evidence": [],
-        "fixture": {"objects_created": [], "rows_written": 0},
-        "observations": [
-            {"name": "implemented", "value": False,
-              "note": "스텁이다. scenario.yaml의 steps를 구현하기 전까지 suite는 PASS가 될 수 없다."},
-            {"name": "object_prefix", "value": cfg.get("object_prefix", "")},
-        ],
-        "cleanup": {"attempted": False, "succeeded": True, "leftover_objects": []},
-    }
-    print("SCENARIO_RESULT " + json.dumps(result, ensure_ascii=False))
-    return 0
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _ce import (  # noqa: E402
+    Fixture, ora_error_code, q1, run_main, server_now,
+    OUTCOME_INCONCLUSIVE, OUTCOME_REPRODUCED,
+)
+
+# key, 컬럼정의, M 표현식, successor 표현식, 최대 표현값, 최대값의 successor
+TYPES = [
+    ("DATE", "c_date DATE",
+     "DATE '2026-08-25' + 45296/86400", "+ 1/86400",
+     "TO_DATE('9999-12-31 23:59:59','YYYY-MM-DD HH24:MI:SS')", "+ 1/86400"),
+    ("TIMESTAMP(0)", "c_ts0 TIMESTAMP(0)",
+     "TIMESTAMP '2026-08-25 12:34:56'", "+ INTERVAL '1' SECOND",
+     "TIMESTAMP '9999-12-31 23:59:59'", "+ INTERVAL '1' SECOND"),
+    ("TIMESTAMP(3)", "c_ts3 TIMESTAMP(3)",
+     "TIMESTAMP '2026-08-25 12:34:56.123'", "+ INTERVAL '0.001' SECOND(1,3)",
+     "TIMESTAMP '9999-12-31 23:59:59.999'", "+ INTERVAL '0.001' SECOND(1,3)"),
+    ("TIMESTAMP(6)", "c_ts6 TIMESTAMP(6)",
+     "TIMESTAMP '2026-08-25 12:34:56.123456'", "+ INTERVAL '0.000001' SECOND(1,6)",
+     "TIMESTAMP '9999-12-31 23:59:59.999999'", "+ INTERVAL '0.000001' SECOND(1,6)"),
+    ("TIMESTAMP(9)", "c_ts9 TIMESTAMP(9)",
+     "TIMESTAMP '2026-08-25 12:34:56.123456789'", "+ INTERVAL '0.000000001' SECOND(1,9)",
+     "TIMESTAMP '9999-12-31 23:59:59.999999999'", "+ INTERVAL '0.000000001' SECOND(1,9)"),
+    ("TIMESTAMP WITH TIME ZONE", "c_tstz TIMESTAMP(6) WITH TIME ZONE",
+     "TIMESTAMP '2026-08-25 12:34:56.123456 +09:00'", "+ INTERVAL '0.000001' SECOND(1,6)",
+     "TIMESTAMP '9999-12-31 23:59:59.999999 +00:00'", "+ INTERVAL '0.000001' SECOND(1,6)"),
+    ("NUMBER(10,2)", "c_n102 NUMBER(10,2)",
+     "12345.67", "+ 0.01",
+     "99999999.99", "+ 0.01"),
+    ("NUMBER", "c_num NUMBER",
+     "1.0E+125", "+ 1",
+     "9.9E+125", "* 10"),
+    ("BINARY_DOUBLE", "c_bd BINARY_DOUBLE",
+     "1.5D", "+ 1.0E-16D",
+     "1.79769313486231570E+308D", "* 2"),
+]
+
+# 왕복 손실이 드라이버 정밀도 탓인 타입(파이썬 datetime 은 마이크로초까지다).
+DRIVER_SCOPED_ROUNDTRIP = {"TIMESTAMP(9)"}
+
+
+def body(res, ora):
+    conn = ora.connect(tag="ce01")
+    ora.verify_schema(conn)
+    res.obs("server_time_start", server_now(conn))
+
+    cols = ", ".join(t[1] for t in TYPES)
+    with Fixture(res, conn) as fx:
+        tbl = fx.table("SUCC", f"case_id VARCHAR2(30) PRIMARY KEY, {cols}")
+
+        oracle_defects, driver_losses, rows = [], [], []
+        for key, coldef, m_expr, succ_op, max_expr, max_op in TYPES:
+            col = coldef.split()[0]
+            rec = {"type": key, "column": col}
+
+            # ── 1. M 과 successor(M) 을 서버가 만들어 저장한다 ────────────
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"INSERT INTO {tbl}(case_id, {col}) VALUES('M', {m_expr})")
+                    cur.execute(
+                        f"INSERT INTO {tbl}(case_id, {col}) VALUES('S', {m_expr} {succ_op})")
+                conn.commit()
+                res.rows_written += 2
+            except Exception as e:  # noqa: BLE001
+                conn.rollback()
+                rec["insert_error"] = f"ORA-{ora_error_code(e)}"
+                oracle_defects.append(f"{key}:insert")
+                rows.append(rec)
+                continue
+
+            # ── 2. 서버가 successor(M) > M 을 인정하는가 (ROW_STATE 증거) ──
+            gt = q1(conn,
+                    f"SELECT CASE WHEN (SELECT {col} FROM {tbl} WHERE case_id='S') "
+                    f"> (SELECT {col} FROM {tbl} WHERE case_id='M') THEN 1 ELSE 0 END FROM DUAL")
+            eq = q1(conn,
+                    f"SELECT CASE WHEN (SELECT {col} FROM {tbl} WHERE case_id='S') "
+                    f"= (SELECT {col} FROM {tbl} WHERE case_id='M') THEN 1 ELSE 0 END FROM DUAL")
+            rec["server_successor_gt"] = int(gt or 0)
+            rec["server_successor_eq"] = int(eq or 0)
+            if not gt:
+                oracle_defects.append(f"{key}:successor_not_greater")
+                res.evidence("ROW_STATE",
+                             f"{key}: 서버 비교에서 successor(M) > M 이 거짓 "
+                             f"(gt={gt}, eq={eq}) — 이 타입은 fence granularity 가 없다")
+
+            # ── 3. 클라이언트 왕복 (드라이버 한정) ────────────────────────
+            m_val = q1(conn, f"SELECT {col} FROM {tbl} WHERE case_id='M'")
+            s_val = q1(conn, f"SELECT {col} FROM {tbl} WHERE case_id='S'")
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"INSERT INTO {tbl}(case_id, {col}) VALUES('M2', :v)", v=m_val)
+                    cur.execute(f"INSERT INTO {tbl}(case_id, {col}) VALUES('S2', :v)", v=s_val)
+                conn.commit()
+                res.rows_written += 2
+                same = q1(conn,
+                          f"SELECT CASE WHEN (SELECT {col} FROM {tbl} WHERE case_id='M2') "
+                          f"= (SELECT {col} FROM {tbl} WHERE case_id='M') "
+                          f"AND (SELECT {col} FROM {tbl} WHERE case_id='S2') "
+                          f"= (SELECT {col} FROM {tbl} WHERE case_id='S') THEN 1 ELSE 0 END FROM DUAL")
+                rec["client_roundtrip_lossless"] = int(same or 0)
+                if not same:
+                    rec["driver_scoped"] = key in DRIVER_SCOPED_ROUNDTRIP
+                    driver_losses.append(key)
+            except Exception as e:  # noqa: BLE001
+                conn.rollback()
+                rec["client_roundtrip_lossless"] = 0
+                rec["roundtrip_error"] = f"ORA-{ora_error_code(e)}"
+                driver_losses.append(key)
+
+            # ── 4. 최대 표현값에서의 overflow (ORA_ERROR 증거) ────────────
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"INSERT INTO {tbl}(case_id, {col}) VALUES('MAXS', {max_expr} {max_op})")
+                conn.commit()
+                res.rows_written += 1
+                top = q1(conn, f"SELECT TO_CHAR({col}) FROM {tbl} WHERE case_id='MAXS'")
+                rec["max_successor_stored"] = str(top)
+                rec["max_successor_overflow"] = None
+                if top is not None and str(top).strip().lower().lstrip("+").startswith("inf"):
+                    rec["max_successor_overflow"] = "SILENT_INFINITY"
+                    oracle_defects.append(f"{key}:silent_infinity")
+                    res.evidence("ROW_STATE",
+                                 f"{key}: 최대값의 successor 가 오류 없이 {top} 로 저장됐다 — "
+                                 "무한대가 fence 로 들어가면 이후 모든 회차가 빈 구간이 된다")
+            except Exception as e:  # noqa: BLE001
+                conn.rollback()
+                code = ora_error_code(e)
+                rec["max_successor_overflow"] = f"ORA-{code}"
+                oracle_defects.append(f"{key}:overflow")
+                res.evidence("ORA_ERROR",
+                             f"{key}: 최대 표현값의 successor 계산·저장이 ORA-{code} 로 거부됐다",
+                             at=server_now(conn))
+
+            with conn.cursor() as cur:
+                cur.execute(f"DELETE FROM {tbl}")
+            conn.commit()
+            rows.append(rec)
+
+        # ── 판정 ────────────────────────────────────────────────────────
+        res.obs("per_type", rows)
+        res.obs("oracle_side_defects", sorted(set(oracle_defects)),
+                note="서버가 직접 보여 준 결함이다. 드라이버와 무관하다.")
+        res.obs("client_roundtrip_losses", sorted(set(driver_losses)),
+                note="python-oracledb 한정 관측이다. OJDBC/Spark 는 G0-0B1 이 서야 판정할 수 있다.")
+        res.obs("layers_covered", ["oracle_compare", "python_client_roundtrip"],
+                expected=["oracle_compare", "ojdbc", "spark_canonical", "control_store"],
+                matches=False, note="4계층 중 2계층만 덮었다.")
+        res.obs("spark_layer_pending", True,
+                note="requires.spark_required=true 인데 Spark canonical 계층 하네스가 없다.")
+
+        allowlist_drop = sorted({d.split(":")[0] for d in oracle_defects})
+        res.obs("seal_allowlist_removals", allowlist_drop,
+                note="이 타입들은 typed_successor seal 대상에서 제외해야 한다.")
+
+        if oracle_defects:
+            res.outcome = OUTCOME_REPRODUCED
+        else:
+            res.outcome = OUTCOME_INCONCLUSIVE
+            res.obs("why_inconclusive",
+                    "Oracle 계층에서는 반례가 없었으나 OJDBC·Spark 계층이 미검증이라 "
+                    "타입 allowlist 를 확정할 수 없다.")
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_main(body))

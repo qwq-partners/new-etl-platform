@@ -7,7 +7,7 @@
   - **G0-0B0** `g0-0b0-spark-smoke.py` — stock Spark smoke probe. **provider tracer가 아니다**
   - **G0-0B1** *(미구현)* — 커스텀 `JdbcConnectionProvider`가 schema·metadata·task 3경로를 실제로 덮는지 증명하는 tracer. 이것이 Profile U 세션 단언 모델의 성립 조건이다
   - **G0-0C00** `g0-0c-fence-facts.sql` — 운영계 read-only fact collector
-  - **G0-0C01~C09** `g0-0c-counterexamples/` — **stateful counterexample harness**(쓰기 fixture·다중 connection·crash 주입이 필요하므로 폐기용 환경 전용)
+  - **G0-0C01~C09** `g0-0c-counterexamples/` — **stateful counterexample harness**(쓰기 fixture·다중 connection·crash 주입이 필요하므로 폐기용 환경 전용). 운영 규칙·환경변수·시나리오별 증거 형태는 `g0-0c-counterexamples/README.md` 에 있다
 - **폐기**: 이전 `g0-0-probe.sql`은 실행 차단 결함 5건(잘못된 SHA-256 기대값 · 미정의 `&LIMIT_ROWS` · 대상 테이블 전체 scan · 비밀번호 argv 노출 · **하드코딩된 `"query_ok":true`로 인한 apparent success**)으로 삭제했다. 실행하지 마라.
 - 이 두 스크립트의 출력이 A v2.0 / P v2.0의 **여러 분기를 결정한다.** 실측 전에 규범 문서를 대규모로 고치면 재작업이 크다.
 
@@ -56,11 +56,19 @@ EXIT
 EOF
 
 # (4) G0-0C01~C09 — **폐기용 쓰기 가능 환경에서만**. 운영계에서 실행 금지.
+#     접속 정보는 환경변수로만 넘긴다(argv 금지). 자세한 것은 패키지 README 참조.
 cd g0-0c-counterexamples
+export CE_USER=ETL_CE CE_DSN='host:1521/etlpoc'
+read -rs -p 'CE password: ' CE_PASSWORD && export CE_PASSWORD && echo
+# suite.yaml 의 expected_*_db_unique_name / allowed_schema / versions 를 먼저 채운다.
+python3 runner.py --suite suite.yaml --dry-run          # 가드·계획만
 python3 runner.py --suite suite.yaml \
   --observed-env '{"primary_db_unique_name":"...","standby_db_unique_name":"...","schema":"..."}' \
   --out evidence.json
+unset CE_PASSWORD
 # exit 0 = suite PASS / 2 = 환경 가드 실패 / 3 = PASS 아님 / 4 = 내부 오류
+# --observed-env 값은 **실제 접속에서 읽은 것**을 넣는다:
+#   SELECT SYS_CONTEXT('USERENV','DB_UNIQUE_NAME'), SYS_CONTEXT('USERENV','CURRENT_SCHEMA') FROM DUAL
 
 unset ORA_PW
 ```

@@ -71,9 +71,10 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | 운영계 제한적(ROWNUM 제한) |
 | **G0-0B1** | *(미구현)* | 커스텀 `JdbcConnectionProvider`가 schema·metadata·task 3경로를 덮는지 | — |
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence 반례 fact collector | 운영계 제한적(`ACK_FULL_SCAN` 게이트) |
-| **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness | **폐기용 쓰기 가능 환경 전용** |
+| **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness (9종 구현 완료) | **폐기용 쓰기 가능 환경 전용** |
 
 안내: `g0-0-probe-README.md` — 안전 규칙 · 실행법 · 결과 → 설계 분기표 · **이 프로브가 증명하지 못하는 것**
+반례 harness 전용 안내: `g0-0c-counterexamples/README.md` — 환경변수 · 종료 코드 · 시나리오별 증거 형태
 
 ### 3.1 안전 규칙 (요약)
 

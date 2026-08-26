@@ -1,34 +1,147 @@
 #!/usr/bin/env python3
-"""CE08 — mid-sweep crash와 cursor non-advance
+"""CE08 — mid-sweep crash 와 cursor non-advance (NEW-14)
 
-**미구현 스텁이다.** 이 파일은 fixture·주입·정리를 소유해야 하며, 구현 전에는
-runner에 INJECTION_NOT_OBSERVED를 보고해 suite가 PASS로 넘어가지 않게 한다.
+추출이 partition 단위로 진행되는데 cursor 를 partition 마다 전진시키면,
+마지막 partition 을 절반만 쓰고 죽었을 때 다음이 동시에 성립한다.
+  · cursor 는 "10번까지 끝났다" 고 말한다
+  · staging 에는 10번의 **절반만** 있다
+  · 다음 회차의 창은 (10, MAX] = 빈 구간이라 아무것도 다시 읽지 않는다
+그래서 재실행이 staging 을 재사용하면 나머지 절반은 영구히 사라진다.
 
-구현 시 반드시 지킬 것
-  1. suite.yaml의 object_prefix를 모든 객체 이름에 붙인다.
-  2. 마지막에 반드시 정리하고 leftover_objects를 정확히 보고한다.
-  3. injection_observed는 **서버 측 관측**(오류 코드·행 상태·타이밍)으로만 true.
-     로그 문구나 "예외가 안 났다"는 근거가 아니다.
-  4. 결과는 마지막 줄에 SCENARIO_RESULT <json> 한 줄로 출력한다.
+crash 는 흉내가 아니라 실제다 — 자식 프로세스를 띄우고 **SIGKILL 로 죽인다**.
+정리 훅도, 예외 처리도 돌지 않는다. 부모는 자식이 신호로 죽었음을 확인한 뒤
+**서버에 남은 상태만** 근거로 판정한다.
 """
-import json, sys
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
 
-def main() -> int:
-    cfg = json.loads(sys.argv[sys.argv.index("--suite") + 1]) if "--suite" in sys.argv else {}
-    result = {
-        "outcome": "INJECTION_NOT_OBSERVED",
-        "injection_observed": False,
-        "injection_evidence": [],
-        "fixture": {"objects_created": [], "rows_written": 0},
-        "observations": [
-            {"name": "implemented", "value": False,
-              "note": "스텁이다. scenario.yaml의 steps를 구현하기 전까지 suite는 PASS가 될 수 없다."},
-            {"name": "object_prefix", "value": cfg.get("object_prefix", "")},
-        ],
-        "cleanup": {"attempted": False, "succeeded": True, "leftover_objects": []},
-    }
-    print("SCENARIO_RESULT " + json.dumps(result, ensure_ascii=False))
-    return 0
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _ce import (  # noqa: E402
+    Fixture, Unavailable, ex, q1, run_main, server_now,
+    OUTCOME_HOLDS, OUTCOME_REPRODUCED,
+)
+
+NPARTS, ROWS_PER = 10, 20
+
+# 자식은 argv 로 **테이블 이름만** 받는다. 비밀번호는 환경변수로만 상속된다.
+CHILD = r"""
+import os, sys, signal
+import oracledb
+src, stg, cur_t = sys.argv[1], sys.argv[2], sys.argv[3]
+nparts, rows_per = int(sys.argv[4]), int(sys.argv[5])
+c = oracledb.connect(user=os.environ["CE_USER"], password=os.environ["CE_PASSWORD"],
+                     dsn=os.environ["CE_DSN"])
+cu = c.cursor()
+for part in range(1, nparts + 1):
+    if part < nparts:
+        cu.execute(f"INSERT INTO {stg} SELECT part, pk, payload FROM {src} WHERE part = :p", p=part)
+        c.commit()
+    else:
+        # 마지막 partition 은 절반만 쓰고 죽는다.
+        cu.execute(f"INSERT INTO {stg} SELECT part, pk, payload FROM {src} "
+                   f"WHERE part = :p AND ROWNUM <= :h", p=part, h=rows_per // 2)
+        c.commit()
+    # 결함: partition 마다 cursor 를 전진시킨다(전량 완료 전에).
+    cu.execute(f"UPDATE {cur_t} SET done_part = :p WHERE job = 'J'", p=part)
+    c.commit()
+    if part == nparts:
+        sys.stdout.write("PRECRASH\n"); sys.stdout.flush()
+        os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def body(res, ora):
+    conn = ora.connect(tag="ce08")
+    ora.verify_schema(conn)
+    res.obs("server_time_start", server_now(conn))
+    res.obs("spark_layer_pending", True,
+            note="staging 을 DB 테이블로 모델링했다. Parquet staging 의 부분 파일 재사용은 "
+                 "G0-0B1 이후 별도로 봐야 한다.")
+
+    with Fixture(res, conn) as fx:
+        src = fx.table("CR_SRC", "pk NUMBER PRIMARY KEY, part NUMBER, payload VARCHAR2(20)")
+        stg = fx.table("CR_STG", "part NUMBER, pk NUMBER, payload VARCHAR2(20)")
+        cur_t = fx.table("CR_CUR", "job VARCHAR2(4) PRIMARY KEY, done_part NUMBER, "
+                                   "published_part NUMBER")
+        sink = fx.table("CR_SINK", "pk NUMBER, via VARCHAR2(10)")
+
+        ex(conn, f"INSERT INTO {src} SELECT LEVEL, CEIL(LEVEL/{ROWS_PER}), 'v0' "
+                 f"FROM DUAL CONNECT BY LEVEL <= {NPARTS * ROWS_PER}")
+        ex(conn, f"INSERT INTO {cur_t} VALUES('J', 0, 0)")
+        conn.commit()
+        res.rows_written += NPARTS * ROWS_PER + 1
+
+        # ── 실제 crash ─────────────────────────────────────────────────────
+        proc = subprocess.run(
+            [sys.executable, "-c", CHILD, src, stg, cur_t, str(NPARTS), str(ROWS_PER)],
+            capture_output=True, text=True, timeout=300, env={**os.environ})
+        killed = (proc.returncode == -signal.SIGKILL)
+        res.obs("child_returncode", proc.returncode, expected=-int(signal.SIGKILL), matches=killed)
+        res.obs("child_reached_precrash", "PRECRASH" in proc.stdout)
+        if not killed:
+            raise Unavailable(
+                f"자식이 SIGKILL 로 죽지 않았다(rc={proc.returncode}). "
+                f"stderr={proc.stderr.strip()[-300:]}")
+
+        # ── 서버에 남은 상태만으로 판정한다 ────────────────────────────────
+        done = q1(conn, f"SELECT done_part FROM {cur_t} WHERE job='J'")
+        stg_total = q1(conn, f"SELECT COUNT(*) FROM {stg}")
+        stg_last = q1(conn, f"SELECT COUNT(*) FROM {stg} WHERE part = {NPARTS}")
+        src_last = q1(conn, f"SELECT COUNT(*) FROM {src} WHERE part = {NPARTS}")
+        res.obs("cursor_done_part_after_crash", done, expected=NPARTS, matches=(done == NPARTS),
+                note="cursor 는 마지막 partition 까지 끝났다고 말한다.")
+        res.obs("staging_rows_after_crash",
+                {"total": stg_total, f"part{NPARTS}": stg_last, "source_part_rows": src_last},
+                expected={f"part{NPARTS}": src_last}, matches=(stg_last == src_last),
+                note="staging 은 마지막 partition 을 절반만 갖고 있다.")
+        if done == NPARTS and 0 < stg_last < src_last:
+            res.evidence("SERVER_STATE",
+                         f"SIGKILL 로 죽은 뒤 서버에 남은 상태: cursor done_part={done} "
+                         f"(전량 완료 주장) 인데 staging 의 partition {NPARTS} 는 "
+                         f"{stg_last}/{src_last} 행뿐이다.", at=server_now(conn))
+
+        # ── 재실행 A: staging 재사용 + cursor 존중 (결함 경로) ─────────────
+        ex(conn, f"INSERT INTO {sink} SELECT pk, 'REUSE' FROM {stg}")
+        lo = q1(conn, f"SELECT done_part FROM {cur_t} WHERE job='J'")
+        refetched = ex(conn, f"INSERT INTO {sink} SELECT pk, 'REUSE' FROM {src} WHERE part > :lo",
+                       lo=lo)
+        conn.commit()
+        res.rows_written += stg_total + refetched
+        reuse_cnt = q1(conn, f"SELECT COUNT(DISTINCT pk) FROM {sink} WHERE via='REUSE'")
+        lost = q1(conn, f"SELECT COUNT(*) FROM {src} s WHERE NOT EXISTS "
+                        f"(SELECT 1 FROM {sink} k WHERE k.via='REUSE' AND k.pk = s.pk)")
+        res.obs("rerun_reuse_staging",
+                {"refetched_by_window": refetched, "sink_distinct": reuse_cnt, "lost_rows": lost},
+                expected={"lost_rows": 0}, matches=(lost == 0),
+                note="창이 (done_part, MAX] 라 다시 읽을 것이 없다. 잃은 행은 어느 회차도 회수하지 않는다.")
+
+        # ── 재실행 B: staging 폐기 + published_part 로 되감기 (완화 경로) ──
+        ex(conn, f"DELETE FROM {stg}")
+        pub = q1(conn, f"SELECT published_part FROM {cur_t} WHERE job='J'")
+        ex(conn, f"UPDATE {cur_t} SET done_part = published_part WHERE job='J'")
+        ex(conn, f"INSERT INTO {sink} SELECT pk, 'REWIND' FROM {src} WHERE part > :p", p=pub)
+        ex(conn, f"UPDATE {cur_t} SET done_part = {NPARTS}, published_part = {NPARTS} WHERE job='J'")
+        conn.commit()
+        lost_rw = q1(conn, f"SELECT COUNT(*) FROM {src} s WHERE NOT EXISTS "
+                           f"(SELECT 1 FROM {sink} k WHERE k.via='REWIND' AND k.pk = s.pk)")
+        res.obs("rerun_discard_and_rewind", {"rewound_to_part": pub, "lost_rows": lost_rw},
+                expected={"lost_rows": 0}, matches=(lost_rw == 0),
+                note="published_part 까지 되감고 staging 을 버리면 손실이 없다.")
+
+        if lost > 0 and done == NPARTS:
+            res.outcome = OUTCOME_REPRODUCED
+            res.obs("verdict_note",
+                    f"cursor 전진과 staging 재사용이 겹쳐 {lost}행이 영구 누락됐다. "
+                    "cursor 는 **publish 성공 이후에만** 전진해야 하고, crash 잔여 staging 은 "
+                    "재사용 대상이 아니라 폐기 대상이다."
+                    + (f" 되감기 경로에서는 누락이 {lost_rw}건이었다." if lost_rw == 0 else ""))
+        elif lost == 0:
+            res.outcome = OUTCOME_HOLDS
+            res.obs("verdict_note", "재사용 경로에서도 누락이 없었다 — 이 구현은 crash 를 견딘다.")
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_main(body))

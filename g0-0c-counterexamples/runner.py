@@ -120,17 +120,34 @@ def enforce_guard(suite: dict, observed: dict) -> list[str]:
     return checks
 
 # ── 2. artifact 해시 ─────────────────────────────────────────────────
-def artifact_hash(root: Path) -> str:
+# 해시가 고정하는 것은 **코드**(runner·스키마·시나리오)다. suite 파일 자신은 제외한다 —
+# 계산한 해시를 suite.yaml 에 적는 순간 해시가 또 바뀌어 영원히 불일치가 되기 때문이다.
+# 실행 산출물(evidence)과 바이트코드도 제외한다.
+_HASH_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache"}
+
+def artifact_hash(root: Path, exclude: set[str]) -> str:
     h = hashlib.sha256()
     for p in sorted(root.rglob("*")):
-        if p.is_file() and p.name != "evidence.json" and ".git" not in p.parts:
-            h.update(p.relative_to(root).as_posix().encode())
-            h.update(p.read_bytes())
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if _HASH_SKIP_DIRS & set(rel.parts):
+            continue
+        if rel.as_posix() in exclude or p.suffix in (".pyc", ".pyo"):
+            continue
+        if p.name.startswith("evidence") and p.suffix == ".json":
+            continue
+        h.update(rel.as_posix().encode())
+        h.update(p.read_bytes())
     return h.hexdigest()
 
 # ── 3. 시나리오 실행 ─────────────────────────────────────────────────
 def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool) -> dict:
-    meta = load_yaml(sdir / "scenario.yaml")
+    try:
+        meta = load_yaml(sdir / "scenario.yaml")
+    except Exception as e:  # noqa: BLE001
+        meta = {}
+        print(f"[warn] {sdir.name}/scenario.yaml 을 읽지 못했다: {type(e).__name__}: {e}")
     sid = meta.get("id") or sdir.name[:4]
     rec = {"id": sid, "title": meta.get("title", ""),
            "traceability": (suite.get("traceability") or {}).get(sid, []),
@@ -161,7 +178,8 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool) -> dict:
     try:
         timeout = int((suite.get("budgets") or {}).get("suite_timeout_s", 3600))
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             cwd=str(sdir), env={**os.environ})
+                             cwd=str(sdir),
+                             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         payload = None
         for line in reversed(out.stdout.splitlines()):
             if line.startswith("SCENARIO_RESULT "):
@@ -240,7 +258,7 @@ def main() -> int:
     checks = enforce_guard(suite, observed)
     print(f"[guard] 통과: {', '.join(checks)}")
 
-    h = artifact_hash(root)
+    h = artifact_hash(root, exclude={Path(a.suite).resolve().name, Path(a.out).name})
     declared = str(suite.get("artifact_sha256") or "")
     if declared and declared != h:
         die(2, f"artifact_sha256 불일치. 선언 {declared[:16]}… != 실제 {h[:16]}…")
@@ -248,7 +266,12 @@ def main() -> int:
         print(f"[artifact] sha256={h}  ← suite.yaml 의 artifact_sha256 에 기록하라")
 
     only = {s.strip() for s in a.only.split(",") if s.strip()}
-    sdirs = sorted(p for p in (root / "scenarios").iterdir() if p.is_dir())
+    sdirs = sorted(p for p in (root / "scenarios").iterdir()
+                   if p.is_dir() and (p / "scenario.yaml").is_file())
+    skipped = sorted(p.name for p in (root / "scenarios").iterdir()
+                     if p.is_dir() and not (p / "scenario.yaml").is_file())
+    if skipped:
+        print(f"[skip] scenario.yaml 이 없어 시나리오로 세지 않은 디렉터리: {skipped}")
     if only:
         sdirs = [p for p in sdirs if p.name[:4] in only]
 
