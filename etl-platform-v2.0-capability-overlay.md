@@ -102,5 +102,10 @@ Job 은 `(source_db, table)` 쌍의 capability 를 상속한다. **DB 단위 축
 ## 8. 다음에 확정할 것
 
 1. **G0-0A 를 원천 3~5개에 돌려** 축 값의 실제 분포를 본다. 값이 다 같으면 오버레이가 과설계이고, 제각각이면 이 규격이 필요하다는 증거가 된다.
-2. `snapshot_read` 축에서 `AS_OF_SCN` 을 실제로 쓸 것인지 결정한다. **읽기 경로가 둘이 되는 비용**과 얻는 이득을 비교해야 하며, 지금 판단은 "코어는 `READ_ONLY_TXN` 하나로 가고 `AS_OF_SCN` 은 보류" 쪽이다.
+2. ~~`snapshot_read` 축에서 `AS_OF_SCN` 을 실제로 쓸 것인지 결정한다.~~ **결정됨(2026-08-27): 보류.**
+   `FLASHBACK` 객체 권한만으로는 SCN 출처가 없어 `AS OF TIMESTAMP`(±3초 근삿값)뿐이고,
+   `ORA-01466`·`ORA-08181` 이라는 새 실패 모드가 생기며, undo 부족의 Oracle 권고 대책이
+   `primary 의 UNDO_RETENTION 상향`이라 **생산 primary 로 부하가 도달하는 채널**이 열린다.
+   근거는 `etl-platform-v2.0-grant-request-verdict.md` §3.
+   → 코어는 `READ_ONLY_TXN` 하나로 간다.
 3. `row_hash = NONE` 인 원천이 실제로 있는지 확인한다. 있으면 Reconciliation 규격을 두 갈래로 써야 한다.
