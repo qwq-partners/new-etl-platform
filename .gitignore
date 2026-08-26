@@ -1,0 +1,23 @@
+# 실행 산출물 — 원천 식별자·값이 들어갈 수 있으므로 커밋하지 않는다
+*evidence*.json
+*evidence*.log
+g0-0*-evidence-*
+evidence.json
+
+# 아카이브(트리가 그대로 있으므로 중복)
+*.tar.gz
+
+# 로컬 설정
+.env
+*.local.yaml
+suite-test.yaml
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+
+# 편집기·OS
+.DS_Store
+Thumbs.db
+*.swp

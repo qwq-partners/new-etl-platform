@@ -1,0 +1,27 @@
+id: CE06
+title: "multi-connection snapshot skew"
+traceability: [F-09, NEW-05, NEW-25]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 2
+  concurrent_writer: true
+  crash_injection: false
+  spark_required: true
+
+summary: |
+  numPartitions>1이면 partition마다 다른 connection·다른 snapshot이다. 읽는 도중 원천이 바뀌면 한 시점 이미지가 아니며 partition key가 가변이면 중복·누락도 가능하다.
+
+steps:
+  - "reader를 numPartitions=4로 기동"
+  - "읽는 도중 concurrent writer가 partition key 컬럼을 바꾸는 UPDATE 수행"
+  - "결과 rowset에서 중복 PK·누락 PK 계수"
+  - "SET TRANSACTION READ ONLY 단일 connection 경로와 대조"
+
+pass_criteria: |
+  중복·누락이 하나라도 나오면 REPRODUCED. 단일 connection 경로에서 사라지면 그 사실을 함께 기록
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true

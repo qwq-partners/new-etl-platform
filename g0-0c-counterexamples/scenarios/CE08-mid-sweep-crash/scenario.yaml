@@ -1,0 +1,27 @@
+id: CE08
+title: "mid-sweep crash와 cursor non-advance"
+traceability: [NEW-14]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 1
+  concurrent_writer: false
+  crash_injection: true
+  spark_required: true
+
+summary: |
+  스윕/추출 도중 crash했을 때 일부 partition의 staging 산출물이 남고 cursor가 어정쩡하게 전진하면 다음 회차가 그 구간을 건너뛴다.
+
+steps:
+  - "partition 1~9 성공, partition 10에서 프로세스 강제 종료"
+  - "staging 잔여물·chunk manifest·watermark CAS 상태 관측"
+  - "재실행 시 앞선 partition 산출물이 재사용되는지"
+  - "cursor가 전진했는지"
+
+pass_criteria: |
+  cursor 전진 + staging 재사용이 동시에 관측되면 REPRODUCED. 전부 폐기·재시작이면 MITIGATION_HOLDS
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true

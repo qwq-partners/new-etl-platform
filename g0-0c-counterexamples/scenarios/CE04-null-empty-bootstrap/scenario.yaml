@@ -1,0 +1,27 @@
+id: CE04
+title: "NULL watermark 영구 제외와 empty bootstrap"
+traceability: [F-05]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 1
+  concurrent_writer: false
+  crash_injection: false
+  spark_required: false
+
+summary: |
+  wm IS NULL 행은 wm >= low AND wm < high 가 UNKNOWN이라 적재·Audit 양쪽에서 사라진다. 빈 테이블·전량 NULL에서 high가 미정의가 된다.
+
+steps:
+  - "wm NULL 행 N건 + 정상 행 M건"
+  - "정상 회차를 여러 번 돌린 뒤 NULL 행의 적재 여부"
+  - "Audit(시간 window 기반)이 그 행을 보는지"
+  - "빈 테이블·전량 NULL 테이블에서 첫 회차 동작"
+
+pass_criteria: |
+  NULL 행이 적재·Audit 모두에서 빠지면 REPRODUCED. bootstrap이 정의되지 않아 실패하면 별도 관측으로 기록
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true

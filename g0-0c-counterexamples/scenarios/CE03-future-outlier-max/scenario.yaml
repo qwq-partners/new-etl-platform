@@ -1,0 +1,27 @@
+id: CE03
+title: "future-dated outlier가 MAX인 상태"
+traceability: [F-04, NEW-08]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 1
+  concurrent_writer: false
+  crash_injection: false
+  spark_required: false
+
+summary: |
+  미래 일자 행이 MAX(wm)이 되면 raw MAX 사용 시 cursor가 안전 구간 밖으로 크게 전진한다. eligible_max(outlier 제외)와 quarantine·재평가가 있는지 확인한다.
+
+steps:
+  - "wm = SYSTIMESTAMP + 30일 인 행 1건 삽입"
+  - "raw MAX 경로와 eligible_max 경로를 각각 실행"
+  - "raw 경로에서 그 사이 정상 행들이 건너뛰어지는지 계수"
+  - "outlier가 quarantine되고 재평가 대상으로 남는지"
+
+pass_criteria: |
+  raw MAX 경로에서 정상 행 누락이 관측되면 REPRODUCED. eligible_max 경로가 막으면 MITIGATION_HOLDS
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true

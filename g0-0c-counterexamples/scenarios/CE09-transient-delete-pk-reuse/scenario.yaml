@@ -1,0 +1,26 @@
+id: CE09
+title: "transient insert→delete와 same-PK 재사용"
+traceability: [NEW-15]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 1
+  concurrent_writer: true
+  crash_injection: false
+  spark_required: false
+
+summary: |
+  두 census cycle 사이에 생겼다 사라진 행(transient occurrence)과 같은 PK가 다른 내용으로 재삽입된 경우를 current-state 대조가 구분하지 못한다.
+
+steps:
+  - "cycle 사이에 PK X를 INSERT 후 DELETE"
+  - "PK X를 다른 내용으로 재INSERT"
+  - "PK-only anti-join과 표본 해시가 각각 무엇을 탐지하는지"
+
+pass_criteria: |
+  transient가 탐지되지 않는 것은 설계상 예상 결과다 — 그 사실이 문서에 공시돼 있는지까지 확인해 MITIGATION_HOLDS/FAIL을 가른다
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true

@@ -1,0 +1,26 @@
+id: CE05
+title: "두 watermark Merge의 독립 seal"
+traceability: [F-06]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 1
+  concurrent_writer: false
+  crash_injection: false
+  spark_required: false
+
+summary: |
+  INSERT_DT와 UPDATE_DT를 함께 쓰는 Merge에서 한 축의 MAX만 seal하면 다른 축의 tail이 봉인되지 않는다.
+
+steps:
+  - "INSERT_DT만 전진하고 UPDATE_DT는 NULL/정지인 행"
+  - "그 반대 조합"
+  - "단일 축 seal과 축별 독립 seal을 각각 적용해 회수율 비교"
+
+pass_criteria: |
+  단일 축 seal에서 누락이 나오고 독립 seal에서 사라지면 MITIGATION_HOLDS
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true

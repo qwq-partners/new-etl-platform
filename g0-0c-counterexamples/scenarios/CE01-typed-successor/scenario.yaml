@@ -1,0 +1,26 @@
+id: CE01
+title: "typed_successor round-trip과 overflow"
+traceability: [F-01, NEW-01]
+entrypoint: run.py
+requires:
+  writable_fixture: true
+  connections: 1
+  concurrent_writer: false
+  crash_injection: false
+  spark_required: true
+
+summary: |
+  supported watermark 타입마다 successor(M)이 Oracle 비교 → OJDBC → Spark canonical → Control 저장소를 lossless로 왕복하는지, successor(M) > M 인지, 최대 표현값에서 overflow하는지 확인한다.
+
+steps:
+  - "DATE / TIMESTAMP(0,3,6,9) / TIMESTAMP WITH TIME ZONE / NUMBER(p,s) / unconstrained NUMBER / BINARY_DOUBLE 각각에 대해 M과 successor(M)을 저장"
+  - "네 계층을 통과시킨 뒤 값이 보존되는지, 비교 연산이 M < successor(M)을 유지하는지 대조"
+  - "각 타입의 최대 표현값에서 successor 계산이 overflow하는지"
+
+pass_criteria: |
+  타입 하나라도 round-trip 불일치·successor(M) <= M·overflow가 나오면 그 타입은 seal 대상에서 제외(allowlist 축소)
+
+# cleanup은 시나리오가 소유한다. 잔여 객체가 하나라도 있으면 suite는 PASS가 아니다.
+cleanup:
+  drop_objects_with_prefix: true
+  verify_empty: true
