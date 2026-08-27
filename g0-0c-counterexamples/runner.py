@@ -325,6 +325,15 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
                 }
         elif payload is not None:
             rec["error"] = f"SCENARIO_RESULT 가 객체가 아니다: {type(payload).__name__}"
+        # **종료 코드도 함께 요구한다**(7차 리뷰). 통과 모양의 SCENARIO_RESULT 를 찍은 뒤
+        # exit 1 로 죽어도 지금까지는 suite PASS 후보가 됐다.
+        if out.returncode != 0:
+            rec["observations"].append({
+                "name": "nonzero_exit",
+                "value": out.returncode,
+                "note": "시나리오가 결과를 보고했더라도 프로세스가 정상 종료하지 않았다. "
+                        "payload 를 신뢰할 수 없다."})
+            rec["error"] = (rec["error"] or "") + f" [exit={out.returncode}]"
     except subprocess.TimeoutExpired:
         rec["error"] = f"scenario_timeout_s({per}s) 초과"
     except Exception as e:  # noqa: BLE001

@@ -22,6 +22,10 @@ import os
 import sys
 
 
+# 대상 테이블을 크게 읽지 않는다는 표시를 유지하려면 상한이 코드에 있어야 한다(P2).
+MAX_LIMIT = 100_000
+
+
 def emit(rec):
     print("G0B1_RESULT " + json.dumps(rec, ensure_ascii=False))
 
@@ -34,11 +38,19 @@ def main():
                     help="비밀번호가 담긴 환경변수 이름. 비밀번호 자체를 argv 로 넘기지 마라.")
     ap.add_argument("--table", required=True, help="SCHEMA.TABLE")
     ap.add_argument("--num-partitions", type=int, default=4)
-    ap.add_argument("--limit", type=int, default=1000, help="읽을 행 수 상한")
+    ap.add_argument("--limit", type=int, default=1000,
+                    help="읽을 행 수 상한. 1~%d 만 허용한다 — production-safe 표시를 "
+                         "유지하려면 하드 상한이 있어야 한다." % MAX_LIMIT)
     ap.add_argument("--mode", choices=["coverage", "failclosed", "initstatement"], default="coverage")
     ap.add_argument("--trace-dir", default=None,
                     help="추적 디렉터리. step 경계 마커를 여기에 남겨 connection 을 step 에 귀속시킨다.")
     a = ap.parse_args()
+
+    if not (1 <= a.limit <= MAX_LIMIT):
+        emit({"mode": a.mode, "status": "ABORT",
+              "reason": f"--limit 은 1~{MAX_LIMIT} 여야 한다(받은 값 {a.limit}). "
+                        "이 하네스는 운영 원천에서도 돌 수 있으므로 상한을 코드로 강제한다."})
+        return 2
 
     pw = os.environ.get(a.password_env)
     if not pw:

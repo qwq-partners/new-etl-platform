@@ -1,7 +1,7 @@
 # 7차 교차 리뷰 검토서
 
 - 검토 대상: `etl-platform-v2.0-codex-seventh-cross-review.md` (408줄, 요청 기준판 `538ec31`)
-- 처리: P0 6건 전부 확정·수정(1차 패스) + P1/P2 17건 중 9건 수정·5건 부분·6건 미반영(2차 패스)
+- 처리: P0 6건 전부 확정·수정(1차 패스) + P1/P2 17건 중 **12건 수정·2건 부분·3건 미반영**(2·3차 패스)
 - 판정일: 2026-08-27
 - 방법: 각 지적을 **실제 코드로 재현**하고 1차 출처와 대조
 
@@ -125,16 +125,16 @@ Java 3파일 재컴파일 통과(실제 Spark 4.2.0 jar).
 | P1-05 | 부분 반영 | `charset_class` note 에 NCHAR·NLS_COMP·NLS_SORT·정규화가 composition 입력으로 더 필요함을 명시. 실제 composition 은 축 재설계 소관 |
 | **P1-06** | **확정·수정** | `derived_from` 은 **이 분기가 실제로 읽은** probe 만. 나머지는 `considered_but_not_used` 로 분리 |
 | P1-07 | 미반영 | LOB RETENTION 분리는 A 규범 개정 소관 |
-| P1-08 | 미반영 | B0 S4 의 SQLCODE predicate |
+| **P1-08** | **확정·수정** | S4 가 **어떤 예외든** `ok=True`(timeout 보호 성공)로 기록했다. `DBMS_SESSION.SLEEP` 부재(18c 미만)·EXECUTE 권한 없음이면 `ORA-00904`/`06550`/`01031` 이 즉시 나는데 그것을 보호 성공으로 셌다. → 설정 실패 / 취소 계열+`queryTimeout` 근접 시각 / 그 외 셋으로 구분 |
 | P1-09 | 부분 반영 | C00 summary 한 줄만으로 `MEASURED` 가 되던 것을 `PARTIAL` 로. end sentinel·manifest 는 미반영 |
 | **P1-10** | **확정·수정** | `artifact_sha256`(코드)와 **`suite_config_sha256`(설정)** 분리. 둘 다 evidence 필수 |
-| P1-11 | 미반영 | grant verdict 37행 원자료 |
+| **P1-11** | **확정·수정** | 워크플로 journal 에서 후보 37건을 복원해 `etl-platform-v2.0-grant-request-candidates.md` 신설(1,302줄). 기각 9건의 **논증 전문**을 그대로 싣고, **28건은 미검증으로 명시**했다 |
 | **P1-12** | **확정·수정** | 제약 서술 통일 — "정합성을 DBA 협조에 걸 수 없다. 비critical 요청은 가능하나 **현재 보류**이며 어떤 설계도 그것을 가정하지 않는다" |
 | P2 C00 문구 | 확정·수정 | "산출물 0건" → "**대상 테이블 질의** 0건"(skipped 레코드·summary 는 나온다) |
 | P2 pass 의미 | 확정·수정 | `execution_complete`·`mitigation_holds`·`counterexample_reproduced`·`mitigation_failed` 분리 + `design_verdict_note`. **`pass=true` 는 하네스 완주이지 설계 통과가 아니다** |
 | P2 `versions.lock` UNSET | 확정·수정 | 문서 전체 문자열 검색 → **실제 `key: UNSET` 줄만** 계수. 주석 때문에 경고가 안 사라지던 것 해소 |
 | P2 artifact 형식 | 확정·수정 | `sha256` 패턴·`lines >= 0` 스키마 제약 |
-| P2 `--limit` 상한 | 미반영 | hard maximum |
+| P2 `--limit` 상한 | **확정·수정** | B1 `--limit`·B0 `--probe-rows` 에 하드 상한 1~100,000. 운영 원천에서도 돌 수 있으므로 코드로 강제한다 |
 
 ### 경로별 주입 구현 (P0-06 해소)
 
@@ -151,8 +151,8 @@ Java 3파일 재컴파일 통과(실제 Spark 4.2.0 jar).
 1. **child artifact 별 개별 스키마** — 리뷰는 A/B0/B1/C00/C-suite 각각에 `run_id`·시작/종료 sentinel·manifest·exit code·runtime digest 를 요구한다. 지금은 aggregator 쪽만 강화했다. child 가 스스로 기록하게 만드는 것은 각 산출물 수정이 필요하다.
 2. **경로별 주입**(`fail=schema|task|metadata`) — `TASK_PATH_NOT_REACHED` 로 **탐지**는 하게 됐지만, 그 상태를 **해소**하려면 주입점을 경로별로 나눠야 한다.
 3. **overlay 9축 재설계** — 분해는 기록했으나 최종 축 목록과 composition function 은 G0-0 실측 후로 미뤘다. 지금 확정하면 또 측정 없이 규격을 짜는 것이다.
-4. **CE runner 의 child `returncode` 검사** — 리뷰 P0-02 말미 지적. 미반영.
-5. ~~P1/P2 항목~~ → §3.1 에서 처리. **미반영 6건**: P1-07(LOB RETENTION 분리) · P1-08(B0 S4 predicate) · P1-09 일부(end sentinel·manifest) · P1-11(grant verdict 원자료 37행) · P1-03 전체 taxonomy 표 · P2 `--limit` 상한.
+4. ~~CE runner 의 child `returncode` 검사~~ → **수정.** 통과 모양의 `SCENARIO_RESULT` 를 찍고 exit 1 로 죽어도 PASS 후보가 되던 것을 막았다(`nonzero_exit` 관측 + `error` 기록 → verdict 의 `errored` 에 걸린다).
+5. ~~P1/P2 항목~~ → §3.1 에서 처리. **미반영 3건**: P1-07(LOB RETENTION 분리 — A 규범 개정 소관) · P1-09 일부(C00 end sentinel·expected manifest) · P1-03 전체 SQLCODE taxonomy 표.
 
 ---
 

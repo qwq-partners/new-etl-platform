@@ -39,6 +39,9 @@ def emit(probe, ok, note=None, value=None, err=None, extra=None):
     RESULTS.append(rec)
     print("PROBE " + json.dumps(rec, ensure_ascii=False), flush=True)
 
+MAX_PROBE_ROWS = 100_000
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
@@ -51,6 +54,12 @@ def main():
                     help="S3가 읽는 행 수 상한. 전체 테이블을 읽지 않는다(재검증 결함 4)")
     ap.add_argument("--skip-slow", action="store_true", help="S4(timeout) 생략")
     a = ap.parse_args()
+    if not (1 <= a.probe_rows <= MAX_PROBE_ROWS):
+        emit("args.probe_rows", False,
+             err=f"--probe-rows 는 1~{MAX_PROBE_ROWS} 여야 한다(받은 값 {a.probe_rows}). "
+                 "운영 원천에서도 돌 수 있으므로 상한을 코드로 강제한다.")
+        print(json.dumps({"results": RESULTS}, ensure_ascii=False))
+        return 2
 
     pw = os.environ.get(a.password_env)
     if not pw:
