@@ -116,6 +116,23 @@ read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
 
 ## 8. 현재 상태
 
-Java 3파일은 **Spark/Scala API 스텁에 대고 컴파일을 검증**했다(문법·시그니처 정합). 실제 Spark jar 에 대고는 아직 빌드하지 않았다 — 이 환경에 Spark 가 없다. **첫 단계는 `./build.sh` 이며, 거기서 실패하면 그것이 첫 번째 측정 결과다**(SPI 시그니처가 그 판본과 다르다는 뜻).
+**2026-08-28 로컬 실측(Spark 4.2.0 / Scala 2.13.16 / JDK 21.0.11) — 확정된 것:**
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| SPI 시그니처 일치 | ✅ | `javap` 로 확인. 4멤버 정확히 일치. **`modifiesSecurityContext` 가 4.2.0 에서는 default 가 아니라 abstract 다** — 우리는 override 하고 있다 |
+| `build.sh` 빌드 | ✅ exit 0 | jar 생성 + `META-INF/services` 등록 출력 |
+| 바이트코드 타깃 | ✅ major=61(Java 17) | `--release 17` 이 실제로 적용됨 |
+| ServiceLoader 발견 | ✅ | `name()=g0b1tracer`, `modifiesSecurityContext=false` |
+| `canHandle` 판별 | ✅ | oracle=true / postgresql=false / mysql=false |
+| **`disabledJdbcConnProviderList=basic` 필요성** | ✅ 바이트코드로 확인 | `BasicConnectionProvider.canHandle = (keytab==null ‖ principal==null)` → 비-Kerberos 에서 **true**. `SecureConnectionProvider`(Oracle/Postgres/DB2/MSSQL/MariaDB 상위) = keytab+principal 필요 → **false**. 즉 Oracle URL 을 claim 하는 것은 **Basic + 우리 것 2개**. conf 값 `basic` 은 `BasicConnectionProvider.name()` 상수와 일치 |
+
+**아직 확정되지 않은 것:**
+
+- 런타임에서 실제로 provider 중복 예외가 나는가 — 바이트코드 논증까지만. `spark-submit` 필요
+- SCHEMA·TASK 경로 커버리지, fail-closed — Oracle 서버 필요(계획 S4~S6)
+- `METADATA` 경로 — 하네스가 유발하지 않는다(§7)
+
+> 위 측정은 **Maven 아티팩트 부분 클래스패스**로 했다(전체 배포판 아님). 그래서 "Spark 내장 provider 6개 중 몇 개가 로드되는가"는 **측정하지 못했다** — 부분 클래스패스에서 `ServiceConfigurationError` 가 났고, 그때 나온 "provider 1개" 는 측정이 아니라 클래스패스 결함이다. 증거: `evidence/g0-0b1-local-s2s3.json`
 
 `analyze-trace.py` 의 판정 로직은 합성 추적으로 양·음성 모두 확인했다.

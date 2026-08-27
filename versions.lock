@@ -11,22 +11,24 @@
 # 채우는 법은 각 항목의 verify 줄에 있다. 실행 후 반드시 실측값으로 갱신한다.
 
 schema_version: "1.0.0"
-profile: UNSET          # LOCAL_WSL | CORP_POC — 이 lock 이 어느 환경의 것인가
+profile: LOCAL_WSL      # 2026-08-28 실측. 하네스 동작 확인용이며 설계 근거가 아니다
 
 runtime:
   jdk:
-    version: UNSET      # 예: 17.0.11
-    vendor: UNSET       # 예: Temurin
+    version: "21.0.11"
+    vendor: "OpenJDK"
     verify: "java -version 2>&1 | head -1"
     note: "빌드 JDK 가 Spark 실행 JVM 보다 높으면 ServiceLoader 가 조용히 실패한다.
            build.sh 는 --release 로 바이트코드 레벨을 맞춰야 한다."
   spark:
-    version: UNSET      # 예: 3.5.1
-    scala: UNSET        # 예: 2.12 | 2.13  — JdbcConnectionProvider SPI 시그니처가 갈린다
-    distribution: UNSET # 예: apache-spark-3.5.1-bin-hadoop3
+    version: "4.2.0"
+    scala: "2.13.16"
+    distribution: "MAVEN_ARTIFACTS_PARTIAL"   # ⚠ 전체 배포판이 아니다 — spark-sql/catalyst/core/
+                        # common-utils/tags + scala-library 만 받아 **컴파일·SPI 검증용**으로 썼다.
+                        # spark-submit 실행(S3 이후)에는 전체 배포판이 필요하다.
     verify: "$SPARK_HOME/bin/spark-submit --version"
   python:
-    version: UNSET      # 예: 3.12.3
+    version: "3.12.3"
     verify: "python3 -V"
     packages:
       oracledb: UNSET   # thin 모드. 서버 최소 버전 제약이 있다 — CE README §6 참조

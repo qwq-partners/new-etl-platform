@@ -1,0 +1,34 @@
+{
+  "record": "g0-0b1-local-partial",
+  "profile": "LOCAL_WSL",
+  "measured_at": "2026-08-27T15:14:23Z",
+  "spark": {"version": "4.2.0", "scala": "2.13.16", "distribution": "MAVEN_ARTIFACTS_PARTIAL"},
+  "jdk": {"version": "21.0.11", "vendor": "OpenJDK"},
+  "established": {
+    "spi_signature_match": {
+      "value": true,
+      "how": "javap org.apache.spark.sql.jdbc.JdbcConnectionProvider — 4 abstract 멤버(name/canHandle/getConnection/modifiesSecurityContext)가 우리 Java 구현과 정확히 일치",
+      "note": "modifiesSecurityContext 가 4.2.0 에서는 default 가 아니라 abstract 다. 우리는 override 하고 있다"
+    },
+    "build_succeeds": {"value": true, "how": "build.sh exit 0, g0-0b1-tracer.jar 생성, META-INF/services 등록 확인"},
+    "bytecode_target": {"value": "major=61 (Java 17)", "how": "--release 17 이 실제로 적용됨을 class 헤더로 확인"},
+    "serviceloader_discovers": {"value": true, "how": "ServiceLoader.load 가 etl.g0b1.TracingConnectionProvider 를 찾고 name()=g0b1tracer, modifiesSecurityContext=false 반환"},
+    "canhandle_discriminates": {"value": true, "how": "oracle=true / postgresql=false / mysql=false"},
+    "disabled_conf_required": {
+      "value": true,
+      "how": "바이트코드 분석 — BasicConnectionProvider.canHandle = (keytab==null || principal==null) → 비-Kerberos 에서 true. SecureConnectionProvider(Oracle/Postgres/DB2/MSSQL/MariaDB 상위) = (keytab!=null && principal!=null && driver 일치) → false. 따라서 Oracle URL 을 claim 하는 것은 Basic + 우리 것 **정확히 2개**",
+      "conf_value": "basic",
+      "conf_value_how": "BasicConnectionProvider 상수 풀의 name() 리터럴 = \"basic\". README·run.sh 의 값이 맞다"
+    }
+  },
+  "not_established": [
+    {"item": "런타임에서 실제로 provider 중복 예외가 나는가", "why": "전체 Spark 배포판이 없어 spark-submit 을 돌리지 못했다. 바이트코드 논증까지만 확정"},
+    {"item": "Spark 내장 provider 6개가 실제로 로드되는가", "why": "부분 클래스패스라 ServiceConfigurationError 로 로드 실패. **'1개만 claim' 이라는 앞선 관측은 폐기한다** — 그건 측정이 아니라 클래스패스 결함이다"},
+    {"item": "SCHEMA·TASK 경로 커버리지, fail-closed", "why": "Oracle 서버와 spark-submit 이 필요하다(S4~S6)"},
+    {"item": "METADATA 경로", "why": "하네스가 DSv1 만 써서 유발하지 않는다 — 로컬·사내 공통 공백"}
+  ],
+  "spark_builtin_providers": [
+    "BasicConnectionProvider", "DB2ConnectionProvider", "MariaDBConnectionProvider",
+    "MSSQLConnectionProvider", "PostgresConnectionProvider", "OracleConnectionProvider"
+  ]
+}
