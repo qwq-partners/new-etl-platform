@@ -8,12 +8,16 @@ cd "$(dirname "$0")"
 
 : "${SPARK_HOME:?SPARK_HOME 을 설정하라}"
 : "${ORA_PW:?ORA_PW 환경변수에 비밀번호를 넣어라 (argv 금지)}"
-URL="${1:?사용법: run.sh <jdbc-url> <user> <SCHEMA.TABLE> <expect_dbuname> [role] [max_delay_s]}"
+URL="${1:?사용법: run.sh <jdbc-url> <user> <SCHEMA.TABLE> <expect_dbuname> [role] [max_delay_s|none]}"
 USER="${2:?}"; TABLE="${3:?}"; EXPECT_DB="${4:?}"
 # role 은 **공백 없이** 받는다. 공백이 든 값을 extraJavaOptions 문자열에 넣으면
 # JVM 이 두 인자로 쪼개 -Dg0b1.expect.role=PHYSICAL 만 걸리고 STANDBY 는 미인식 옵션이 된다.
 # Preamble 이 '_' 를 공백으로 되돌린다.
 ROLE="${5:-PHYSICAL_STANDBY}"; DELAY="${6:-300}"
+# DELAY 에 none|off|- 를 주면 STANDBY_MAX_DATA_DELAY 를 **아예 걸지 않는다**.
+# standby 가 아닌 DB(로컬 단일 인스턴스 등)에서는 그 ALTER 가 거부될 수 있고,
+# 프리앰블이 거기서 던지면 coverage 회차가 통째로 failclosed 로 변질된다.
+# 그 경우 fail-closed 실험과 구분이 되지 않으므로 측정 자체가 무의미해진다.
 case "$ROLE" in *" "*) echo "role 에 공백을 쓰지 마라. PHYSICAL_STANDBY 처럼 '_' 로 넘겨라." >&2; exit 2;; esac
 JAR="$PWD/g0-0b1-tracer.jar"
 [ -f "$JAR" ] || { echo "먼저 ./build.sh 를 실행하라" >&2; exit 2; }
@@ -26,7 +30,9 @@ submit() {  # $1=mode  $2=extra -D
   local mode="$1" extra="$2"
   # -Dg0b1.run 이 추적 파일명과 각 라인에 회차를 새긴다. 이게 없으면 coverage 와
   # failclosed 의 추적이 한 덩어리로 합산되어 정상 실행도 영원히 NOT_PROVEN 이 된다.
-  local opts="-Dg0b1.run=$mode -Dg0b1.trace.dir=$TRACE -Dg0b1.expect.dbuname=$EXPECT_DB -Dg0b1.expect.role=$ROLE -Dg0b1.max.delay=$DELAY $extra"
+  local delay_opt="-Dg0b1.max.delay=$DELAY"
+  case "$DELAY" in none|off|-|"") delay_opt="" ;; esac
+  local opts="-Dg0b1.run=$mode -Dg0b1.trace.dir=$TRACE -Dg0b1.expect.dbuname=$EXPECT_DB -Dg0b1.expect.role=$ROLE $delay_opt $extra"
   echo "[run] mode=$mode"
   "$SPARK_HOME"/bin/spark-submit \
     --master 'local[4]' \

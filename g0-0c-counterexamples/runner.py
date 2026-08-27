@@ -189,9 +189,14 @@ def enforce_guard(suite: dict, observed: dict) -> list[str]:
         obs, exp = str(observed.get(obs_key, "")), str(g[exp_key])
         if obs != exp:
             die(2, f"{obs_key} 불일치: 관측 {obs!r} != 기대 {exp!r}. 대상 환경이 아니다.")
-        checks.append(f"{obs_key}=={exp}" +
-                      ("" if obs_key != "standby_db_unique_name" or observed.get("standby_verified")
-                       else " (UNVERIFIED — CE_STANDBY_DSN 미설정)"))
+        if obs_key == "standby_db_unique_name" and not observed.get("standby_verified"):
+            # **정직하게 적는다.** CE_STANDBY_DSN 이 없으면 preflight 가 suite 의 expected 를
+            # 그대로 복사해 두므로, 이 비교는 자기 자신과의 비교(항등식)라 언제나 통과한다.
+            # "가드가 전부 켜졌다" 고 읽히면 안 된다 — 이 축은 **검사되지 않았다**.
+            checks.append(f"{obs_key}=NOT_CHECKED (CE_STANDBY_DSN 미설정 — "
+                          f"expected 값 {exp!r} 를 복사해 자기 자신과 비교했다. 항등식이며 검증이 아니다)")
+        else:
+            checks.append(f"{obs_key}=={exp}")
 
     if g.get("production_forbidden", True):
         pats = g.get("forbidden_name_patterns") or []
