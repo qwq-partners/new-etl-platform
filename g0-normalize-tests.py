@@ -312,7 +312,9 @@ def t_positive_control() -> None:
     b1.write_text(json.dumps({"verdict": {"coverage": "PROVEN"},
                               "by_path": {"SCHEMA": 3, "TASK": 4},
                               "preamble_ok_by_path": {"SCHEMA": "3/3", "TASK": "4/4"},
-                              "runs_seen": {"coverage": 7, "failclosed": 3}}), encoding="utf-8")
+                              # 조치 5 이후의 실제 회차 이름
+                              "runs_seen": {"coverage": 7, "failclosed_schema": 2,
+                                            "failclosed_task": 3}}), encoding="utf-8")
     write_manifest(b1, "G0_0B1", lock_digest=ld)
 
     c00 = w / "c00.log"
@@ -358,6 +360,26 @@ def t_positive_control() -> None:
           or all(v["value"] == "UNDETERMINED" for v in axes.values()),
           str({k: (v["value"], v["measured_at"]) for k, v in axes.items()})[:200])
     shutil.rmtree(w)
+
+
+def t_b1_path_split_runs() -> None:
+    """조치 5 로 failclosed 가 경로별로 갈렸다 — 집계기가 새 이름을 인식하는가."""
+    print("\n[18] B1 회차 이름이 failclosed_schema/_task 여도 인식한다 (조치 5 회귀)")
+    for runs, want, label in (
+            ({"coverage": 7, "failclosed_schema": 2, "failclosed_task": 3}, "MEASURED", "경로별 분리"),
+            ({"coverage": 7, "failclosed": 3}, "MEASURED", "옛 이름(호환)"),
+            ({"coverage": 7}, "PARTIAL", "failclosed 회차 없음")):
+        w = new_work(); ld = sha(w / "versions.lock")
+        art = w / "b1.json"
+        art.write_text(json.dumps({"verdict": {"coverage": "PROVEN"},
+                                   "by_path": {"SCHEMA": 3, "TASK": 4},
+                                   "preamble_ok_by_path": {"SCHEMA": "3/3", "TASK": "4/4"},
+                                   "runs_seen": runs}), encoding="utf-8")
+        write_manifest(art, "G0_0B1", lock_digest=ld)
+        rc, out, _ = run_norm(w, b1=art)
+        st = (out.get("coverage") or {}).get("g0_0b1")
+        check(f"{label} → {want}", st == want, f"status={st} runs={runs}")
+        shutil.rmtree(w)
 
 
 def t_axes_derived_in_record() -> None:
@@ -419,7 +441,8 @@ def main() -> int:
               t_c00_summary_only, t_ce_empty_pass, t_ce_bad_returncode, t_a_no_sentinel,
               t_a_duplicate_probe, t_missing_manifest, t_lock_mismatch, t_run_id_mismatch,
               t_artifact_tampered, t_child_nonzero_exit, t_nothing_run,
-              t_lock_unset_comment_only, t_positive_control, t_axes_derived_in_record):
+              t_lock_unset_comment_only, t_positive_control, t_b1_path_split_runs,
+              t_axes_derived_in_record):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

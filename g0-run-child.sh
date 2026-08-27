@@ -83,8 +83,15 @@ MAN="$ARTIFACT.manifest.json"
   for a in "$@"; do
     # 비밀번호가 argv 에 있으면 안 되지만(안전 규칙 §3.1-3), 만약을 위해
     # 흔한 비밀 형태는 남기지 않는다. 값이 아니라 자리만 남긴다.
+    #
+    # **이것은 심층 방어이지 해결책이 아니다.** sqlplus 를 돌릴 때는
+    # g0-sqlplus.sh 를 써라 — 비밀번호를 stdin 으로만 넘겨 argv 에 아예 넣지 않는다.
+    # 2026-08-27 runbook 초안이 `bash -c "… CONNECT $USER/$PW@$DSN …"` 형태였고,
+    # 그러면 비밀번호가 manifest 에 그대로 남는다는 것을 실제 실행에서 확인했다.
     case "$a" in
       *PASSWORD=*|*PASSWD=*|*PW=*|*SECRET=*|*TOKEN=*) a="<redacted>";;
+      # user/password@dsn 형태(sqlplus CONNECT, JDBC URL 등)
+      */*@*) a=$(printf '%s' "$a" | sed -E 's#([A-Za-z0-9_.$-]+)/[^@[:space:]]+@#\1/<redacted>@#g');;
     esac
     [ $first -eq 1 ] || printf ', '
     printf '%s' "$(jq_str "$a")"

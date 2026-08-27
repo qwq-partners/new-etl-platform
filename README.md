@@ -69,6 +69,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **`etl-platform-v2.0-simplification-decision.md`** | 감축 결정 기록. 무엇을 잘랐고 **무엇을 왜 안 잘랐는지** |
 | **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 판정 — **보류**. 후보 37건 중 검증 9건이 전부 기각된 이유 |
 | **`etl-platform-local-poc-plan.md`** | 로컬 WSL2 에서 G0-0 를 처음 돌리기 위한 실행 계획. **로컬이 증명하는 것/못하는 것 경계**가 핵심 |
+| **`g0-0-runbook.md`** | **실행 절차서.** S0~S8 을 명령 단위로. 흩어져 있던 절차를 한곳에 모았다 — **실행할 때는 이것을 편다** |
 | **`g0-0-s1-s3-results.md`** | **첫 실측 회차 기록**(S1·S2·S3). B1 컴파일·SPI 배선 확인, 판정기·증거 계약 첫 검증, 계획서 정정 2건, S4 이후가 막힌 이유 |
 | `CHANGELOG.md` | 아키텍처 변경 이력(규범 아님). 본문에서 분리 |
 
@@ -97,8 +98,10 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 - **capability 축은 13축으로 재설계됐다**(`g0_axes.py` — 표 기반 pure function).
   `watermark_commit_bound` 를 복원했다. apply lag 와 `commit_time − watermark_value` 는
   독립인데 감축 과정에서 한 축으로 합쳐졌던 것이 P0-05 다.
-- 회귀 시험: `g0-normalize-tests.py`(56) · `g0-axes-tests.py`(79) · `g0-b1-analyzer-tests.py`(40)
-  · `g0-0b1-connection-provider/run-tests.sh`(26, Java) — **합계 201건**
+- **실행 래퍼**: 모든 child 는 `g0-run-child.sh` 로 감싼다(manifest 사이드카). sqlplus 는
+  `g0-sqlplus.sh` 로 — 비밀번호를 stdin 으로만 넘겨 manifest 에 남기지 않는다
+- 회귀 시험: `g0-normalize-tests.py`(59) · `g0-axes-tests.py`(79) · `g0-b1-analyzer-tests.py`(40)
+  · `g0-0b1-connection-provider/run-tests.sh`(26, Java) — **합계 204건**
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
 

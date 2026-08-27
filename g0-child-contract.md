@@ -103,7 +103,7 @@ manifest 만으로는 B0 한 줄이 `MEASURED` 가 되는 것을 막지 못한�
 |---|---|
 | `G0_0A` | `probe_run_end` sentinel ∧ `manifest_ok=true` ∧ `emitted == expected` ∧ probe id 중복 0 ∧ `probe_summary` 정확히 1개 |
 | `G0_0B0` | `S*_summary` sentinel ∧ 선언된 step 이 전부 출력됨 |
-| `G0_0B1` | `verdict` ∧ `by_path` ∧ `preamble_ok_by_path` ∧ `runs_seen` 이 **모두** 있고 `runs_seen` 에 `coverage` 와 `failclosed` 가 둘 다 있음 |
+| `G0_0B1` | `verdict` ∧ `by_path` ∧ `preamble_ok_by_path` ∧ `runs_seen` 이 **모두** 있고, `runs_seen` 에 `coverage` 와 **`failclosed` 로 시작하는 회차**가 하나 이상 있음(조치 5 로 `failclosed_schema`·`failclosed_task` 로 갈렸다) |
 | `G0_0C00` | `fence.summary` ∧ 선언된 probe 가 전부 출력됨(skipped 도 출력이다) |
 | `G0_0C_SUITE` | `scenarios` 길이 ≥ 1 ∧ suite 가 요구한 `required` 시나리오가 전부 있음 ∧ 각 시나리오의 child returncode 가 0 |
 
@@ -119,6 +119,49 @@ manifest 만으로는 B0 한 줄이 `MEASURED` 가 되는 것을 막지 못한�
 
 **exit 0 은 "G0-0 을 완주했다"이지 "G0 PASS"가 아니다.** 레코드의 `gate_eligible` 은 항상
 `false` 이며 그것은 schema 의 `const` 다 — 도구가 그 값을 바꿀 방법이 없다.
+
+---
+
+## 4.1 이 계약이 강제하는 실행 순서 — 회차를 둘로 나눠라
+
+`versions_lock_digest` 를 실행 시점에 박고 집계 시점과 대조하므로, **lock 을 child 실행 뒤에
+고치면 집계가 통째로 거부된다.** 그런데 lock 의 `oracle:` 항목은 Oracle 에 붙어 봐야 안다.
+
+그래서 회차를 나눈다.
+
+| 회차 | 무엇 | 산출물의 지위 |
+|---|---|---|
+| **탐색(RECON)** | Spark 설치 · B1 빌드 · Oracle 기동 · 전제물 확보 | **증거가 아니다.** 판본을 알아내는 것이 목적 |
+| ↓ | **여기서 `versions.lock` 을 확정한다** | digest 고정 |
+| **증거(RUN-…)** | A · C00 · B1 · B0 · CE → 정규화 | `run_id` 하나로 묶인 증거 |
+
+lock 을 중간에 고쳐야 하면 **증거 회차를 처음부터 다시 돈다.** 이미 만든 증거는 그 판본의
+것이며 새 판본의 근거로 재사용하지 않는다 — `versions.lock` 머리말의 `evidence_binding.rule`
+이 그렇게 규정한다.
+
+실행 절차는 `g0-0-runbook.md` 가 단계별로 안내한다.
+
+## 4.2 비밀번호는 argv 에 넣지 않는다 — 계약이 그것을 기록하기 때문이다
+
+manifest 는 `command` 를 남긴다. 그래서 다음처럼 쓰면 **비밀번호가 manifest 파일에 남는다.**
+
+```bash
+# ✗ 하지 마라
+g0-run-child.sh G0_0A … -- bash -c "sqlplus -S /nolog <<EOF
+CONNECT $ORA_USER/$ORA_PW@$DSN
+…"
+```
+
+`g0-sqlplus.sh` 를 쓴다 — 비밀번호를 **stdin 으로만** 넘긴다.
+
+```bash
+# ✓
+export ORA_USER=… ORA_DSN=//host:1521/svc      # ORA_PW 는 환경변수
+g0-run-child.sh G0_0A "$RUN_ID" "$PROFILE" out.log -- ./g0-sqlplus.sh probe.sql out.log
+```
+
+래퍼가 `user/pw@host` 형태를 `<redacted>` 로 바꾸긴 하지만 **그것은 심층 방어이지 해결책이
+아니다.** 2026-08-27 runbook 초안이 위 ✗ 형태였고 실제 실행에서 비밀번호가 남는 것을 확인했다.
 
 ---
 

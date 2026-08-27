@@ -407,8 +407,14 @@ G0-0 completed  != G0 PASS
 | **원자료 없음** | P1-11(37행 grant matrix) — 검증된 9건 외 28건의 원자료가 저장소에 없다. 만들려면 재조사가 필요하며 그것은 조치 9 다 |
 | **규범 개정 대기** | P1-07(LOB retention 을 ordinary undo 와 한 boolean 으로 합침, A `:843`). **A 는 규범 문서이므로 실측 전에 고치지 않는다** — 검토서에 확정으로 기록하고 A v2.0 개정 때 반영한다 |
 
-회귀 시험 합계 **201건**(`g0-normalize-tests.py` 56 · `g0-axes-tests.py` 79 ·
+회귀 시험 합계 **204건**(`g0-normalize-tests.py` 59 · `g0-axes-tests.py` 79 ·
 `g0-b1-analyzer-tests.py` 40 · `g0-0b1-connection-provider/run-tests.sh` 26).
+
+실행 절차는 `g0-0-runbook.md` 로 모았다. 그 초안을 실제로 돌려 보다가 **계약이 만든 결함 두 건**을
+잡았다 — (1) manifest 가 실행 명령을 기록하므로 `bash -c "… CONNECT user/pw@…"` 형태가
+비밀번호를 파일에 남긴다(`g0-sqlplus.sh` 신설로 해결), (2) 조치 5 가 회차 이름을
+`failclosed_schema`·`failclosed_task` 로 갈랐는데 집계기가 정확한 키 `failclosed` 를 찾고 있어
+새 하네스의 정상 실행이 영원히 `PARTIAL` 이 될 뻔했다.
 
 ---
 

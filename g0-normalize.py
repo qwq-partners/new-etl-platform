@@ -272,7 +272,14 @@ def cov_b1(path: pathlib.Path | None) -> tuple[dict, dict]:
         return ({"status": "FAILED",
                  "reason": f"필수 키 누락 {need} — verdict 만 있는 파일은 증거가 아니다"}, summary)
     runs = e.get("runs_seen") if isinstance(e.get("runs_seen"), dict) else {}
-    missing_runs = [r for r in ("coverage", "failclosed") if not runs.get(r)]
+    # **회차 이름을 정확히 맞추지 않는다.** 조치 5 로 failclosed 가 경로별로 갈렸다 —
+    # failclosed_schema / failclosed_task. 정확한 키 "failclosed" 를 찾으면 새 하네스의
+    # 정상 실행이 영원히 PARTIAL 이 된다(2026-08-27 runbook 작성 중 발견한 회귀다).
+    missing_runs = []
+    if not runs.get("coverage"):
+        missing_runs.append("coverage")
+    if not any(k.startswith("failclosed") and v for k, v in runs.items()):
+        missing_runs.append("failclosed*")
     if missing_runs:
         return ({"status": "PARTIAL",
                  "reason": f"관측되지 않은 회차 {missing_runs} — fail-closed 를 시험하지 않았으면 "
