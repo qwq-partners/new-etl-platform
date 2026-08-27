@@ -35,15 +35,36 @@ final class Preamble {
      * @throws SQLException 신원이 기대와 다르거나 강제 실패 모드일 때. 호출자는 이것을
      *                      삼키지 말고 그대로 올려 connection 을 실패시켜야 한다.
      */
-    static Result apply(Connection c) throws SQLException {
+    /**
+     * @param path 이 connection 이 열린 Spark 경로(SCHEMA/TASK/METADATA/MIXED/UNKNOWN).
+     *             경로별 주입에 쓴다.
+     */
+    static Result apply(Connection c, String path) throws SQLException {
         Result r = new Result();
 
-        // ── 0. 강제 실패 모드 — fail-closed 가 정말 성립하는지 보는 실험용 ──────
+        // ── 0. 강제 실패 모드 ────────────────────────────────────────────
+        //   g0b1.fail = none | all | <경로 목록(쉼표 구분)>
+        //   예: -Dg0b1.fail=schema  → schema 경로만 실패시킨다.
+        //
+        //   **왜 경로별이어야 하는가**: fail=all 은 **첫 provider 호출(대개 schema)에서
+        //   즉시 던진다.** 그러면 task connection 이 아예 열리지 않고, 그 상태를
+        //   "task 경로도 fail-closed 다" 로 읽으면 증명되지 않은 것을 증명됐다고 하는 것이다
+        //   (7차 교차 리뷰 P0-06). schema 를 통과시키고 task 만 실패시켜야
+        //   task 경로의 fail-closed 를 실제로 관측할 수 있다.
         String fail = prop("g0b1.fail", "none");
-        if ("all".equalsIgnoreCase(fail)) {
-            r.ok = false;
-            r.error = "forced failure (g0b1.fail=all)";
-            throw new SQLException("[g0-0b1] 의도적 프리앰블 실패 — 이 예외가 삼켜지는지 관측한다");
+        if (!"none".equalsIgnoreCase(fail)) {
+            boolean hit = "all".equalsIgnoreCase(fail);
+            if (!hit && path != null) {
+                for (String tok : fail.split(",")) {
+                    if (tok.trim().equalsIgnoreCase(path)) { hit = true; break; }
+                }
+            }
+            if (hit) {
+                r.ok = false;
+                r.error = "forced failure (g0b1.fail=" + fail + ", path=" + path + ")";
+                throw new SQLException("[g0-0b1] 의도적 프리앰블 실패 (경로 " + path
+                                       + ") — 이 예외가 삼켜지는지 관측한다");
+            }
         }
 
         // ── 1. 신원을 서버에게 묻는다 ───────────────────────────────────────

@@ -107,8 +107,19 @@ def derive_axes(P: dict[str, dict]) -> dict:
     """
     A: dict[str, dict] = {}
 
-    def put(axis, value, used, note=None):
-        A[axis] = {"value": value, "derived_from": used, **({"note": note} if note else {})}
+    def put(axis, value, used, note=None, considered=None):
+        """derived_from 은 **이 분기가 실제로 읽은** probe 만 담는다(P1-06).
+        목록에는 있으나 이 분기에서 쓰이지 않은 것은 considered_but_not_used 로 뺀다 —
+        섞어 두면 '이 probe 가 판정에 기여했다' 는 거짓 인상을 준다."""
+        # effective_value — **판정에 쓰는 값**. 지금은 value 와 같지만, stale 이 붙으면
+        # 이전 고등급을 그대로 쓰지 않고 UNDETERMINED 로 내린다(P1-02).
+        rec = {"value": value, "effective_value": value, "derived_from": sorted(set(used))}
+        extra = sorted(set(considered or []) - set(used))
+        if extra:
+            rec["considered_but_not_used"] = extra
+        if note:
+            rec["note"] = note
+        A[axis] = rec
 
     # ── snapshot_read ────────────────────────────────────────────────
     # 주의: view.v_database 는 `SELECT COUNT(*) FROM v$database` 일 뿐 CURRENT_SCN 을
@@ -119,38 +130,44 @@ def derive_axes(P: dict[str, dict]) -> dict:
     reissue = P.get("txn.set_read_only.reissue")
     used = ["as_of_timestamp.target", "dbms_flashback.get_scn",
             "txn.set_read_only", "txn.select_inside", "txn.set_read_only.reissue"]
+    ALL_SNAP = used
     if ok(asof) and ok(scn):
-        put("snapshot_read", "AS_OF_SCN", used,
+        put("snapshot_read", "AS_OF_SCN",
+            ["as_of_timestamp.target", "dbms_flashback.get_scn"], considered=ALL_SNAP, note=
             "AS OF 조회와 SCN 원점이 모두 성공했다. 다만 **여러 connection 이 같은 anchor 를 "
             "공유하는지**는 이 probe 로 증명되지 않는다(G0-0B1 소관).")
     elif ok(asof):
-        put("snapshot_read", "AS_OF_TIMESTAMP", used,
+        put("snapshot_read", "AS_OF_TIMESTAMP",
+            ["as_of_timestamp.target", "dbms_flashback.get_scn"], considered=ALL_SNAP, note=
             "AS OF 는 되지만 SCN 원점이 없다. SCN_TO_TIMESTAMP 계열은 약 3초 근삿값이라 "
             "AS_OF_SCN 으로 올리지 않는다.")
     elif ok(ro) and ok(ro_sel):
         # ORA-01453(두 번째 SET TRANSACTION 거부)이 나와야 첫 트랜잭션이 실제로 열렸다는 양성 대조다.
         pc = isinstance((reissue or {}).get("ora"), int) and abs(reissue["ora"]) == 1453
-        put("snapshot_read", "READ_ONLY_TXN", used,
-            "양성 대조(재발행 ORA-01453) 확인됨" if pc else
+        put("snapshot_read", "READ_ONLY_TXN",
+            ["as_of_timestamp.target", "txn.set_read_only", "txn.select_inside",
+             "txn.set_read_only.reissue"], considered=ALL_SNAP,
+            note="양성 대조(재발행 ORA-01453) 확인됨" if pc else
             "**양성 대조 없음** — 재발행에서 ORA-01453 이 관측되지 않아 트랜잭션이 실제로 "
             "열렸는지 확정되지 않았다. 이 값은 잠정이다.")
     elif all(absent(x) for x in (asof, ro, ro_sel) if x is not None) and not all(
             x is None for x in (asof, ro, ro_sel)):
-        put("snapshot_read", "NONE", used, "AS OF 와 READ ONLY 가 모두 기능 부재로 확인됐다")
+        put("snapshot_read", "NONE", ALL_SNAP,
+            note="AS OF 와 READ ONLY 가 모두 기능 부재로 확인됐다")
     else:
-        put("snapshot_read", "UNDETERMINED", used,
-            "상위 등급이 실패했다고 하위로 내리지 않는다 — 하위 probe 도 성공하지 않았다")
+        put("snapshot_read", "UNDETERMINED", ALL_SNAP,
+            note="상위 등급이 실패했다고 하위로 내리지 않는다 — 하위 probe 도 성공하지 않았다")
 
     # ── row_hash ─────────────────────────────────────────────────────
     h = P.get("feat.standard_hash_sha256")
     used = ["feat.standard_hash_sha256"]
     if ok(h) and h.get("value_interpretable") is True:
-        put("row_hash", "SHA256", used,
+        put("row_hash", "SHA256", used, considered=["feat.ora_hash"], note=
             "표준 시험 벡터와 일치. **cross-engine canonical row hash 는 별개다** — "
             "G0-3 의 V-01~V-16 전까지 행 대조 가능성으로 승격하지 마라.")
     elif absent(h):
         put("row_hash", "NONE", used + ["feat.ora_hash"],
-            "ORA_HASH 는 32비트라 대조용 대체재가 아니다 — Reconciliation 이 건수+PK 로 강등된다")
+            note="ORA_HASH 는 32비트라 대조용 대체재가 아니다 — Reconciliation 이 건수+PK 로 강등된다")
     else:
         put("row_hash", "UNDETERMINED", used)
 
@@ -211,22 +228,27 @@ def derive_axes(P: dict[str, dict]) -> dict:
     t = P.get("wm_column.type_facts")
     used = ["wm_column.type_facts", "feat.interval_ns_successor", "feat.timestamp9_precision"]
     if not ok(t):
-        put("wm_granularity", "UNDETERMINED", used, "wm_column.type_facts 를 읽지 못했다")
+        put("wm_granularity", "UNDETERMINED", ["wm_column.type_facts"],
+            considered=["feat.interval_ns_successor", "feat.timestamp9_precision"],
+            note="wm_column.type_facts 를 읽지 못했다")
     else:
         raw = str(val(t) or "")
         dt = raw.split("|")[0].upper()
         m = re.search(r"scale=(-?\d+)", raw)
         scale = int(m.group(1)) if m and m.group(1) != "-" else None
+        SYN = ["feat.interval_ns_successor", "feat.timestamp9_precision"]
+        one = ["wm_column.type_facts"]
         if dt.startswith("TIMESTAMP"):
             g = {9: "NS", 6: "US", 3: "MS", 0: "SEC"}.get(scale if scale is not None else 6, "US")
-            put("wm_granularity", g, used, f"data_type={dt}, scale={scale}")
+            put("wm_granularity", g, one, considered=SYN, note=f"data_type={dt}, scale={scale}")
         elif dt == "DATE":
-            put("wm_granularity", "SEC", used, "DATE 의 최소 단위는 1초다")
+            put("wm_granularity", "SEC", one, considered=SYN, note="DATE 의 최소 단위는 1초다")
         elif dt == "NUMBER" and scale is not None and scale >= 0:
-            put("wm_granularity", "SEC", used, f"NUMBER(*,{scale}) — 고정 scale 이라 successor 가 정의된다")
+            put("wm_granularity", "SEC", one, considered=SYN,
+                note=f"NUMBER(*,{scale}) — 고정 scale 이라 successor 가 정의된다")
         else:
-            put("wm_granularity", "UNDEFINED", used,
-                f"data_type={dt} scale={scale} — 고정 granularity 가 없어 successor(M)==M 이 된다(CE01)")
+            put("wm_granularity", "UNDEFINED", one, considered=SYN,
+                note=f"data_type={dt} scale={scale} — 고정 granularity 가 없어 successor(M)==M 이 된다(CE01)")
 
     # ── sql_dialect / charset ────────────────────────────────────────
     ff = P.get("feat.fetch_first")
@@ -236,11 +258,14 @@ def derive_axes(P: dict[str, dict]) -> dict:
     cs = P.get("nls.characterset")
     used = ["nls.characterset", "nls.comp", "nls.sort"]
     if not ok(cs):
-        put("charset_class", "UNDETERMINED", used)
+        put("charset_class", "UNDETERMINED", ["nls.characterset"],
+            considered=["nls.comp", "nls.sort"])
     else:
         v = str(val(cs) or "").upper()
-        put("charset_class", "AL32UTF8" if v == "AL32UTF8" else "OTHER", used,
-            f"NLS_CHARACTERSET={v}. **이 DB 하나의 charset 이며 원천 간 비교 가능성은 별개다**")
+        put("charset_class", "AL32UTF8" if v == "AL32UTF8" else "OTHER",
+            ["nls.characterset"], considered=["nls.comp", "nls.sort", "nls.nchar_characterset"],
+            note=f"NLS_CHARACTERSET={v}. **이 DB 하나의 charset 이며 원천 간 비교 가능성은 별개다** — "
+                 "NCHAR charset·NLS_COMP·NLS_SORT·정규화 규칙이 composition 입력으로 더 필요하다(P1-05)")
     return A
 
 
@@ -277,8 +302,15 @@ def main() -> int:
     lock_digest = sha(lock) if lock.is_file() else "UNSET"
     if lock_digest == "UNSET":
         warn.append("versions.lock 이 없다 — 이 레코드는 '어느 판본에서 잰 값인가' 를 답하지 못한다")
-    elif "UNSET" in lock.read_text(encoding="utf-8"):
-        warn.append("versions.lock 에 UNSET 항목이 남아 있다 — 그 항목에 의존하는 측정은 미확정이다")
+    else:
+        # 주석에도 'UNSET' 이 있으므로 **실제 값이 UNSET 인 줄만** 센다(P2).
+        # 문자열 검색으로 세면 전부 채워도 경고가 사라지지 않는다.
+        unset_keys = re.findall(r'^\s*([A-Za-z_][A-Za-z0-9_]*):\s*UNSET\s*(?:#.*)?$',
+                                lock.read_text(encoding="utf-8"), re.M)
+        if unset_keys:
+            warn.append(f"versions.lock 에 미설정 항목 {len(unset_keys)}건 — "
+                        f"{unset_keys[:8]}{' 외' if len(unset_keys) > 8 else ''}. "
+                        "그 항목에 의존하는 측정은 미확정이다")
 
     pa, pb0, pb1, pc00, pcs = (art(k, getattr(a, v)) for k, v in
                                (("g0_0a", "a"), ("g0_0b0", "b0"), ("g0_0b1", "b1"),

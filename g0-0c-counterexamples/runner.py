@@ -398,7 +398,20 @@ def verdict(suite: dict, scen: list[dict], partial: bool, skipped: list[str] | N
     if errored:  reasons.append(f"시나리오 오류: {errored}")
     if schema_errors: reasons.append(f"evidence 스키마 위반 {len(schema_errors)}건")
 
+    # **실행 완결(execution_complete)과 완화 성립(mitigation_holds)은 다르다**(7차 리뷰 P2).
+    # COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 도 pass=true 에 들어가는데, 그것은
+    # "하네스가 끝까지 돌았다" 는 뜻이지 "설계가 통과했다" 가 아니다.
+    holds = [s["id"] for s in scen if s["outcome"] == "MITIGATION_HOLDS"]
+    reproduced = [s["id"] for s in scen if s["outcome"] == "COUNTEREXAMPLE_REPRODUCED"]
+    mfail = [s["id"] for s in scen if s["outcome"] == "MITIGATION_FAIL"]
     return {"pass": not reasons, "rule": "all_required_executed_and_injection_observed",
+            "execution_complete": not reasons,
+            "mitigation_holds": holds,
+            "counterexample_reproduced": reproduced,
+            "mitigation_failed": mfail,
+            "design_verdict_note": ("pass=true 는 **하네스가 끝까지 돌았다**는 뜻이다. "
+                                    "설계 판정이 아니다 — reproduced/mitigation_failed 가 있으면 "
+                                    "그것이 설계 결함이다."),
             "required_missing": missing, "not_observed": not_obs, "inconclusive": incon,
             "reason": "; ".join(reasons) if reasons else "모든 required 시나리오가 실행되고 injection이 관측됨"}
 
@@ -435,6 +448,9 @@ def main() -> int:
     a = ap.parse_args()
 
     root = Path(a.suite).resolve().parent
+    if not (root / "scenarios").is_dir():
+        die(2, f"{root}/scenarios 가 없다. --suite 는 **패키지 안의** suite 파일을 가리켜야 한다 "
+               f"(scenarios/ 와 같은 디렉터리). 지금 값: {a.suite}")
     suite = load_yaml(Path(a.suite))
     if suite.get("schema_version") != SCHEMA_VERSION or suite.get("suite_id") != SUITE_ID:
         die(2, "suite.yaml 의 schema_version/suite_id 가 runner와 맞지 않는다.")
@@ -482,7 +498,11 @@ def main() -> int:
     checks = enforce_guard(suite, observed)
     print(f"[guard] 통과: {', '.join(checks)}")
 
+    # **코드 digest 와 suite 설정 digest 를 따로 기록한다**(7차 리뷰 P1-10).
+    # suite.yaml 을 해시에서 빼면 required_scenarios·budgets·versions·pass_rule 이
+    # 증거에 묶이지 않아, 다른 설정으로 돌린 결과를 같은 것으로 오인할 수 있다.
     h = artifact_hash(root, exclude={Path(a.suite).resolve().name, Path(a.out).name})
+    suite_digest = hashlib.sha256(Path(a.suite).read_bytes()).hexdigest()
     declared = str(suite.get("artifact_sha256") or "")
     if declared and declared != h:
         die(2, f"artifact_sha256 불일치. 선언 {declared[:16]}… != 실제 {h[:16]}…")
@@ -528,6 +548,7 @@ def main() -> int:
     ev = {"schema_version": SCHEMA_VERSION, "suite_id": SUITE_ID,
           "run_id": str(uuid.uuid4()), "started_at": scen[0]["started_at"] if scen else now(),
           "finished_at": now(), "artifact_sha256": h,
+          "suite_config_sha256": suite_digest,
           "environment": envrec,
           "versions": suite.get("versions", {}),
           "scenarios": scen,

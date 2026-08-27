@@ -1,6 +1,7 @@
 # 7차 교차 리뷰 검토서
 
 - 검토 대상: `etl-platform-v2.0-codex-seventh-cross-review.md` (408줄, 요청 기준판 `538ec31`)
+- 처리: P0 6건 전부 확정·수정(1차 패스) + P1/P2 17건 중 9건 수정·5건 부분·6건 미반영(2차 패스)
 - 판정일: 2026-08-27
 - 방법: 각 지적을 **실제 코드로 재현**하고 1차 출처와 대조
 
@@ -113,6 +114,36 @@ Java 3파일 재컴파일 통과(실제 Spark 4.2.0 jar).
 
 ---
 
+## 3.1 P1/P2 처리 (2차 패스)
+
+| ID | 판정 | 조치 |
+|---|---|---|
+| P1-01 | 확정 | 축 9개를 `propertyNames.enum` 으로 고정하고 `capability_axes` 를 필수로. `measured_at`·`stale`·`effective_value` 를 스키마화 |
+| P1-02 | 확정 | `value`(표시용 이력)와 **`effective_value`(판정용)** 분리. `stale=true` 면 이전 고등급을 그대로 쓰지 않는다 |
+| P1-03 | 부분 반영 | `ABSENCE_ORA` 집합(00942/01031/00900/06550/00439/02003 등)으로 **기능 부재**만 `NONE` 으로 본다. `ORA-03135` 같은 전송 오류는 `UNDETERMINED` 로 떨어진다. 전체 taxonomy 표는 미작성 |
+| P1-04 | 부분 반영 | `row_hash` note 에 "함수 존재 ≠ cross-engine canonical row hash(G0-3)" 를 박았다. §5 scope 표 갱신은 축 재설계와 함께 |
+| P1-05 | 부분 반영 | `charset_class` note 에 NCHAR·NLS_COMP·NLS_SORT·정규화가 composition 입력으로 더 필요함을 명시. 실제 composition 은 축 재설계 소관 |
+| **P1-06** | **확정·수정** | `derived_from` 은 **이 분기가 실제로 읽은** probe 만. 나머지는 `considered_but_not_used` 로 분리 |
+| P1-07 | 미반영 | LOB RETENTION 분리는 A 규범 개정 소관 |
+| P1-08 | 미반영 | B0 S4 의 SQLCODE predicate |
+| P1-09 | 부분 반영 | C00 summary 한 줄만으로 `MEASURED` 가 되던 것을 `PARTIAL` 로. end sentinel·manifest 는 미반영 |
+| **P1-10** | **확정·수정** | `artifact_sha256`(코드)와 **`suite_config_sha256`(설정)** 분리. 둘 다 evidence 필수 |
+| P1-11 | 미반영 | grant verdict 37행 원자료 |
+| **P1-12** | **확정·수정** | 제약 서술 통일 — "정합성을 DBA 협조에 걸 수 없다. 비critical 요청은 가능하나 **현재 보류**이며 어떤 설계도 그것을 가정하지 않는다" |
+| P2 C00 문구 | 확정·수정 | "산출물 0건" → "**대상 테이블 질의** 0건"(skipped 레코드·summary 는 나온다) |
+| P2 pass 의미 | 확정·수정 | `execution_complete`·`mitigation_holds`·`counterexample_reproduced`·`mitigation_failed` 분리 + `design_verdict_note`. **`pass=true` 는 하네스 완주이지 설계 통과가 아니다** |
+| P2 `versions.lock` UNSET | 확정·수정 | 문서 전체 문자열 검색 → **실제 `key: UNSET` 줄만** 계수. 주석 때문에 경고가 안 사라지던 것 해소 |
+| P2 artifact 형식 | 확정·수정 | `sha256` 패턴·`lines >= 0` 스키마 제약 |
+| P2 `--limit` 상한 | 미반영 | hard maximum |
+
+### 경로별 주입 구현 (P0-06 해소)
+
+`g0b1.fail` 이 `none|all` 뿐이라 **`fail=all` 은 첫 provider 호출(schema)에서 즉시 던지고 task connection 에 도달조차 못 했다.** 그 상태를 "task 도 fail-closed" 로 읽는 것이 P0-06 이었다.
+
+→ `Preamble.apply(conn, path)` 로 경로를 받아 `g0b1.fail=schema|task|metadata`(쉼표 구분)를 지원한다. `run.sh` 에 `failclosed_task` 회차를 추가했고, `analyze-trace.py` 가 그 회차의 TASK 추적으로 도달 여부를 판정한다.
+
+---
+
 ## 4. 아직 하지 않은 것
 
 리뷰가 요구한 것 중 **이번에 하지 않은 것**을 남긴다. 조용히 넘기지 않는다.
@@ -121,7 +152,7 @@ Java 3파일 재컴파일 통과(실제 Spark 4.2.0 jar).
 2. **경로별 주입**(`fail=schema|task|metadata`) — `TASK_PATH_NOT_REACHED` 로 **탐지**는 하게 됐지만, 그 상태를 **해소**하려면 주입점을 경로별로 나눠야 한다.
 3. **overlay 9축 재설계** — 분해는 기록했으나 최종 축 목록과 composition function 은 G0-0 실측 후로 미뤘다. 지금 확정하면 또 측정 없이 규격을 짜는 것이다.
 4. **CE runner 의 child `returncode` 검사** — 리뷰 P0-02 말미 지적. 미반영.
-5. **P1/P2 항목** — 아직 검토하지 않았다.
+5. ~~P1/P2 항목~~ → §3.1 에서 처리. **미반영 6건**: P1-07(LOB RETENTION 분리) · P1-08(B0 S4 predicate) · P1-09 일부(end sentinel·manifest) · P1-11(grant verdict 원자료 37행) · P1-03 전체 taxonomy 표 · P2 `--limit` 상한.
 
 ---
 

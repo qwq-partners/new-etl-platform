@@ -62,7 +62,8 @@ spark-submit --jars /path/ojdbc11.jar g0-0b0-spark-smoke.py \
 # (3) G0-0C00 — fence fact collector. **G0-0A의 wm_column.leading_valid_visible 를 먼저 확인**하고,
 #     ACK_FULL_SCAN=N(기본)이면 **대상 테이블 질의가 하나도 실행되지 않는다** —
 #     Q1·Q2·Q4 는 물론 Q3 도 게이트 뒤에 있다(SAMPLE 은 표본 추출이지 I/O 절감이 아니다).
-#     즉 기본 설정으로 돌리면 산출물이 0건이다. 승인 후 ACK_FULL_SCAN=Y 로 실행하라.
+#     즉 기본 설정으로는 **대상 테이블 질의가 0건**이다(skipped 레코드와 summary 는 나온다).
+#     승인 후 ACK_FULL_SCAN=Y 로 실행하라.
 sqlplus -S /nolog <<EOF | tee g0-0c00-evidence-$(date +%Y%m%d).log
 CONNECT $ORA_USER/$ORA_PW@//host:1521/service
 @g0-0c-fence-facts.sql

@@ -14,7 +14,8 @@
     "versions",
     "artifact_sha256",
     "scenarios",
-    "suite_verdict"
+    "suite_verdict",
+    "suite_config_sha256"
   ],
   "additionalProperties": false,
   "properties": {
@@ -332,8 +333,42 @@
         },
         "reason": {
           "type": "string"
+        },
+        "execution_complete": {
+          "type": "boolean",
+          "description": "하네스가 끝까지 돌았는가. **설계 판정이 아니다.**"
+        },
+        "mitigation_holds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "완화가 실제로 막은 시나리오"
+        },
+        "counterexample_reproduced": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "반례가 재현된 시나리오 — **설계 결함이다**"
+        },
+        "mitigation_failed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "완화가 있었으나 막지 못한 시나리오 — **설계 결함이다**"
+        },
+        "design_verdict_note": {
+          "type": "string",
+          "description": "pass 의 의미를 오독하지 않게 하는 문구"
         }
       }
+    },
+    "suite_config_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "suite.yaml 의 digest. artifact_sha256(코드)과 분리해 설정 변경을 추적한다."
     }
   }
 }

@@ -81,7 +81,7 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
 
         if (c != null) {
             try {
-                pr = Preamble.apply(c);
+                pr = Preamble.apply(c, path);
             } catch (SQLException | RuntimeException e) {
                 preambleError = e.getClass().getName() + ": " + e.getMessage();
             }

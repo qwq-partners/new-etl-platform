@@ -129,6 +129,8 @@ def main():
     })
 
     # ── 질문 3: fail-closed. 시험하지 않았으면 **미확정이지 통과가 아니다.** ──
+    fct = [r for r in res if r.get("mode") == "failclosed_task"]
+    fctl = runs.get("failclosed_task") or []
     fc = [r for r in res if r.get("mode") == "failclosed"]
     if not fc:
         ev["findings"].append({
@@ -145,14 +147,22 @@ def main():
         # **fail=all 은 첫 provider 호출(schema)에서 즉시 던진다.** 그러면 task connection 에
         # 도달조차 못 하고, 그 상태를 "task 경로도 fail-closed 다" 로 읽으면 안 된다(P0-06).
         fc_paths = Counter(c.get("path_guess") for c in fcl)
-        task_reached = fc_paths.get("TASK", 0) > 0
+        # task 경로 도달은 **fail=task 회차**에서 본다. fail=all 회차에서 TASK 가 보이면
+        # 그것도 유효하지만, 보통은 schema 에서 죽어 안 보인다.
+        fct_paths = Counter(c.get("path_guess") for c in fctl)
+        task_reached = fc_paths.get("TASK", 0) > 0 or fct_paths.get("TASK", 0) > 0
+        task_failed = any((c.get("preamble_error") or c.get("open_error"))
+                          for c in fctl if c.get("path_guess") == "TASK")
         swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
         ev["findings"].append({
             "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
             "observed": {"statuses": [r.get("status") for r in fc],
                          "failed_connections_in_failclosed": len(swallowed),
                          "succeeded_steps_under_fail_all": ok_steps,
-                         "failclosed_by_path": dict(Counter(c.get("path_guess") for c in fcl))},
+                         "failclosed_by_path": dict(fc_paths),
+                         "failclosed_task_by_path": dict(fct_paths),
+                         "task_path_preamble_failed": task_failed,
+                         "failclosed_task_run_present": bool(fct)},
             "answer": "NO" if broken else ("YES" if task_reached else "TASK_PATH_NOT_REACHED"),
             "note": (f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
                      "그 step 이 쓰는 경로가 connection 예외를 삼킨다. "

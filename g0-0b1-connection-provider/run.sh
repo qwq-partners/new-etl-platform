@@ -57,6 +57,9 @@ if grep -qiE 'ORA-01017|ORA-28000|ORA-01005|invalid username|account is locked' 
   exit 2
 fi
 submit failclosed "-Dg0b1.fail=all" || true
+# **경로별 주입** — fail=all 은 schema 에서 즉시 죽어 task 경로에 도달조차 못 한다.
+# task 만 실패시켜야 task 경로의 fail-closed 를 실제로 관측할 수 있다(P0-06).
+submit failclosed_task "-Dg0b1.fail=task" || true
 
 echo
 python3 analyze-trace.py --trace-dir "$TRACE" --result-log "$LOGS"/*.log --out g0-0b1-evidence.json

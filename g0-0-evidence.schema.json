@@ -16,7 +16,8 @@
     "versions_lock_digest",
     "coverage",
     "not_covered",
-    "artifacts"
+    "artifacts",
+    "capability_axes"
   ],
   "additionalProperties": false,
   "properties": {
@@ -151,7 +152,7 @@
     },
     "capability_axes": {
       "type": "object",
-      "description": "capability-overlay §3 의 축. **probe 결과에서 파생된 값이며 입력이 없으면 UNDETERMINED 다.** 낙관적으로 채우지 않는다.",
+      "description": "capability 축. **probe 결과에서 파생된 값이며 입력이 없으면 UNDETERMINED 다.** 축 이름은 아래 목록으로 고정한다 — 자유 문자열이면 오타가 새 축이 되어 조용히 누락된다.",
       "additionalProperties": {
         "type": "object",
         "required": [
@@ -161,7 +162,8 @@
         "additionalProperties": false,
         "properties": {
           "value": {
-            "type": "string"
+            "type": "string",
+            "description": "관측된 값(표시용). 판정에는 effective_value 를 쓴다."
           },
           "derived_from": {
             "type": "array",
@@ -172,8 +174,52 @@
           },
           "note": {
             "type": "string"
+          },
+          "considered_but_not_used": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "목록에는 있으나 **이 분기가 읽지 않은** probe. derived_from 과 섞으면 그 probe 가 판정에 기여했다는 거짓 인상을 준다(P1-06)."
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "이 축을 만든 측정의 시각. 정규화 시각이 아니다."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "유효기간이 지난 값인가."
+          },
+          "effective_value": {
+            "type": "string",
+            "description": "**안전성·publish 판정에 쓰는 값.** stale=true 면 이전 고등급을 그대로 쓰지 않고 floor(UNDETERMINED)로 내린다(P1-02). value 는 표시용 이력이다."
           }
         }
+      },
+      "required": [
+        "snapshot_read",
+        "row_hash",
+        "row_change_scn",
+        "lag_observation",
+        "lag_admission",
+        "watermark_commit_bound",
+        "wm_granularity",
+        "sql_dialect",
+        "charset_class"
+      ],
+      "propertyNames": {
+        "enum": [
+          "snapshot_read",
+          "row_hash",
+          "row_change_scn",
+          "lag_observation",
+          "lag_admission",
+          "watermark_commit_bound",
+          "wm_granularity",
+          "sql_dialect",
+          "charset_class"
+        ]
       }
     },
     "artifacts": {
@@ -191,10 +237,12 @@
             "type": "string"
           },
           "sha256": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$|^MISSING$"
           },
           "lines": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           }
         }
       }
