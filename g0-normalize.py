@@ -36,7 +36,12 @@ import re
 import sys
 from datetime import datetime, timezone
 
+# 축 파생은 별도 모듈이다 — 표 기반 pure function(7차 리뷰 P0-01·P0-05 조치).
+# 파일명에 밑줄을 쓰는 이유는 import 때문이다(g0_axes.py 의 머리말 참조).
+import g0_axes
+
 SCHEMA_FILE = "g0-0-evidence.schema.json"
+SCHEMA_VERSION = "2.1.0"
 
 # P §8.1 의 g0_evidence 항목 중 G0-0 이 도달하지 못하는 것.
 # **고정 집합이다.** item 값은 schema 의 enum 과 정확히 일치해야 한다(7차 리뷰 P0-04).
@@ -55,10 +60,12 @@ NOT_COVERED = [
      "why": "ORACLE_TEST_INSTANCE / ORACLE_COMPATIBLE_STUB 구분은 G0-1~5 aggregator 가 정한다. "
             "G0-0 은 접속한 서버가 스스로 밝힌 신원만 기록한다."},
     {"item": "oracle_env.nls_nchar_characterset",
-     "why": "G0-0A 가 NLS_CHARACTERSET 은 재지만 NCHAR charset probe 가 없다. "
-            "STRING 경로가 TO_NCHAR 경유이므로 G0-3 전에 별도 probe 를 추가해야 한다."},
+     "why": "**값은 G0-0A 가 수집한다**(probe `nls.nchar_characterset`) — source 에 담는다. "
+            "덮지 못하는 것은 그 값이 STRING 경로의 TO_NCHAR 결과에 미치는 영향 판정이며 "
+            "그것은 G0-3 V-01~V-16 소관이다."},
     {"item": "oracle_env.max_string_size",
-     "why": "probe 는 있으나 그 값이 canonical hash 규격에 미치는 영향 판정은 G0-3 소관이다."},
+     "why": "**값은 G0-0A 가 수집한다**(probe `v$parameter.max_string`) — source 에 담는다. "
+            "덮지 못하는 것은 그 값이 canonical hash 규격에 미치는 영향 판정이며 G0-3 소관이다."},
     {"item": "same_lock (G0-5)",
      "why": "동일 lock 실증은 G0-1~G0-4 산출물이 모두 있어야 성립한다. G0-0 하나로는 불가능하다."},
 ]
@@ -350,29 +357,6 @@ def cov_ce(path: pathlib.Path | None) -> tuple[dict, dict, list[str]]:
     return {"status": "MEASURED", "counts": {"scenarios": len(scen)}}, ces, V
 
 
-# ── capability 축 ────────────────────────────────────────────────────
-AXES_SUSPENDED_REASON = (
-    "축 파생을 중단했다. 7차 교차 리뷰 P0-01·P0-05 가 현행 파생기와 축 모델을 결함으로 "
-    "판정했고(`SELECT COUNT(*) FROM v$database` 성공이 AS_OF_SCN 승격 근거가 되고, "
-    "AS OF TIMESTAMP 만 성공해도 READ_ONLY_TXN 이 되며, TIMESTAMP(2) 가 US 로, "
-    "NUMBER(10,2) 가 SEC 으로 나온다), 그 재설계(조치 3)가 아직 끝나지 않았다. "
-    "**틀린 값을 만드는 것보다 만들지 않는 것이 낫다.**"
-)
-
-# 재설계 전까지 자리만 지킨다. 이름은 overlay §3 의 현행 7축 그대로 둔다 —
-# 조치 3 에서 리뷰의 9축으로 재분리하고 그때 schema 에 명시 property 로 박는다.
-AXIS_NAMES = ["snapshot_read", "row_hash", "row_change_scn", "lag_visibility",
-              "wm_granularity", "sql_dialect", "charset_class"]
-
-
-def axes_suspended() -> dict:
-    return {name: {"value": "UNDETERMINED", "scope": "UNDETERMINED", "binding": None,
-                   "measured_at": None, "stale": False, "effective_value": "UNDETERMINED",
-                   "inputs": [{"probe": "<파생 중단>", "used": False}],
-                   "note": AXES_SUSPENDED_REASON}
-            for name in AXIS_NAMES}
-
-
 # ── main ─────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -388,6 +372,11 @@ def main() -> int:
     ap.add_argument("--c00", help="G0-0C00 spool 로그")
     ap.add_argument("--c-suite", help="G0-0C evidence.json")
     ap.add_argument("--out", default="g0-0-evidence.json")
+    # **테이블 단위 축은 묶이지 않으면 확정값을 내지 않는다**(P0-03). 그 대상을 여기서 받는다.
+    # G0-0A 가 어떤 테이블을 쟀는지는 로그에 없으므로 운영자가 알려 줘야 한다.
+    ap.add_argument("--target-owner", help="G0-0A 가 실측한 대상 스키마. 없으면 테이블 단위 축은 UNDETERMINED")
+    ap.add_argument("--target-table", help="대상 테이블")
+    ap.add_argument("--wm-column", help="watermark 컬럼")
     ap.add_argument("--allow-missing-manifest", action="store_true",
                     help="manifest 없는 산출물을 계약 위반이 아니라 경고로 낮춘다. "
                          "**증거 생성에 쓰지 마라** — 계약 도입 이전 로그를 살펴볼 때만 쓴다.")
@@ -467,15 +456,38 @@ def main() -> int:
                    ("database_role", "userenv.DATABASE_ROLE"),
                    ("instance_name", "userenv.INSTANCE_NAME"),
                    ("oracle_version", "ver.product_component"),
-                   ("characterset", "nls.characterset")):
+                   ("characterset", "nls.characterset"),
+                   # P §8.1 의 oracle_env 세 값 중 둘. G0-0A 가 실제로 수집한다 —
+                   # not_covered 에 "probe 가 없다" 고 쓰면 사실이 아니다.
+                   ("nchar_characterset", "nls.nchar_characterset"),
+                   ("max_string_size", "v$parameter.max_string")):
         r = P.get(pid)
         if r and r.get("query_ok") is True and r.get("value") is not None:
             src[k] = str(r["value"])
 
     complete = all(c["status"] == "MEASURED" for c in coverage.values())
 
+    # 테이블 단위 축의 binding. db_identity 는 **서버가 밝힌** 이름으로 만든다 —
+    # 운영자 신고값으로 묶으면 잘못 지정한 실행이 일관돼 보인다.
+    binding = None
+    if a.target_owner and a.target_table and src.get("db_unique_name"):
+        binding = {"db_identity": src["db_unique_name"], "owner": a.target_owner,
+                   "object": a.target_table, "object_type": "TABLE"}
+        if a.wm_column:
+            binding["column"] = a.wm_column
+        src["target_owner"], src["target_table"] = a.target_owner, a.target_table
+        if a.wm_column:
+            src["wm_column"] = a.wm_column
+    elif a.target_owner or a.target_table:
+        W.append("--target-owner/--target-table 중 일부만 주었거나 서버가 db_unique_name 을 "
+                 "밝히지 않았다 → 테이블 단위 축을 묶지 못해 UNDETERMINED 로 둔다")
+
+    axes = g0_axes.derive_axes(
+        P, binding=binding,
+        measured_at=children.get("g0_0a", {}).get("measured_at"))
+
     rec = {
-        "schema_version": "2.0.0",
+        "schema_version": SCHEMA_VERSION,
         "record_type": "g0_0_evidence",
         "scope": "CAPABILITY_INVENTORY",
         "gate_eligible": False,
@@ -489,7 +501,7 @@ def main() -> int:
         "coverage": coverage,
         "not_covered": NOT_COVERED,
         "account_privs": list(P.values()),
-        "capability_axes": axes_suspended(),
+        "capability_axes": axes,
         "artifacts": arts,
         "spark_paths": spark_paths, "fence_facts": fence, "counterexamples": ces,
         "contract_violations": V,
@@ -547,7 +559,8 @@ def main() -> int:
         "gate_eligible": rec["gate_eligible"],
         "completeness": rec["completeness"],
         "coverage": {k: v["status"] for k, v in coverage.items()},
-        "capability_axes": "SUSPENDED — 조치 3(축 재설계) 전까지 파생하지 않는다",
+        "capability_axes": {k: v["value"] for k, v in axes.items()},
+        "undetermined_axes": [k for k, v in axes.items() if v["value"] == "UNDETERMINED"],
         "warnings": rec["warnings"],
     }, ensure_ascii=False, indent=1))
     return 0 if complete else 3

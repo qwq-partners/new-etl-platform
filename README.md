@@ -64,7 +64,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 파일 | 설명 |
 |---|---|
 | **`etl-platform-v2.0-unprivileged-redesign-scope.md`** | DBA 없는 세계의 재설계 범위 제안. 죽는 것 / 살아남는 무권한 수단 / 보증 축 재정의 / 결정 4건 |
-| **`etl-platform-v2.0-capability-overlay.md`** | 이기종 원천 대응. 코어는 권한 0·최저 버전에서 성립하고 capability 는 원천별 측정 오버레이로 붙는다 |
+| **`etl-platform-v2.0-capability-overlay.md`** | 이기종 원천 대응. 코어는 권한 0·최저 버전에서 성립하고 capability 는 원천별 측정 오버레이로 붙는다. **§3 의 7축 표는 폐기** — 권위는 부록 A 와 `g0_axes.py` 다 |
 | **`etl-platform-v2.0-simplification-decision.md`** | 감축 결정 기록. 무엇을 잘랐고 **무엇을 왜 안 잘랐는지** |
 | **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 판정 — **보류**. 후보 37건 중 검증 9건이 전부 기각된 이유 |
 | **`etl-platform-local-poc-plan.md`** | 로컬 WSL2 에서 G0-0 를 처음 돌리기 위한 실행 계획. **로컬이 증명하는 것/못하는 것 경계**가 핵심 |
@@ -93,9 +93,10 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 - 각 산출물은 `g0-run-child.sh` 로 실행해 **manifest 사이드카**를 남긴다. 실행 시점의
   `versions.lock` digest·종료 코드·산출물 해시가 거기 박히고, 집계기가 그것을 대조한다.
 - 계약 위반·schema 위반은 경고가 아니라 **거부**다(exit 4, 최종 경로에 쓰지 않는다).
-- **capability 축 파생은 현재 중단 상태다** — 축 모델 재설계(조치 3)가 끝날 때까지
-  전부 `UNDETERMINED` 로 낸다. 틀린 값을 만드는 것보다 만들지 않는 것이 낫다.
-- 회귀 시험: `python3 g0-normalize-tests.py` (반례 15종 + 양성 대조 1종)
+- **capability 축은 13축으로 재설계됐다**(`g0_axes.py` — 표 기반 pure function).
+  `watermark_commit_bound` 를 복원했다. apply lag 와 `commit_time − watermark_value` 는
+  독립인데 감축 과정에서 한 축으로 합쳐졌던 것이 P0-05 다.
+- 회귀 시험: `python3 g0-normalize-tests.py`(56건) · `python3 g0-axes-tests.py`(79건)
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
 
@@ -133,7 +134,9 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 **S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 그러나 7차 교차 리뷰가 **G0-0 실행 전에 닫아야 할 P0 6건**을
 확정했다(`…-seventh-review-assessment.md`). 측정기를 고치는 것이 실측의 전제다 — 순서가 바뀌었다.
 
-0. **P0 6건 수정** — 검토서 §5 의 조치 순서를 따른다. `NLS_NUMERIC_CHARACTERS` 정정(0번)은 완료
+0. **P0 6건 수정** — 검토서 §5 의 조치 순서. **0·1·2·3 완료**(NLS 정정 / gate_eligible const /
+   증거 봉투 fail-closed / 축 재설계). 남은 것은 **4(analyzer fail-closed·MIXED 판정)** 와
+   **5(B1 path-specific fail injection 하네스)**
 1. **Oracle 이 붙는 환경 확보** — S4~S8 이 전부 여기에 걸려 있다. **사용자 WSL2 에서 한다**
 2. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전
 3. **G0-0B1 본실행** — 빌드·배선은 확인됐다. 남은 질문은 §1의 셋 그대로다:

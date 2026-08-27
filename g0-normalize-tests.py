@@ -332,7 +332,8 @@ def t_positive_control() -> None:
         {"id": "CE02", "outcome": "MITIGATION_HOLDS", "child_returncode": 0}]}), encoding="utf-8")
     write_manifest(ce, "G0_0C_SUITE", lock_digest=ld)
 
-    rc, out, err = run_norm(w, a=a_art, b0=b0, b1=b1, c00=c00, c_suite=ce)
+    rc, out, err = run_norm(w, a=a_art, b0=b0, b1=b1, c00=c00, c_suite=ce,
+                            target_owner="APP", target_table="T1", wm_column="UPDATE_DT")
     check("exit 0(완결)", rc == 0, f"rc={rc} stderr={err[:200]}")
     cov = out.get("coverage") or {}
     check("다섯 child 가 전부 MEASURED",
@@ -348,6 +349,65 @@ def t_positive_control() -> None:
           str(rec["children"]["g0_0a"]))
     check("normalized_at 은 그와 별개다",
           rec["normalized_at"] != rec["children"]["g0_0a"].get("measured_at"))
+    axes = rec["capability_axes"]
+    check("13축이 전부 있다", len(axes) == 13, str(len(axes)))
+    check("watermark_commit_bound 축이 복원돼 있다", "watermark_commit_bound" in axes)
+    check("lag_visibility 라는 합쳐진 축은 없다", "lag_visibility" not in axes)
+    check("확정된 축에는 measured_at 이 붙는다",
+          all(v["measured_at"] for v in axes.values() if v["value"] != "UNDETERMINED")
+          or all(v["value"] == "UNDETERMINED" for v in axes.values()),
+          str({k: (v["value"], v["measured_at"]) for k, v in axes.items()})[:200])
+    shutil.rmtree(w)
+
+
+def t_axes_derived_in_record() -> None:
+    """축이 실제 probe 에서 파생돼 레코드에 담기는가 — 조치 3 통합 확인."""
+    print("\n[17] 축 파생이 레코드에 반영된다 (조치 3)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    a_art = w / "a.log"
+    a_art.write_text(
+        '{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ETLSTB"}\n'
+        '{"probe":"dbms_flashback.get_scn","query_ok":true,"value":"9912345",'
+        '"value_interpretable":true}\n'
+        '{"probe":"as_of_timestamp.target","query_ok":true,"value":"1"}\n'
+        '{"probe":"feat.standard_hash_sha256","query_ok":true,"value":"ba7816bf",'
+        '"value_interpretable":true}\n'
+        '{"probe":"feat.fetch_first","query_ok":true,"value":"1"}\n'
+        '{"probe":"nls.characterset","query_ok":true,"value":"AL32UTF8"}\n'
+        '{"probe":"nls.nchar_characterset","query_ok":true,"value":"AL16UTF16"}\n'
+        '{"probe":"v$parameter.max_string","query_ok":true,"value":"STANDARD"}\n'
+        '{"probe":"wm_column.type_facts","query_ok":true,"value":"TIMESTAMP(2)|scale=2"}\n'
+        '{"probe":"feat.ora_rowscn_target","query_ok":true,"value":"9912000"}\n'
+        '{"probe":"feat.rowdependencies_target","query_ok":true,"value":"DISABLED"}\n'
+        '{"probe":"alter.STANDBY_MAX_DATA_DELAY.D","query_ok":true,"value":"ok"}\n'
+        '{"probe":"max_delay_zero.touch_target","query_ok":true,"value":"1"}\n'
+        '{"probe_summary":{"expected":13,"emitted":13,"manifest_ok":true}}\n'
+        '{"probe_run_end":"G0-0A","status":"reached_end"}\n', encoding="utf-8")
+    write_manifest(a_art, "G0_0A", lock_digest=ld)
+    rc, out, err = run_norm(w, a=a_art, target_owner="APP", target_table="T1",
+                            wm_column="UPDATE_DT")
+    rec = json.loads((w / "out.json").read_text(encoding="utf-8"))
+    ax = {k: v["value"] for k, v in rec["capability_axes"].items()}
+    check("snapshot_anchor=SCN", ax["snapshot_anchor"] == "SCN", str(ax))
+    check("hash_function=SHA256", ax["hash_function"] == "SHA256", str(ax))
+    check("sql_dialect=12C_PLUS", ax["sql_dialect"] == "12C_PLUS", str(ax))
+    check("db_charset=AL32UTF8", ax["db_charset"] == "AL32UTF8", str(ax))
+    check("row_change_scn=BLOCK_LEVEL(ROWDEPENDENCIES DISABLED)",
+          ax["row_change_scn"] == "BLOCK_LEVEL", str(ax))
+    check("wm_successor=TIMESTAMP(2) — US 가 아니다",
+          ax["wm_successor"] == "TIMESTAMP(2)", str(ax))
+    check("lag_admission 은 ORA-03172 없이 승격되지 않는다",
+          ax["lag_admission"] == "UNDETERMINED", str(ax))
+    check("snapshot_scope 가 JOB 이 아니다", ax["snapshot_scope"] != "JOB", str(ax))
+    check("canonical_row_compare 가 VECTORS_PROVEN 이 아니다",
+          ax["canonical_row_compare"] != "VECTORS_PROVEN", str(ax))
+    check("source 에 nchar_characterset 이 담긴다",
+          rec["source"].get("nchar_characterset") == "AL16UTF16", str(rec.get("source")))
+    check("source 에 max_string_size 가 담긴다",
+          rec["source"].get("max_string_size") == "STANDARD", str(rec.get("source")))
+    check("테이블 단위 축에 binding 이 붙는다",
+          rec["capability_axes"]["row_change_scn"]["binding"]["object"] == "T1",
+          str(rec["capability_axes"]["row_change_scn"]["binding"]))
     shutil.rmtree(w)
 
 
@@ -359,7 +419,7 @@ def main() -> int:
               t_c00_summary_only, t_ce_empty_pass, t_ce_bad_returncode, t_a_no_sentinel,
               t_a_duplicate_probe, t_missing_manifest, t_lock_mismatch, t_run_id_mismatch,
               t_artifact_tampered, t_child_nonzero_exit, t_nothing_run,
-              t_lock_unset_comment_only, t_positive_control):
+              t_lock_unset_comment_only, t_positive_control, t_axes_derived_in_record):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

@@ -33,6 +33,20 @@ Oracle **11.2 physical standby(ADG)** + ETL 계정에 **대상 테이블 SELECT 
 
 ## 3. Capability 축
 
+> ## ⚠ 2026-08-27 — 이 절의 7축 표는 **폐기됐다**
+>
+> 7차 교차 리뷰 **P0-05** 가 이 축들이 독립 성질을 합쳤다고 판정했고, 재판정에서 **확정**했다
+> (`etl-platform-v2.0-codex-seventh-review-assessment.md` §1). 가장 큰 오류는 §7 의 대체표가
+> `bound_kind`(watermark commit bound)를 `lag_visibility` 로 **대체**한 것이다.
+>
+> **apply lag 와 `commit_time − watermark_value` 는 독립이다.** apply lag 가 0 이어도 오래된
+> `UPDATE_DT` 를 든 장기 트랜잭션이 뒤늦게 commit 하면 반개구간 fence 밖으로 그 행이 빠진다.
+> 이것은 이 저장소가 이미 알던 사실이다 — README §4 의 마지막 줄이 그 현상이다.
+> **감축은 중복을 지우는 작업이어야 하는데 독립 성질을 지웠다.**
+>
+> 아래 표는 **이력으로 보존**한다. 실제로 도는 정의는 **부록 A** 와 `g0_axes.py` 의
+> `AXIS_SPEC` 이며, 그 두 개가 어긋나지 않는지는 `g0-axes-tests.py` 가 검사한다.
+
 측정은 `g0-0a-capability-inventory.sql` §8 이 한다. **버전으로 기능을 추정하지 않고 기능을 직접 실행해 `SQLCODE` 로 판정한다.**
 
 | 축 | 값(높은 순) | 측정 probe | 무엇을 가르는가 | 강등 시 계약 표시 |
@@ -109,3 +123,53 @@ Job 은 `(source_db, table)` 쌍의 capability 를 상속한다. **DB 단위 축
    근거는 `etl-platform-v2.0-grant-request-verdict.md` §3.
    → 코어는 `READ_ONLY_TXN` 하나로 간다.
 3. `row_hash = NONE` 인 원천이 실제로 있는지 확인한다. 있으면 Reconciliation 규격을 두 갈래로 써야 한다.
+
+---
+
+# 부록 A — 축 재설계 (2026-08-27, 7차 리뷰 P0-01·P0-05 조치)
+
+**권위는 이 표와 `g0_axes.py` 의 `AXIS_SPEC` 이다.** 위 §3·§5·§7 의 표는 이력이다.
+
+## A.1 원자 축 — probe 에서 직접
+
+| 축 | 값 | 판정 단위 | 무엇을 가르는가 |
+|---|---|---|---|
+| `snapshot_anchor` | `SCN` / `TIMESTAMP` / `NONE` | ACCOUNT | 고정 시점 원점을 **얻을 수 있는가**. 얻은 원점으로 대상을 읽을 수 있는지는 다음 축이 답한다 |
+| `snapshot_object_coverage` | `ALL` / `PARTIAL` / `NONE` | TABLE(→ object-set) | extract object-set **전체**에 그 원점이 통하는가. **G0-0 에서는 `ALL` 이 나올 수 없다** |
+| `lag_observation` | `DG_STATS` / `NONE` | DB | lag **값을 읽을 수 있는가**. 뷰 접근 가능성이 아니라 값 해석을 요구한다 |
+| `lag_admission` | `MAX_DELAY_ENFORCED` / `NONE` | CONNECTION | 임계 초과 시 서버가 **거절하는가**. ORA-03172 양성 대조를 요구한다 |
+| `watermark_commit_bound` | `ENFORCED` / `OBSERVED` / `NONE` | COLUMN | **복원된 축.** `commit_time − watermark_value` 의 상한을 무엇으로 보증하는가 |
+| `row_change_scn` | `ROW_LEVEL` / `BLOCK_LEVEL` / `NONE` | TABLE | `ORA_ROWSCN` 입도 |
+| `wm_successor` | `TIMESTAMP(n)` / `DATE` / `NUMBER(scale=n)` / `UNDEFINED` | COLUMN | **등급이 아니라 datatype·exact scale·min step** |
+| `hash_function` | `SHA256` / `NONE` | DB | 함수 하나의 가용성. **행 비교 능력이 아니다** |
+| `sql_dialect` | `12C_PLUS` / `11G` | DB | 방언 하한 |
+| `db_charset` | 관측값 그대로 | DB | **등급이 아니다.** 비교 가능성은 합성 축이 답한다 |
+
+## A.2 합성 축 — 다른 축에서
+
+| 축 | 값 | 성립 조건 |
+|---|---|---|
+| `snapshot_scope` | `JOB` / `CONNECTION` / `STATEMENT` / `NONE` | `JOB` 은 공통 anchor ∧ `object_coverage=ALL` ∧ 모든 data connection 적용이 **모두** 참일 때만 |
+| `canonical_row_compare` | `VECTORS_PROVEN` / `PARTIAL` / `NONE` | **`VECTORS_PROVEN` 은 G0-3 V-01~V-16 통과 전에 절대 나오지 않는다** |
+| `cross_source_comparable` | `YES` / `NO` | 원천이 둘 이상 측정된 뒤에만. G0-0 은 하나만 잰다 |
+
+**합성 축은 입력이 하나라도 `UNDETERMINED` 면 `UNDETERMINED` 다.**
+
+## A.3 판정 규율 넷
+
+1. **접근 가능성 probe 를 값 probe 로 쓰지 않는다.** `SELECT COUNT(*) FROM v$database` 성공이
+   `AS_OF_SCN` 승격 근거였던 것이 대표 사례다. 같은 파일에 값을 읽는 `v$database` 가 따로 있다.
+2. **승격에는 양성 대조를 요구한다.** `ALTER SESSION` 이 수락되는 것과 임계 초과 시 거절되는 것은
+   다른 사실이다. 오류 부재는 증거가 아니다.
+3. **`NONE` 과 `UNDETERMINED` 를 구분한다.** ORA-03135(연결 단절)·ORA-01555(undo 부족)는
+   기능 부재가 아니다. 실패 taxonomy 는 `g0_axes.py` 의 `UNSUPPORTED`/`DENIED`/`TRANSIENT` 표다.
+4. **묶이지 않은 확정값을 만들지 않는다.** 테이블·컬럼 단위 축은 `binding`
+   (`db_identity`·`owner`·`object`)이 없으면 `UNDETERMINED` 다. 테이블 A 의 결과가 테이블 B 에
+   적용되는 것을 형식이 막는다.
+
+## A.4 `stale` 규칙 정정 (P1-02)
+
+§6-5 는 "유효기간이 지난 capability 는 **이전 값을 유지**하되 `stale = true`" 라고 했다.
+**안전성 판정에 만료된 고등급을 계속 쓰면 fail-closed 가 아니다.** 표시용 이전 값과 실행에 쓰는
+값을 분리한다 — 축 레코드의 `value`(감사용 이전 값)와 `effective_value`(실행용)가 그것이며,
+`stale=true` 면 `effective_value` 는 그 축의 floor 또는 `UNKNOWN` 으로 내려간다.

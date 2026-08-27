@@ -60,6 +60,15 @@ p_scalar('view.v_database', q'[SELECT TO_CHAR(COUNT(*)) FROM v$database WHERE RO
 
 **`COUNT(*)` 다. SCN 을 읽지 않는다.** `V$DATABASE` 에 한 행이 있는지만 본다. 이것으로 `AS_OF_SCN` 을 주는 것은 근거가 없다.
 
+더 나쁜 것이 있다. **같은 파일에 실제 값을 읽는 probe 가 따로 있다.**
+
+```sql
+-- g0-0a-capability-inventory.sql:201
+p_scalar('v$database', q'[SELECT db_unique_name||'|'||database_role FROM v$database]');
+```
+
+`view.v_database`(접근 가능한가)와 `v$database`(값이 무엇인가)는 서로 다른 질문이고 둘 다 수집된다. 파생기가 **접근 가능성 probe 를 값 probe 처럼 썼다.**
+
 `dbms_flashback.get_scn`(`:142`)은 SCN 을 실제로 읽는다. 그러나 그것도 **SCN 획득 가능 ≠ 그 SCN 으로 대상 object 를 `AS OF SCN` 조회 가능**이다. 리뷰가 요구한 composite probe 가 없다는 지적이 맞다.
 
 **(2) `AS OF TIMESTAMP` 만 성공하면 `READ_ONLY_TXN` 이 된다.**
@@ -166,6 +175,14 @@ P §8.1 이 요구하는 최종 G0 레코드 필드를 원문에서 확인했다
 schema 의 `description` 이 "G0-0 범위로 구현한 것"이라고 밝히고 있지만, **`record_type` 이 같으면 기계는 둘을 구분할 수 없다.** 리뷰가 §2.3 에서 말한 대로, 경계가 prose 에만 있고 record type·schema condition·aggregator·exit code 네 곳 중 어디에도 없다.
 
 `not_covered` 가 다섯 항만 열거하고 `source_kind`·`oracle_env{nls_nchar_characterset, max_string_size}`·G0-5(동일 lock 실증)를 빠뜨렸다는 지적도 사실이다(`g0-normalize.py:31-42`). 그리고 `not_covered` 는 `minItems:1` 에 자유 텍스트라 **dummy 한 항이면 통과**한다.
+
+> **이 검토서의 자기 정정(2026-08-27).** 조치 3 착수 시 probe 목록을 전수 확인하다가 위 항목의
+> 근거를 내가 잘못 적었다는 것을 발견했다. 처음에는 `oracle_env.nls_nchar_characterset` 을
+> "G0-0A 에 NCHAR charset probe 가 없다"로 적었는데 **틀렸다** —
+> `nls.nchar_characterset`(`:234`)과 `v$parameter.max_string`(`:203`)이 둘 다 있다.
+> 빠진 것은 probe 가 아니라 **그 값을 최종 `oracle_env` 로 조립하는 단계**이며 그것이 G0-1~5
+> aggregator 소관이다. 두 값은 이제 `source` 에 담는다. 리뷰의 지적(그 항목이 `not_covered` 에
+> 없었다) 자체는 그대로 유효하다 — 이유만 바뀐다.
 
 **조치**: `g0_0_evidence` 를 별도 record type·별도 schema 로 분리한다. 항상 `gate_eligible=false`, `scope=CAPABILITY_INVENTORY` 를 고정 필드로 둔다. `not_covered` 를 자유 텍스트에서 고정 enum 집합으로 바꾼다.
 
@@ -369,7 +386,7 @@ G0-0 completed  != G0 PASS
 | **0** ✅ | **`NLS_NUMERIC_CHARACTERS` `'. '` → `'.,'`** (`Preamble.java`, `run-g0-0b1.py`) | **완료**(2026-08-27). 2문자 수정이고 다른 어느 것도 기다릴 필요가 없었다 |
 | 1 ✅ | 현재 normalizer 를 gate producer 로 쓰지 않는다 | **완료** — `gate_eligible` 을 schema 의 `const false` 로 박았다. 도구가 그 값을 바꿀 방법이 없다 |
 | 2 ✅ | P0-02~04 — evidence envelope · child manifest · binding 을 fail-closed 로 | **완료**(2026-08-27). `g0-0-evidence.schema.json` 신설·구 스키마 삭제, `g0-child-contract.md` + `g0-run-child.sh`, strict aggregator 재작성, exit 0/3/4 분리, CE returncode·config digest. 회귀 시험 `g0-normalize-tests.py` 40건 통과 |
-| 3 | P0-01·05 — 축 모델을 표 기반 pure function 으로 재작성 + §5.1 반례 자동화 | **다음 차례.** 조치 2 에서 축 파생을 **중단**해 두었다(전부 `UNDETERMINED`) — 틀린 값을 만드는 것보다 만들지 않는 것이 낫다. 반례 harness 는 이미 섰다 |
+| 3 ✅ | P0-01·05 — 축 모델을 표 기반 pure function 으로 재작성 + §5.1 반례 자동화 | **완료**(2026-08-27). `g0_axes.py` 신설 — 7축 → **13축**. `watermark_commit_bound` 복원, 접근 가능성/값 probe 분리, 양성 대조 요구, 실패 taxonomy(transient≠NONE), binding 없으면 테이블 축 UNDETERMINED, 합성 축 분리. overlay §3 표는 폐기하고 부록 A 로 대체. 반례 시험 79건 통과 |
 | 4 | P0-06(a) — analyzer 의 fail-closed·`MIXED` 판정 수정 | **(a)만 먼저.** (b)는 S6 에서 잰다 |
 | 5 | B1 을 path-specific fail injection 하네스로 확장 후 pinned Spark 에서 실행 | **build·SPI 배선은 2026-08-27 에 이미 했다**(3판본). 남은 것은 하네스 확장과 **Oracle 이 있는 환경** |
 | 6 | 가장 덜 민감한 사내 DR source 에서 A → B0 → B1 | 그대로. C00 full-scan 계열은 별도 승인 전 미실행 |
