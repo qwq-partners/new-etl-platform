@@ -193,11 +193,23 @@ canHandle = keytab == null || principal == null
 
 README §3 의 종료 코드 표와 일치한다.
 
+**범위를 좁혀 읽어라 — 검증된 것은 두 음성 경로뿐이다.** `PROVEN` 경로는 이 회차에서
+한 번도 태워지지 않았다. 7차 교차 리뷰 P0-06 은 바로 그 경로의 허점을 지적한다 —
+`fail=all` 이 schema connection 에서 즉시 던져 task connection 에 도달하지 못해도
+analyzer 가 fail-closed 를 `YES` 로 두고 `PROVEN` 이 가능하다는 것. **이 회차는 그 지적을
+반증하지도 확증하지도 않았다.** 그 판정에는 실제 Oracle 이 필요하다.
+
 ### F7 — 증거 계약이 처음으로 산출물을 통과했다
 
 `g0-normalize.py --profile SANDBOX_CONTAINER --b1 … --versions-lock versions.lock` 이 레코드를 쓰고
 `g0-evidence.schema.json`(Draft 2020-12) 자기 검증을 **위반 0건**으로 통과했다. capability 축 7개는
 전부 `UNDETERMINED` 로 남았다 — G0-0A 를 돌리지 않았으니 그게 맞는 값이다.
+
+**"통과했다"는 도구가 도는가에 대한 사실이지 계약이 옳은가에 대한 사실이 아니다.** 7차 교차 리뷰는
+그 계약 자체를 P0 로 판정한다 — P0-02(불완전·조작 산출물이 `MEASURED` 가 된다),
+P0-03(증거가 대상·시각·판본에 묶이지 않는다), P0-04(`g0_evidence` 라는 한 이름이 서로 다른 두
+계약을 가리킨다). 이 회차가 통과한 것은 **그 결함들을 그대로 안은 계약**이다. 이 F7 을
+"증거 계약이 검증됐다"로 인용하지 마라.
 
 ### F8 — 부수 확인
 
@@ -251,6 +263,30 @@ registry 인증과 manifest 조회까지는 통과하고 **layer blob 내려받�
 
 계획서가 "로컬의 최고 가치"라 부른 S8 은 그대로 남아 있다. **S1~S3 은 그 앞의 관문이었고, 이제
 그 관문은 통과했다.**
+
+---
+
+## 5.1. 7차 교차 리뷰(`c59bf6d`)와의 관계
+
+이 회차와 병행해 `main` 에 7차 교차 리뷰가 올라왔다(`etl-platform-v2.0-codex-seventh-cross-review.md`).
+그 리뷰는 `538ec31` 을 기준판으로 하고 **"G0-0 은 한 번도 실행되지 않았다"** 를 전제로 쓰였다.
+이 회차가 그 전제를 **부분적으로** 낡게 만든다 — S1~S3 은 실행됐다. 다만 리뷰가 겨눈 P0 6건은
+**하나도 해소되지 않는다.** 대조는 다음과 같다.
+
+| 리뷰 항목 | 이 회차와의 관계 |
+|---|---|
+| P0-01 `derive_axes()` 승격 오류 | **무관.** G0-0A 를 안 돌렸다. 축은 전부 `UNDETERMINED` 였다 |
+| P0-02 불완전 산출물이 `MEASURED` | **미해소.** 이 회차는 그 결함을 안은 계약을 통과했을 뿐이다(F7) |
+| P0-03 대상·시각·판본 binding | **일부 실증.** `versions_lock_digest` 는 정규화 시점 해시이며 B1 산출물이 스스로 기록한 것이 아니다 — 리뷰 지적 그대로다 |
+| P0-04 `g0_evidence` 두 계약 | **미해소.** 이 회차는 `profile` enum 만 늘렸다. 스키마 분리는 하지 않았다 |
+| P0-05 overlay 축 병합 | **무관** |
+| P0-06 B1 이 task-path fail-closed 없이 `PROVEN` | **미판정.** `PROVEN` 경로를 태우지 못했다(F6 단서 참조) |
+| §7 "`JdbcConnectionProvider` 는 `DeveloperApi`/`Unstable` 이며 provider 선택은 pinned runtime 에서 검증해야 한다" | **이 회차가 그 검증이다.** 3판본에서 build·ServiceLoader·provider selection 을 실측했다 |
+| §8 "`c2fa93b` 는 P0 를 해소하지 않는다" | 이 회차(`0b95fc2`)도 마찬가지다. **해소하지 않는다** |
+
+리뷰 §6 의 권고 실행 순서는 4번에서 "B1 을 path-specific fail-closed 하네스로 고친 뒤 pinned
+Spark 에서 build/실행한다"고 한다. 이 회차는 그중 **build/실행 절반만** 먼저 한 것이며,
+**하네스 수정을 대신하지 않는다.**
 
 ---
 
