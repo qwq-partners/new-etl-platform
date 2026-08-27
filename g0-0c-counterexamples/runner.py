@@ -421,8 +421,26 @@ def verdict(suite: dict, scen: list[dict], partial: bool, skipped: list[str] | N
     if errored:  reasons.append(f"시나리오 오류: {errored}")
     if schema_errors: reasons.append(f"evidence 스키마 위반 {len(schema_errors)}건")
 
+    # **pass 하나로 두 가지 다른 것을 말하고 있었다**(7차 교차 리뷰 P2).
+    # COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 도 pass=true 에 포함된다. 하네스가
+    # 완주했다는 뜻으로는 맞지만 **설계가 통과했다는 뜻으로 오독된다.** 두 축을 나눈다.
+    #   execution_complete — 하네스가 required 를 다 돌리고 증거를 남겼는가
+    #   mitigation_holds   — 그 반례에 대해 **완화가 실제로 버텼는가**
+    reproduced = [s["id"] for s in scen if s["outcome"] == "COUNTEREXAMPLE_REPRODUCED"]
+    mit_fail = [s["id"] for s in scen if s["outcome"] == "MITIGATION_FAIL"]
+    holds = not (reproduced or mit_fail or not_obs or incon or missing) and bool(scen)
+
     return {"pass": not reasons, "rule": "all_required_executed_and_injection_observed",
             "required_missing": missing, "not_observed": not_obs, "inconclusive": incon,
+            # 아래 두 필드가 실제 판단에 쓰는 값이다. pass 는 '하네스가 완주했는가' 에 가깝다.
+            "execution_complete": not reasons,
+            "mitigation_holds": holds,
+            "counterexample_reproduced": reproduced,
+            "mitigation_failed": mit_fail,
+            "verdict_note": ("execution_complete 는 **하네스가 돌았다**는 뜻이고 "
+                             "mitigation_holds 가 **설계가 버텼다**는 뜻이다. "
+                             "COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 는 완주로는 정상이지만 "
+                             "설계로는 실패다 — 둘을 섞어 읽지 마라."),
             "reason": "; ".join(reasons) if reasons else "모든 required 시나리오가 실행되고 injection이 관측됨"}
 
 def validate_evidence(ev: dict, root: Path) -> list[str]:
@@ -558,8 +576,13 @@ def main() -> int:
           "environment": envrec,
           "versions": suite.get("versions", {}),
           "scenarios": scen,
+          # placeholder 도 schema 를 만족해야 한다 — 아래 validate_evidence 가 **판정 전에**
+          # 돌기 때문이다(판정이 schema_errors 를 입력으로 받으므로 순서를 뒤집을 수 없다).
+          # 새 required 필드를 verdict() 에만 넣고 여기 빠뜨리면 자기 검증이 스스로를
+          # 위반한다 — 2026-08-27 에 실제로 그렇게 됐다.
           "suite_verdict": {"pass": False, "rule": "all_required_executed_and_injection_observed",
                             "required_missing": [], "not_observed": [], "inconclusive": [],
+                            "execution_complete": False, "mitigation_holds": False,
                             "reason": "판정 전"}}
 
     # **runner 는 자기 출력을 스키마로 검증한다.** 스키마 설명이 그렇게 약속하고 있다.

@@ -285,7 +285,7 @@ failclosed 회차의 **`TASK` trace 가 0건이어도** 모든 step 이 실패�
 | P1-09 | **확정** | C00 는 end sentinel·expected manifest 가 없고, `fence.summary` 한 줄이면 normalizer 가 `MEASURED` 로 만든다(P0-02 표와 동일 경로) |
 | P1-10 | **부분 확정** | `artifact_hash(root, exclude={suite.yaml, out})`(`runner.py:485`). **제외 자체는 옳다** — 계산한 해시를 그 파일에 적으면 순환이 된다(코드 주석 `:218` 이 그 이유를 정확히 적어 두었다). 그러나 **suite config digest 를 별도로 남기지 않는 것**이 결함이다. 필수 scenario·budget·pass rule 이 어떤 코드 해시에도 묶이지 않는다. 리뷰의 최소 정정("code digest 와 suite config digest 를 **별도로** 기록")이 정확한 처방이다 |
 | P1-11 | **확정** | 판정서가 스스로 인정한다 — "37건 중 28건은 검증되지 않았다"(`grant-request-verdict.md:13`). 9건의 판정 원자료·1차 출처 URL·검증 일시가 저장소에 없어 재현 불가 |
-| P1-12 | **확정** | `README.md:16` "DBA 협조 불가 확정" vs `simplification-decision.md:48` "critical 하지 않은 권한은 ETL 계정에 요청 가능". **두 문장이 같은 저장소에서 다른 제약을 말한다.** 리뷰의 통일안("정합성 전제 불가; 비critical 요청은 가능하나 현재 보류·절대 가정하지 않음")을 채택한다 |
+| P1-12 | **확정 · 조치 완료**(2026-08-27) | `README.md:16` "DBA 협조 불가 확정" vs `simplification-decision.md:48` "critical 하지 않은 권한은 ETL 계정에 요청 가능". **두 문장이 같은 저장소에서 다른 제약을 말한다.** 리뷰의 통일안을 두 문서에 그대로 넣었다 — **"정합성을 DBA 협조에 걸 수 없다. 비critical 권한 요청은 가능하나 현재 보류이며 절대 가정하지 않는다."** |
 
 ---
 
@@ -295,7 +295,7 @@ failclosed 회차의 **`TASK` trace 가 0건이어도** 모든 step 이 실패�
 |---|---|
 | `g0-0-probe-README.md:65` "기본 설정이면 산출물이 0건" | **확정.** SQL 은 skipped 레코드를 낸다(`g0-0c-fence-facts.sql:59,93,109`) + `fence.summary`(`:122`). "**대상 table query** 0건"으로 고친다 |
 | B0 `--probe-rows` / B1 `--limit` 상한 검증 없음 | **확정.** 둘 다 `type=int` 뿐이다(`b0:50`, `b1:37`). 0·음수·과대값이 그대로 들어간다. production-safe 라벨을 유지하려면 hard maximum 이 필요하다 |
-| `COUNTEREXAMPLE_REPRODUCED`·`MITIGATION_FAIL` 도 suite `pass=true` | **확정.** 하네스 완주라는 뜻으로는 맞지만 설계 PASS 로 오독된다. `execution_complete` 와 `mitigation_holds` 분리 채택 |
+| `COUNTEREXAMPLE_REPRODUCED`·`MITIGATION_FAIL` 도 suite `pass=true` | **확정 · 조치 완료**(2026-08-27). `execution_complete`(하네스가 돌았는가)와 `mitigation_holds`(설계가 버텼는가)를 분리하고 schema 의 `required` 로 넣었다. 재현된 반례·완화 실패 목록도 함께 낸다. **그 과정에서 결함 하나를 스스로 만들었다 가 잡았다** — `validate_evidence` 가 판정 **전에** 돌므로 placeholder 에도 새 required 필드를 넣어야 했다. 자기 검증이 스스로를 위반하던 것을 dry-run 이 잡았다 |
 | `versions.lock` 의 `UNSET` 검사가 문자열 검색 | **확정 — 이번 회차에서 실제로 관측했다.** `elif "UNSET" in lock.read_text(...)`(`g0-normalize.py:265`). 파일 8행 주석 "**UNSET 은 빈칸이 아니라 판정이다**" 자체에 `UNSET` 이 있어 **모든 값을 채워도 경고가 사라지지 않는다.** 2026-08-27 정규화 실행에서 그 경고가 그대로 떴다 |
 | artifact `sha256` 형식·`lines >= 0` 미제한 | **확정.** `sha256: {"type":"string"}`, `lines: {"type":"integer"}` 뿐이다(`schema:78-81`). `versions_lock_digest` 는 `^[0-9a-f]{64}$` 를 거는데 artifact digest 는 안 건다 — 같은 계약 안에서 엄격도가 다르다 |
 
@@ -395,6 +395,20 @@ G0-0 completed  != G0 PASS
 | 9 | 37행 matrix 완성 후 object-set 별 optional FLASHBACK ROI 재판정 | 그대로 |
 
 리뷰 §9 가 지목한 "다음 산출물 네 개"에 동의한다. 다만 **0번(2문자 수정)이 그 앞에 있다.**
+
+---
+
+## 5.1. 조치 진행 상황 (2026-08-27 종료 시점)
+
+| 상태 | 항목 |
+|---|---|
+| **완료** | 조치 0~5 전부(NLS 정정 · `gate_eligible` const · 증거 봉투 fail-closed · 축 재설계 · analyzer 판정 · 경로별 주입 하네스). P1-01·02·03·04·05·06·08·09·10·12, P2 5건 |
+| **Oracle 필요** | 조치 6~9. P0-06(b)(`fail=all` 이 실제로 task 에 닿는가)도 여기 |
+| **원자료 없음** | P1-11(37행 grant matrix) — 검증된 9건 외 28건의 원자료가 저장소에 없다. 만들려면 재조사가 필요하며 그것은 조치 9 다 |
+| **규범 개정 대기** | P1-07(LOB retention 을 ordinary undo 와 한 boolean 으로 합침, A `:843`). **A 는 규범 문서이므로 실측 전에 고치지 않는다** — 검토서에 확정으로 기록하고 A v2.0 개정 때 반영한다 |
+
+회귀 시험 합계 **201건**(`g0-normalize-tests.py` 56 · `g0-axes-tests.py` 79 ·
+`g0-b1-analyzer-tests.py` 40 · `g0-0b1-connection-provider/run-tests.sh` 26).
 
 ---
 

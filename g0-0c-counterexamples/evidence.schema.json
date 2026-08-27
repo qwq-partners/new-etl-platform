@@ -304,11 +304,13 @@
     "suite_verdict": {
       "type": "object",
       "required": [
-        "pass",
-        "rule",
-        "required_missing",
+        "execution_complete",
+        "inconclusive",
+        "mitigation_holds",
         "not_observed",
-        "inconclusive"
+        "pass",
+        "required_missing",
+        "rule"
       ],
       "additionalProperties": false,
       "properties": {
@@ -337,6 +339,29 @@
           }
         },
         "reason": {
+          "type": "string"
+        },
+        "execution_complete": {
+          "type": "boolean",
+          "description": "하네스가 required 를 다 돌리고 증거를 남겼는가. **설계 판정이 아니다.**"
+        },
+        "mitigation_holds": {
+          "type": "boolean",
+          "description": "그 반례들에 대해 완화가 실제로 버텼는가. COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 가 하나라도 있으면 false 다(7차 리뷰 P2 — pass 하나로 두 가지를 말하던 것을 나눴다)."
+        },
+        "counterexample_reproduced": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mitigation_failed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verdict_note": {
           "type": "string"
         }
       }
