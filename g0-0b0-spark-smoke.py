@@ -210,8 +210,30 @@ def main():
             emit("S4.init_query_timeout", False, value={"elapsed_s": round(time.time()-t0, 1)},
                  note="timeout이 걸리지 않았다 — init은 queryTimeout의 보호를 받지 못한다(NEW-10 위험 확인)")
         except Exception as e:
-            emit("S4.init_query_timeout", True, value={"elapsed_s": round(time.time()-t0, 1)},
-                 note="init에서 중단됐다. elapsed가 5초 근처면 queryTimeout이 init에도 적용된다", err=e)
+            el = round(time.time() - t0, 1)
+            msg = str(e)
+            # **어떤 예외든 timeout 보호 성공으로 기록하면 안 된다**(7차 리뷰 P1-08).
+            # DBMS_SESSION.SLEEP 가 없거나(18c 미만) EXECUTE 권한이 없으면
+            # ORA-00904/06550/01031 이 **즉시** 난다. 그건 timeout 이 아니라
+            # 프리앰블 자체가 실행되지 못한 것이다.
+            setup_fail = any(k in msg for k in ("ORA-00904", "ORA-06550", "ORA-01031",
+                                                "ORA-00900", "PLS-00201", "DBMS_SESSION"))
+            cancel_like = any(k in msg for k in ("ORA-01013", "DPY-4024", "timeout", "Timeout"))
+            near = 3.0 <= el <= 12.0          # queryTimeout=5 근처인가
+            if setup_fail:
+                emit("S4.init_query_timeout", False, value={"elapsed_s": el},
+                     note="**측정 실패**: sessionInitStatement 자체가 실행되지 못했다"
+                          "(DBMS_SESSION.SLEEP 부재 또는 EXECUTE 권한 없음). "
+                          "queryTimeout 이 init 에 적용되는지는 **미확정**이다 — "
+                          "sleep 수단을 바꿔 재측정하라.", err=e)
+            elif cancel_like and near:
+                emit("S4.init_query_timeout", True, value={"elapsed_s": el},
+                     note="취소 계열 오류가 queryTimeout 근처 시각에 났다 — "
+                          "init 에도 queryTimeout 이 적용된다(NEW-10 보호 확인)", err=e)
+            else:
+                emit("S4.init_query_timeout", False, value={"elapsed_s": el},
+                     note=f"중단됐으나 취소 계열이 아니거나 시각이 queryTimeout 근처가 아니다"
+                          f"(elapsed={el}s). 보호 성공으로 세지 않는다.", err=e)
 
     # ── S5. ORA-03172 양성 대조 (U-1) ──────────────────────────────
     zero = "ALTER SESSION SET STANDBY_MAX_DATA_DELAY = 0"
