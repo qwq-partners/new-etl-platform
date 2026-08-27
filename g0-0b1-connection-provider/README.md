@@ -67,7 +67,26 @@ read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
 --conf spark.sql.sources.disabledJdbcConnProviderList=basic
 ```
 
-내장 `BasicConnectionProvider` 도 같은 옵션을 claim 한다. 이걸 주지 않으면 Spark 가 provider 중복으로 실패하거나 우리 것이 선택되지 않는다. **추적 라인이 0건이면 대개 이 conf 를 빠뜨린 것이다.**
+내장 `BasicConnectionProvider` 도 같은 옵션을 claim 한다. 이걸 주지 않으면 Spark 가 provider 중복으로 `IllegalArgumentException` 을 던진다(2026-08-27 실측 — `g0-0-s1-s3-results.md` §3-F4).
+
+> **Spark 4.2.0 에서는 그 예외 문구가 보이지 않는다.** `JdbcUtils.classifyException` 이 그것을
+> `[FAILED_JDBC.CONNECTION] … Couldn't connect to the database` 로 덮어 **네트워크 장애처럼** 읽힌다.
+> 3.5.9 는 원문을 그대로 보여 준다. conf 누락을 원천 장애로 오진하지 마라.
+
+**Kerberos 원천에서는 `basic` 만으로 부족하다.** 내장 provider 중 `OracleConnectionProvider`(name = `oracle`)
+가 있고, 그 `canHandle` 은 `keytab != null && principal != null` 이다. `BasicConnectionProvider` 의
+`canHandle` 은 `keytab == null || principal == null` 로 **정확히 배타적**이다. 따라서
+
+| 원천 인증 | `canHandle` 통과 provider | 꺼야 할 것 |
+|---|---|---|
+| Kerberos 미사용 | Basic + ours | `basic` |
+| Kerberos 사용 | **Oracle** + ours | `basic,oracle` |
+
+사내 원천의 인증 방식이 정해지기 전에는 이 conf 값을 규범에 고정하지 마라.
+
+**추적 라인이 0건이면 provider 가 한 번도 불리지 않은 것이다.** 예외조차 없이 0건이면 jar 가 아예
+classpath 에 오르지 않아 stock `BasicConnectionProvider` 가 조용히 쓰인 경우다 — 그쪽이 실제 위험이고,
+`analyze-trace.py` 의 `MEASUREMENT_FAILED`(exit 5)가 그것을 `NOT_PROVEN` 과 분리해 내는 이유다.
 
 ---
 
@@ -114,8 +133,20 @@ read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
 
 ---
 
-## 8. 현재 상태
+## 8. 현재 상태 (2026-08-27 갱신)
 
-Java 3파일은 **Spark/Scala API 스텁에 대고 컴파일을 검증**했다(문법·시그니처 정합). 실제 Spark jar 에 대고는 아직 빌드하지 않았다 — 이 환경에 Spark 가 없다. **첫 단계는 `./build.sh` 이며, 거기서 실패하면 그것이 첫 번째 측정 결과다**(SPI 시그니처가 그 판본과 다르다는 뜻).
+**실제 Spark jar 에 대고 빌드·배선까지 확인됐다.** 근거: `g0-0-s1-s3-results.md`(profile `SANDBOX_CONTAINER`).
 
-`analyze-trace.py` 의 판정 로직은 합성 추적으로 양·음성 모두 확인했다.
+| | 상태 |
+|---|---|
+| `build.sh` (`javac --release 17 -Xlint:all`) | **exit 0** — Spark 4.2.0/2.13.18 · 3.5.9/2.12.18 · 3.5.9/2.13.8 세 판본. 우리 코드 경고 0건 |
+| SPI 배선 | **도달 확인** — 세 판본 모두 `ConnectionProviderBase.create` 에서 호출. `path_guess=SCHEMA` 3건 |
+| `analyze-trace.py` | **실제 추적으로 처음 검증** — 추적 0건 → `MEASUREMENT_FAILED`(5), `SCHEMA` 만 → `NOT_PROVEN`(3) |
+
+**아직 아닌 것.** 위 회차는 Oracle 서버 없이 도달 불가 URL 로 돌렸다. 따라서
+
+- `TASK` 경로 커버리지 — connection 이 열리지 않아 task 가 시작되지 않았다. **미측정**
+- 프리앰블 적용 여부 · fail-closed 성립 — **미측정**
+- 한 회차의 물리 connection 개수 — **미측정**
+
+즉 **§1 의 질문 세 개는 여전히 하나도 답해지지 않았다.** 답하려면 실제 Oracle 이 필요하다(계획서 S4~S6).

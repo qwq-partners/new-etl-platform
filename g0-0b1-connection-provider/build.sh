@@ -12,6 +12,11 @@ JAR=g0-0b1-tracer.jar
 rm -rf "$OUT" "$JAR"
 mkdir -p "$OUT/classes"
 
+# javac 가 여기서 `warning: [path] bad path element ".../derby.jar"` 류 경고를 낸다.
+# **우리 빌드의 결함이 아니다.** derby-*.jar·derbytools-*.jar·scala-compiler-*.jar 의
+# MANIFEST Class-Path 가 버전 없는 이름(derby.jar, scala-library.jar)을 가리키는데
+# 배포판은 버전 붙은 이름으로 담기 때문이다. javac 가 그 링크를 따라가 못 찾고 경고한다.
+# 2026-08-27 Spark 4.2.0/3.5.9 실측에서 19건. 결과에 영향 없다 — 빌드 실패 징후로 읽지 마라.
 CP=$(find "$SPARK_HOME/jars" -name '*.jar' | tr '\n' ':')
 echo "[build] SPARK_HOME=$SPARK_HOME"
 echo "[build] spark jars: $(find "$SPARK_HOME/jars" -name '*.jar' | wc -l)개"

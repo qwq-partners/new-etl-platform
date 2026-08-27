@@ -55,6 +55,10 @@
 
 **로컬 증거 정규화는 반드시 `--profile LOCAL_WSL` 로 한다.** 새 장치를 만들 필요가 없다.
 
+> 2026-08-27 추가 — profile 값이 하나 늘었다. `SANDBOX_CONTAINER` 는 **Oracle 을 띄울 수 없는
+> 일회성 원격 컨테이너** 회차용이며, 제약이 `LOCAL_WSL` 보다 **강하다**(원천에 붙는 측정이 전부
+> 미실행). WSL2 회차를 그 값으로 찍지 마라. 반대도 마찬가지다.
+
 ---
 
 ## 2. ADG 문제의 답
@@ -99,7 +103,7 @@ standby_db_unique_name=NOT_CHECKED (CE_STANDBY_DSN 미설정 —
 | **S0** | 작업 사본 + 커널 파라미터 | `fs.inotify.max_user_instances` = 8192 (**실측 기본 128** — k3d 대표 실패 지점) | 1h |
 | **S1** | Spark 설치 (Oracle·Docker·k8s 불필요) | `spark-submit --version` 이 판본·Scala 출력. sha 를 `versions.lock` 에 기록 | 1h |
 | **S2** | **★ B1 컴파일** — 최속 신호 | `build.sh` exit 0 + `META-INF/services` 등록 출력 | 0.5h |
-| **S3** | B1 SPI 배선 (여전히 Oracle 없이) | conf **있으면** tracer 도달, **없으면** `more than one connection provider` 예외 | 1h |
+| **S3** | B1 SPI 배선 (여전히 Oracle 없이) | **추적 라인 수로 판정한다** — conf 있으면 ≥1, 없으면 0 (아래 정정) | 1h |
 | **S4** | Docker + Oracle Free 컨테이너 (**k8s 아직 없음**) | 판본·charset·`memory_target`·`DB_UNIQUE_NAME` 실측 후 `versions.lock` 기록 | 3h |
 | **S4.5** | 실행 전제물 3종 | ojdbc jar / sqlplus 경로 / fixture 테이블 | 2h |
 | **S5** | G0-0A + C00 실행 | 위 네 조건 + C00 세 값 산출 | 2h |
@@ -108,6 +112,23 @@ standby_db_unique_name=NOT_CHECKED (CE_STANDBY_DSN 미설정 —
 | **S8** | **★ CE01~CE09 최초 실행** | 9개 실행 ∧ `injection_observed=true` ∧ `leftover_objects=[]` | 4h |
 
 S9 이후(k3d + Dagster/Polaris/MinIO)는 **별도 투자**이며 **S8 종료가 하드 체크포인트**다. 여기서 시간이 새면 G0-0 이 또 밀린다 — 이 저장소가 이미 한 번 저지른 실수(측정 전 문서 개정)의 변형이다.
+
+### S1~S3 은 이미 한 번 돌았다 (2026-08-27, profile `SANDBOX_CONTAINER`)
+
+Oracle 을 띄울 수 없는 원격 컨테이너에서 S1·S2·S3 만 실행했다. 결과는 `g0-0-s1-s3-results.md`.
+**로컬 WSL2 회차의 대체물이 아니다** — JDK·호스트가 다르므로 S1·S2 는 WSL2 에서 다시 돌린다.
+다만 그 회차에서 나온 정정 두 건은 이 계획에 반영해야 한다.
+
+**정정 1 — S3 의 성공 판정을 예외 메시지로 하면 안 된다.**
+conf 없는 회차에서 예외는 세 판본 모두 났다. 그러나 **Spark 4.2.0 은 그 문구를 보여 주지 않는다** —
+`JdbcUtils.classifyException` 이 `[FAILED_JDBC.CONNECTION] … Couldn't connect to the database` 로
+덮는다(3.5.9 는 원문 노출). 메시지로 판정하면 4.2.0 에서 S3 를 실패로 오판한다.
+판정은 **추적 라인 수**로 한다 — conf 있으면 ≥1, 없으면 0.
+
+**정정 2 — `disabledJdbcConnProviderList=basic` 은 Kerberos 원천에서 부족하다.**
+내장 `OracleConnectionProvider`(name = `oracle`)의 `canHandle` 은 keytab·principal 이 **둘 다 있을 때**
+참이고, `BasicConnectionProvider` 는 **둘 중 하나라도 없을 때** 참이라 정확히 배타적이다.
+Kerberos 를 쓰면 후보가 { Oracle, ours } 가 되어 `basic` 을 꺼도 여전히 2개다 → `basic,oracle`.
 
 ### S2 가 왜 최속인가
 
@@ -166,4 +187,6 @@ Oracle 컨테이너 ~4Gi + Spark local[4] ~4Gi + 여유. **S0~S8 은 k8s 가 없
 4. **S3** — 도달 불가 URL 로 SPI 배선 확인 (conf 유/무 두 회차)
 5. `versions.lock` 의 JDK·Spark·Scala 항목을 실측값으로 채우고 sha256 을 기록
 
-**1~4 는 Oracle 서버도 Docker 도 k8s 도 필요 없다.**
+**1~4 는 Oracle 서버도 Docker 도 k8s 도 필요 없다.** — 2026-08-27 회차가 이것을 실증했다
+(Oracle 없는 컨테이너에서 1~4 와 5 를 모두 완료). 다만 그 회차는 JDK 21 · 다른 호스트이므로
+WSL2 에서 2~3 을 다시 돌린다.

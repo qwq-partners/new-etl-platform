@@ -13,8 +13,8 @@
     "g0_report_id": { "type": "string", "minLength": 1,
       "description": "회차 식별자. 같은 원천을 여러 번 재면 회차마다 달라야 한다 — 다회 실행이 요구되는 측정(F-13, ORA-03172 양성 대조)이 조립되려면 필수다." },
     "executed_at": { "type": "string", "format": "date-time" },
-    "profile": { "enum": ["LOCAL_WSL", "CORP_POC"],
-      "description": "LOCAL_WSL 증거는 하네스 동작 확인용이며 설계 주장의 근거가 아니다." },
+    "profile": { "enum": ["LOCAL_WSL", "CORP_POC", "SANDBOX_CONTAINER"],
+      "description": "LOCAL_WSL·SANDBOX_CONTAINER 증거는 하네스 동작 확인용이며 설계 주장의 근거가 아니다. SANDBOX_CONTAINER 는 원천에 붙지 못하는 일회성 컨테이너(Oracle 없음)이므로 그 제약이 LOCAL_WSL 보다 더 강하다." },
     "versions_lock_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$|^UNSET$",
       "description": "versions.lock 의 sha256. UNSET 이면 '어느 판본에서 잰 값인가' 를 답할 수 없으므로 이 레코드는 근거가 되지 못한다." },
 

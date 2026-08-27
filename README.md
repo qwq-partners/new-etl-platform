@@ -15,10 +15,11 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 목표 아키텍처 v1 → v1.2.3.1 | **완료**(다섯 차례 교차 리뷰 반영) |
 | **제약 변경**: Oracle 원천 DBA 협조 불가 확정(2026-08-24) | v1.2.3.1이 전제하던 DBA 의존이 무효화됨 |
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
-| **G0-0 실측** | 산출물 준비 완료 · **한 번도 실행되지 않음** ← 지금 여기 |
+| **G0-0 실측** | **S1~S3 최초 실행 완료**(2026-08-27, profile `SANDBOX_CONTAINER`) · S4~S8 미실행 ← 지금 여기 |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
 | DBA 권한 요청 방향 | **보류**(2026-08-27) — 받아도 순이익이 아니거나 요청서가 틀렸다 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
+| **S1~S3 실행 결과** | `g0-0-s1-s3-results.md` — B1 이 실제 Spark jar 3판본에 대고 빌드·배선됐다. 정정 2건 |
 | A v2.0 / P v2.0 규범 개정 | G0-0 결과 확정 후 착수 |
 
 **핵심 원칙**: 실측(G0-0) 전에는 규범 문서를 대규모로 고치지 않는다. 실측 하나가 여러 절의 상태·enum을 뒤집기 때문이다.
@@ -65,6 +66,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **`etl-platform-v2.0-simplification-decision.md`** | 감축 결정 기록. 무엇을 잘랐고 **무엇을 왜 안 잘랐는지** |
 | **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 판정 — **보류**. 후보 37건 중 검증 9건이 전부 기각된 이유 |
 | **`etl-platform-local-poc-plan.md`** | 로컬 WSL2 에서 G0-0 를 처음 돌리기 위한 실행 계획. **로컬이 증명하는 것/못하는 것 경계**가 핵심 |
+| **`g0-0-s1-s3-results.md`** | **첫 실측 회차 기록**(S1·S2·S3). B1 컴파일·SPI 배선 확인, 판정기·증거 계약 첫 검증, 계획서 정정 2건, S4 이후가 막힌 이유 |
 | `CHANGELOG.md` | 아키텍처 변경 이력(규범 아님). 본문에서 분리 |
 
 ---
@@ -117,7 +119,11 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 5. 다음 작업
 
-1. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전
-2. **G0-0B1 빌드·실행** — `cd g0-0b1-connection-provider && ./build.sh` 가 첫 단계다. 실제 Spark jar에 대고 빌드한 적이 없으므로, 거기서 실패하면 그것이 첫 측정 결과다(SPI 시그니처가 그 판본과 다름)
-3. **C01~C09 실행** — 폐기용 환경 확보 후
-4. capability 확정 → **A v2.0 / P v2.0**(단일 core + ConnectionRevision capability overlay, v1.2.3.1은 archive)
+**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 남은 것은 전부 **실제 Oracle 이 있어야 하는 것**이다.
+
+1. **Oracle 이 붙는 환경 확보** — 이것이 지금 유일한 병목이다. S4~S8 이 전부 여기에 걸려 있다
+2. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전
+3. **G0-0B1 본실행** — 빌드·배선은 확인됐다. 남은 질문은 §1의 셋 그대로다:
+   `TASK` 경로 커버리지 / 프리앰블 전면 적용 / fail-closed 성립. **셋 다 아직 미측정이다**
+4. **C01~C09 실행** — 폐기용 환경 확보 후
+5. capability 확정 → **A v2.0 / P v2.0**(단일 core + ConnectionRevision capability overlay, v1.2.3.1은 archive)

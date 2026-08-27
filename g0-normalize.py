@@ -180,7 +180,8 @@ def derive_axes(P: dict[str, dict]) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--report-id", required=True, help="회차 식별자. 재실행마다 달라야 한다.")
-    ap.add_argument("--profile", required=True, choices=["LOCAL_WSL", "CORP_POC"])
+    ap.add_argument("--profile", required=True,
+                    choices=["LOCAL_WSL", "CORP_POC", "SANDBOX_CONTAINER"])
     ap.add_argument("--versions-lock", default="versions.lock")
     ap.add_argument("--a", help="G0-0A spool 로그")
     ap.add_argument("--b0", help="G0-0B0 출력")
@@ -306,6 +307,12 @@ def main() -> int:
         rec["warnings"].append(
             "profile=LOCAL_WSL — 이 증거는 **하네스 동작 확인용**이며 설계 주장의 근거가 아니다. "
             "원천 capability 값·ADG 거동·규모는 사내 환경에서만 잴 수 있다.")
+    if a.profile == "SANDBOX_CONTAINER":
+        rec["warnings"].append(
+            "profile=SANDBOX_CONTAINER — 이 증거는 **하네스 동작 확인용**이며 설계 주장의 근거가 아니다. "
+            "이 환경에는 Oracle 서버가 없다(컨테이너 이미지 반입 불가). 따라서 원천에 붙는 모든 측정은 "
+            "미실행이며, 여기서 확인된 것은 코드가 그 Spark 판본에 대해 컴파일·배선되는가 뿐이다. "
+            "LOCAL_WSL 보다 제약이 강하다 — 로컬 WSL2 회차의 대체물이 아니다.")
 
     out = pathlib.Path(a.out)
     out.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
