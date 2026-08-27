@@ -22,7 +22,7 @@
 | 3 | `ALTER SESSION`만 쓰고 `ALTER SYSTEM`은 없다 | 자기 세션에만 영향 |
 | 4 | 비밀번호는 **환경변수로만** 전달한다(`--password-env`) | 프로세스 목록·로그 노출 방지 |
 | 5 | Spark probe는 **운영에서 쓸 pinned Spark·Oracle JDBC 버전**으로 실행한다 | 버전이 다르면 결과가 규범 근거가 되지 못한다 |
-| 6 | 데이터 사실 측정은 **G0-0C로 분리**했고 기본이 `EXACT_MODE = N`(표본)이다 | G0-0A의 `wm_column.indexed`를 확인하기 전에 전수 모드로 돌리지 않는다 |
+| 6 | 데이터 사실 측정은 **G0-0C로 분리**했고 기본이 `EXACT_MODE = N`(표본)이다 | G0-0A의 `wm_column.leading_valid_visible`를 확인하기 전에 전수 모드로 돌리지 않는다 |
 | 7 | 모든 판정은 **실제 `SQLCODE`**에서 나온다. 성공을 가정한 리터럴 출력이 없다 | 이전 판의 apparent-success 결함 재발 방지 |
 
 ---
@@ -172,7 +172,24 @@ unset ORA_PW
 
 ## 7. 실행 후 할 일
 
-1. 두 로그를 `g0_evidence`(§4 표의 capability 목록 + `QUERY_OK`/`ROW_PRESENT`/`VALUE_INTERPRETABLE`)로 정규화한다.
+1. 산출물을 `g0_evidence` 레코드로 정규화한다. **도구가 있다** — 손으로 하지 마라.
+
+```bash
+python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile CORP_POC \
+    --a g0-0a.log --b0 b0.json --b1 g0-0b1-connection-provider/g0-0b1-evidence.json \
+    --c00 c00.log --c-suite g0-0c-counterexamples/evidence.json \
+    --versions-lock versions.lock --out g0-evidence.json
+```
+
+계약은 `g0-evidence.schema.json` 이고 도구가 자기 출력을 그것으로 검증한다.
+`--report-id` 는 **회차마다 달라야 한다** — F-13(유휴 정지)과 ORA-03172 양성 대조처럼
+여러 회차를 조립해야 하는 측정이 있다.
+
+정규화기가 하는 일 중 중요한 것:
+  · `manifest_ok=false` 면 G0-0A 결과 전체를 폐기하고 모든 capability 축을 `UNDETERMINED` 로 둔다
+  · capability 축을 **실제 probe id 에서 파생**하고 `derived_from` 에 근거를 남긴다(사람이 재판정 가능)
+  · G0-0 이 덮지 못하는 G0 항목을 `not_covered` 에 명시한다 — G0-0 은 G0 전체가 아니다
+  · `profile=LOCAL_WSL` 이면 "하네스 동작 확인용이며 설계 근거가 아니다" 를 경고에 박는다
 2. §4 분기표대로 **capability 목록을 확정**한다 — 이것이 A v2.0의 `ConnectionRevision capability overlay` 초기값이 된다.
 3. 그 다음에야 A v2.0 / P v2.0 규범 개정을 시작한다.
 4. 남은 세 산출물(리뷰 §7.4): exact preamble spike · ~~Spark connection-path tracer~~ (**철회** — B0 의 S1c·S2·S3 는 stock 경로 관측일 뿐 provider 가 3경로를 덮는지는 증명하지 못한다. G0-0B1 이 그 역할이다) 구 서술: Spark connection-path tracer · fence 반례 harness. 앞의 둘은 이 probe의 `S1c`·`S2`·`S3`가 이미 상당 부분 덮는다.

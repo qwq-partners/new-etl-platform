@@ -37,11 +37,11 @@ Oracle **11.2 physical standby(ADG)** + ETL 계정에 **대상 테이블 SELECT 
 
 | 축 | 값(높은 순) | 측정 probe | 무엇을 가르는가 | 강등 시 계약 표시 |
 |---|---|---|---|---|
-| `snapshot_read` | `AS_OF_SCN` → `READ_ONLY_TXN` → `NONE` | `flashback.*`, `txn.set_read_only` | 한 회차의 여러 chunk 가 **같은 시점 이미지**인가 | `snapshot_scope = JOB / CONNECTION / CHUNK` |
+| `snapshot_read` | `AS_OF_SCN` → `READ_ONLY_TXN` → `NONE` | `as_of_timestamp.target` + SCN 원점(`dbms_flashback.get_scn` \| `view.v_database`), `txn.set_read_only`+`txn.select_inside` | 한 회차의 여러 chunk 가 **같은 시점 이미지**인가 | `snapshot_scope = JOB / CONNECTION / CHUNK` |
 | `row_hash` | `SHA256` → `NONE` | `feat.standard_hash_sha256` | 행 단위 내용 대조 가능 여부 | `reconcile_depth = ROW_HASH / PK_AND_COUNT` |
 | `row_change_scn` | `ROW_LEVEL` → `BLOCK_LEVEL` → `NONE` | `feat.rowdependencies_target`, `feat.ora_rowscn_target` | `ORA_ROWSCN` 기반 변경 탐지 | `change_detection = ROWSCN / WATERMARK_ONLY` |
-| `lag_visibility` | `DG_STATS` → `MAX_DELAY_ONLY` → `NONE` | `view.v_dataguard_stats`, `alter.STANDBY_MAX_DATA_DELAY` | freshness 상한의 근거 | `freshness_evidence = MEASURED / ENFORCED / NONE` |
-| `wm_granularity` | `NS` → `US` → `MS` → `SEC` → `UNDEFINED` | `feat.interval_ns_successor`, `feat.timestamp9_precision`, 컬럼 타입 | `typed_successor` 반개구간 fence 성립 여부 | `fence_mode = HALF_OPEN / OVERLAP_ONLY` |
+| `lag_visibility` | `DG_STATS` → `MAX_DELAY_ONLY` → `NONE` | `view.v_dataguard_stats`, `alter.STANDBY_MAX_DATA_DELAY.D` | freshness 상한의 근거 | `freshness_evidence = MEASURED / ENFORCED / NONE` |
+| `wm_granularity` | `NS` → `US` → `MS` → `SEC` → `UNDEFINED` | **`wm_column.type_facts`**(결정자) + `feat.interval_ns_successor`·`feat.timestamp9_precision`(구문 지원 확인용) | `typed_successor` 반개구간 fence 성립 여부 | `fence_mode = HALF_OPEN / OVERLAP_ONLY` |
 | `sql_dialect` | `12C_PLUS` → `11G` | `feat.fetch_first` | 생성 SQL 의 구문 집합 | (내부용, 계약 노출 없음) |
 | `charset_class` | `AL32UTF8` → `OTHER` | `nls.characterset`, `nls.comp`, `nls.sort` | **원천 간** 해시 정본화 비교 가능성 | `cross_source_comparable` |
 

@@ -79,6 +79,11 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence 반례 fact collector | 운영계 제한적(`ACK_FULL_SCAN` 게이트) |
 | **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness (9종 구현 완료) | **폐기용 쓰기 가능 환경 전용** |
 
+**증거 계약**: `g0-evidence.schema.json` + `g0-normalize.py` — 각 단계의 산출물을 하나의
+`g0_evidence` 레코드로 정규화한다. capability 축을 probe 결과에서 파생하고 근거를 함께 남긴다.
+**판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
+`UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
+
 안내: `g0-0-probe-README.md` — 안전 규칙 · 실행법 · 결과 → 설계 분기표 · **이 프로브가 증명하지 못하는 것**
 반례 harness 전용 안내: `g0-0c-counterexamples/README.md` — 환경변수 · 종료 코드 · 시나리오별 증거 형태
 
