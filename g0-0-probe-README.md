@@ -5,7 +5,7 @@
 - 산출물(2026-08-25 재검증 2차 반영) — **실행 순서 A → B0 → (B1) → C00 → C01~C09**
   - **G0-0A** `g0-0a-capability-inventory.sql` — 운영계에서 제한적으로 가능한 read-only capability inventory(대상 테이블 스캔 없음)
   - **G0-0B0** `g0-0b0-spark-smoke.py` — stock Spark smoke probe. **provider tracer가 아니다**
-  - **G0-0B1** *(미구현)* — 커스텀 `JdbcConnectionProvider`가 schema·metadata·task 3경로를 실제로 덮는지 증명하는 tracer. 이것이 Profile U 세션 단언 모델의 성립 조건이다
+  - **G0-0B1** `g0-0b1-connection-provider/` — 커스텀 `JdbcConnectionProvider`가 schema·task 경로를 실제로 덮는지, 프리앰블 실패 시 job이 정말 죽는지(fail-closed) 증명하는 tracer. **이것이 Profile U 세션 단언 모델의 성립 조건이다.** 빌드·실행법은 그 디렉터리의 README 참조
   - **G0-0C00** `g0-0c-fence-facts.sql` — 운영계 read-only fact collector
   - **G0-0C01~C09** `g0-0c-counterexamples/` — **stateful counterexample harness**(쓰기 fixture·다중 connection·crash 주입이 필요하므로 폐기용 환경 전용). 운영 규칙·환경변수·시나리오별 증거 형태는 `g0-0c-counterexamples/README.md` 에 있다
 - **폐기**: 이전 `g0-0-probe.sql`은 실행 차단 결함 5건(잘못된 SHA-256 기대값 · 미정의 `&LIMIT_ROWS` · 대상 테이블 전체 scan · 비밀번호 argv 노출 · **하드코딩된 `"query_ok":true`로 인한 apparent success**)으로 삭제했다. 실행하지 마라.
@@ -54,6 +54,14 @@ CONNECT $ORA_USER/$ORA_PW@//host:1521/service
 @g0-0c-fence-facts.sql
 EXIT
 EOF
+
+# (3.5) G0-0B1 — provider tracer. **B0 다음, C 앞에 온다.**
+cd g0-0b1-connection-provider
+export SPARK_HOME=/opt/spark OJDBC_JAR=/path/ojdbc11.jar
+./build.sh                      # 실제 Spark 판본에 대고 컴파일. 실패도 측정 결과다.
+./run.sh "$URL" "$USER" SCHEMA.TABLE ETLPOC_STB PHYSICAL_STANDBY 300
+# role 은 공백 없이 '_' 로 넘긴다(JVM 인자에서 공백이 잘린다).
+cd ..
 
 # (4) G0-0C01~C09 — **폐기용 쓰기 가능 환경에서만**. 운영계에서 실행 금지.
 #     runner 가 CE_DSN 으로 직접 접속해 DB_UNIQUE_NAME 을 확인한다(운영자 자기신고 아님).

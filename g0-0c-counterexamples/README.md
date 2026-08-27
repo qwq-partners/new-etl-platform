@@ -41,7 +41,7 @@ pip install oracledb jsonschema
 | `CE_PASSWORD` | ✔ | 비밀번호(또는 wallet 사용). **argv 금지** |
 | `CE_DSN` | ✔ | 폐기용 primary 의 easy connect / tnsnames alias |
 | `CE_STANDBY_DSN` | — | ADG standby. 없으면 관련 관측만 건너뛴다 |
-| `CE_DOC_PATH` | — | CE09 의 공시 여부 검사 대상 문서 경로 |
+| `CE_DOC_PATH` | ✔ | CE09 의 공시 검사 대상 문서(`etl-platform-target-architecture-v1.2.3.1.md`) 경로. **이 패키지 tarball 에는 그 문서가 들어 있지 않다** — 지정하지 않으면 CE09 가 자기 판정 기준을 평가하지 못해 `INCONCLUSIVE` 가 되고 suite 는 절대 PASS 하지 못한다 |
 
 `suite.yaml` 에서 채울 것: `expected_primary_db_unique_name`,
 `expected_standby_db_unique_name`, `allowed_schema`, `versions.*`.

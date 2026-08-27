@@ -10,7 +10,11 @@ cd "$(dirname "$0")"
 : "${ORA_PW:?ORA_PW 환경변수에 비밀번호를 넣어라 (argv 금지)}"
 URL="${1:?사용법: run.sh <jdbc-url> <user> <SCHEMA.TABLE> <expect_dbuname> [role] [max_delay_s]}"
 USER="${2:?}"; TABLE="${3:?}"; EXPECT_DB="${4:?}"
-ROLE="${5:-PHYSICAL STANDBY}"; DELAY="${6:-300}"
+# role 은 **공백 없이** 받는다. 공백이 든 값을 extraJavaOptions 문자열에 넣으면
+# JVM 이 두 인자로 쪼개 -Dg0b1.expect.role=PHYSICAL 만 걸리고 STANDBY 는 미인식 옵션이 된다.
+# Preamble 이 '_' 를 공백으로 되돌린다.
+ROLE="${5:-PHYSICAL_STANDBY}"; DELAY="${6:-300}"
+case "$ROLE" in *" "*) echo "role 에 공백을 쓰지 마라. PHYSICAL_STANDBY 처럼 '_' 로 넘겨라." >&2; exit 2;; esac
 JAR="$PWD/g0-0b1-tracer.jar"
 [ -f "$JAR" ] || { echo "먼저 ./build.sh 를 실행하라" >&2; exit 2; }
 OJDBC="${OJDBC_JAR:?OJDBC_JAR 에 ojdbc jar 경로를 지정하라}"
@@ -20,7 +24,9 @@ echo "[run] trace dir: $TRACE"
 
 submit() {  # $1=mode  $2=extra -D
   local mode="$1" extra="$2"
-  local opts="-Dg0b1.trace.dir=$TRACE -Dg0b1.expect.dbuname=$EXPECT_DB -Dg0b1.expect.role=$ROLE -Dg0b1.max.delay=$DELAY $extra"
+  # -Dg0b1.run 이 추적 파일명과 각 라인에 회차를 새긴다. 이게 없으면 coverage 와
+  # failclosed 의 추적이 한 덩어리로 합산되어 정상 실행도 영원히 NOT_PROVEN 이 된다.
+  local opts="-Dg0b1.run=$mode -Dg0b1.trace.dir=$TRACE -Dg0b1.expect.dbuname=$EXPECT_DB -Dg0b1.expect.role=$ROLE -Dg0b1.max.delay=$DELAY $extra"
   echo "[run] mode=$mode"
   "$SPARK_HOME"/bin/spark-submit \
     --master 'local[4]' \
@@ -30,12 +36,21 @@ submit() {  # $1=mode  $2=extra -D
     --conf "spark.driver.extraJavaOptions=$opts" \
     --conf "spark.executor.extraJavaOptions=$opts" \
     run-g0-0b1.py --url "$URL" --user "$USER" --password-env ORA_PW \
-      --table "$TABLE" --mode "$mode" 2>&1 | tee "$LOGS/$mode.log"
-  echo "[run] mode=$mode exit=${PIPESTATUS[0]}"
+      --table "$TABLE" --mode "$mode" --trace-dir "$TRACE" 2>&1 | tee "$LOGS/$mode.log"
+  local rc=${PIPESTATUS[0]}
+  echo "[run] mode=$mode exit=$rc"
+  return $rc
 }
 
-submit coverage ""
-submit failclosed "-Dg0b1.fail=all"
+# coverage 를 먼저 돌린다. 자격증명·접속 문제로 실패하면 **여기서 멈춘다** —
+# 같은 자격증명으로 두 번째 회차를 돌려 로그온 실패를 늘리지 않는다(계정 잠금 방지).
+submit coverage "" || true
+if grep -qiE 'ORA-01017|ORA-28000|ORA-01005|invalid username|account is locked' "$LOGS/coverage.log" 2>/dev/null; then
+  echo "[abort] 자격증명 오류가 관측됐다. failclosed 회차를 실행하지 않는다(계정 잠금 방지)." >&2
+  echo "[abort] 로그: $LOGS/coverage.log" >&2
+  exit 2
+fi
+submit failclosed "-Dg0b1.fail=all" || true
 
 echo
 python3 analyze-trace.py --trace-dir "$TRACE" --result-log "$LOGS"/*.log --out g0-0b1-evidence.json

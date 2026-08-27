@@ -55,11 +55,12 @@ DECLARE
   v        VARCHAR2(4000);
   -- 정적 probe 호출 수. 값을 바꿀 때 이 상수도 함께 바꾼다.
   -- emitted != expected 이면 블록이 중간에 끊긴 것이므로 실패로 취급한다.
-  c_expected CONSTANT PLS_INTEGER := 78;   -- 실제 호출 수와 일치해야 한다
-  -- 주의: probe 를 더하거나 뺄 때 이 값을 반드시 함께 고쳐라. 확인 방법:
-  --   grep -cE "^  p_(scalar|stmt)\(" g0-0a-capability-inventory.sql
-  -- (v1 에서 57건을 56으로 선언해 두어 첫 실행이 manifest_ok=false 로
-  --  결과 전체 폐기가 될 상태였다. 2026-08-27 정정.)
+  c_expected CONSTANT PLS_INTEGER := 86;   -- 실제 호출 수와 일치해야 한다
+  -- probe 를 더하거나 뺄 때 이 값을 반드시 함께 고쳐라. 확인 방법(**공백에 무관해야 한다**):
+  --   grep -cE "^[[:space:]]*p_(scalar|stmt)[[:space:]]*\(" g0-0a-capability-inventory.sql
+  -- 이력: v1 은 57건을 56 으로 선언했고, 2026-08-27 1차 정정은 `p_stmt  (` 처럼 공백이 낀
+  --   호출 8건을 세지 못하는 grep 을 써 78 로 잘못 고쳤다. 둘 다 첫 실행에서
+  --   manifest_ok=false 를 만들어 **측정 결과 전체 폐기**로 이어질 값이었다.
   g_total  PLS_INTEGER := 0;
   g_fail   PLS_INTEGER := 0;
   g_interp PLS_INTEGER := 0;

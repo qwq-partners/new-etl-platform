@@ -36,6 +36,8 @@ def main():
     ap.add_argument("--num-partitions", type=int, default=4)
     ap.add_argument("--limit", type=int, default=1000, help="읽을 행 수 상한")
     ap.add_argument("--mode", choices=["coverage", "failclosed", "initstatement"], default="coverage")
+    ap.add_argument("--trace-dir", default=None,
+                    help="추적 디렉터리. step 경계 마커를 여기에 남겨 connection 을 step 에 귀속시킨다.")
     a = ap.parse_args()
 
     pw = os.environ.get(a.password_env)
@@ -71,7 +73,24 @@ def main():
         # 사실(NEW-04)을 tracer 없이 다시 보이기 위한 것이다.
         opts["sessionInitStatement"] = "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '. '"
 
+    def marker(name, phase):
+        """step 경계를 추적 파일에 남긴다. 이게 없으면 어떤 connection 이 어느 step 것인지
+        귀속할 수 없다(provider 는 step 을 모른다)."""
+        if not a.trace_dir:
+            return
+        import pathlib as _p, time as _t
+        f = _p.Path(a.trace_dir) / f"g0-0b1-marker-{a.mode}.jsonl"
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            with f.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"event": "step", "run": a.mode, "step": name,
+                                     "phase": phase, "mono_ns": _t.monotonic_ns()},
+                                    ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
     def step(name, fn):
+        marker(name, "begin")
         try:
             v = fn()
             rec["steps"].append({"step": name, "ok": True, "value": v})
@@ -80,6 +99,8 @@ def main():
             rec["steps"].append({"step": name, "ok": False,
                                  "error": f"{type(e).__name__}: {str(e)[:400]}"})
             return None
+        finally:
+            marker(name, "end")
 
     reader = spark.read.format("jdbc").options(**opts)
 
@@ -105,7 +126,8 @@ def main():
               .option("upperBound", str(a.num_partitions))
               .option("numPartitions", str(a.num_partitions))
               .load())
-        df.cache()
+        # **cache 를 걸지 않는다.** cache 를 걸면 두 번째 action 이 원천에 가지 않아
+        # "action 마다 새 connection 이 열리는가"(NEW-05/18)를 관측할 수 없다.
         n1 = df.count()
         n2 = df.filter("g0b1_part = 0").count()
         return [n1, n2]

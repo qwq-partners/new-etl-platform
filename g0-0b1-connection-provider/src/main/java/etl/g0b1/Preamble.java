@@ -47,27 +47,33 @@ final class Preamble {
         }
 
         // ── 1. 신원을 서버에게 묻는다 ───────────────────────────────────────
-        try (Statement s = c.createStatement();
-             ResultSet rs = s.executeQuery(
+        int timeoutS = Integer.parseInt(prop("g0b1.stmt.timeout", "15"));
+        try (Statement s = c.createStatement()) {
+            // 프리앰블 전용 타임아웃. Spark 의 queryTimeout 옵션은 여기에 적용되지 않으므로
+            // 걸지 않으면 프리앰블이 무한히 매달려 connection 생성 자체가 멈춘다.
+            s.setQueryTimeout(timeoutS);
+            try (ResultSet rs = s.executeQuery(
                      "SELECT SYS_CONTEXT('USERENV','DB_UNIQUE_NAME'),"
                    + "       SYS_CONTEXT('USERENV','DATABASE_ROLE'),"
                    + "       SYS_CONTEXT('USERENV','INSTANCE_NAME'),"
                    + "       SYS_CONTEXT('USERENV','SID'),"
-                   + "       TO_CHAR(SYSTIMESTAMP,'YYYY-MM-DD\"T\"HH24:MI:SS.FF6'),"
-                   + "       SESSIONTIMEZONE FROM DUAL")) {
-            if (rs.next()) {
-                r.dbUniqueName = rs.getString(1);
-                r.databaseRole = rs.getString(2);
-                r.instanceName = rs.getString(3);
-                r.sid          = rs.getString(4);
-                r.serverTime   = rs.getString(5);
-                r.sessionTz    = rs.getString(6);
+                   + "       TO_CHAR(SYSTIMESTAMP,'YYYY-MM-DD\"T\"HH24:MI:SS.FF6') FROM DUAL")) {
+                if (rs.next()) {
+                    r.dbUniqueName = rs.getString(1);
+                    r.databaseRole = rs.getString(2);
+                    r.instanceName = rs.getString(3);
+                    r.sid          = rs.getString(4);
+                    r.serverTime   = rs.getString(5);
+                }
             }
         }
 
         // ── 2. 단언. 어긋나면 던진다 — 이것이 이 파일의 존재 이유다 ──────────
         String expectDb   = prop("g0b1.expect.dbuname", null);
+        // run.sh 는 공백이 JVM 인자에서 잘리는 것을 피하려고 'PHYSICAL_STANDBY' 형태로 넘긴다.
+        // 여기서 '_' 를 공백으로 되돌려 Oracle 이 돌려주는 'PHYSICAL STANDBY' 와 맞춘다.
         String expectRole = prop("g0b1.expect.role", null);
+        if (expectRole != null) expectRole = expectRole.replace('_', ' ').trim();
         if (expectDb != null && !expectDb.equalsIgnoreCase(String.valueOf(r.dbUniqueName))) {
             r.ok = false;
             r.error = "DB_UNIQUE_NAME=" + r.dbUniqueName + " != expected " + expectDb;
@@ -83,11 +89,20 @@ final class Preamble {
         //     주의: STANDBY_MAX_DATA_DELAY 는 **쿼리 시작 시점에만** 평가된다.
         //     오래 도는 추출은 이것으로 self-fail 하지 않는다(권한 판정서 §2 참조).
         try (Statement s = c.createStatement()) {
+            s.setQueryTimeout(timeoutS);
             s.execute("ALTER SESSION SET TIME_ZONE = DBTIMEZONE");
             s.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '. '");
             String d = prop("g0b1.max.delay", null);
             if (d != null) {
                 s.execute("ALTER SESSION SET STANDBY_MAX_DATA_DELAY = " + Integer.parseInt(d));
+            }
+        }
+        // **적용 후** 의 세션 타임존을 읽는다. 적용 전 값을 증거로 남기면
+        // "프리앰블이 시간축을 고정했다" 는 주장을 뒷받침하지 못한다.
+        try (Statement s = c.createStatement()) {
+            s.setQueryTimeout(timeoutS);
+            try (ResultSet rs = s.executeQuery("SELECT SESSIONTIMEZONE FROM DUAL")) {
+                if (rs.next()) r.sessionTz = rs.getString(1);
             }
         }
         r.ok = true;

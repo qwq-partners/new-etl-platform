@@ -441,6 +441,18 @@ def main() -> int:
                            "운영자 신고와 실제 접속 대상이 어긋났다.")
             print("[preflight] --observed-env 신고값이 서버 관측과 일치한다")
 
+    # CE09 는 공시 검사로 HOLDS/FAIL 을 가른다. 대상 문서가 없으면 그 시나리오는
+    # 자기 판정 기준을 한 번도 평가하지 못하고, suite 는 9개를 다 돌린 뒤에야 PASS 불가가 된다.
+    # 시작 전에 알려 주는 편이 낫다.
+    if not a.dry_run:
+        doc = os.environ.get("CE_DOC_PATH")
+        if not doc:
+            die(2, "CE_DOC_PATH 가 없다. CE09 의 공시 검사 대상 문서 경로를 지정하라 "
+                   "(이 패키지 tarball 에는 그 문서가 없다).")
+        if not Path(doc).is_file():
+            die(2, f"CE_DOC_PATH={doc!r} 가 파일이 아니다.")
+        print(f"[preflight] CE_DOC_PATH={doc}")
+
     checks = enforce_guard(suite, observed)
     print(f"[guard] 통과: {', '.join(checks)}")
 

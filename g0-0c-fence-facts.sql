@@ -10,6 +10,8 @@
 --   명시 승인하기 전에는 건너뛴다. EXACT_MODE는 Q3(NULL 계수)에만 적용된다.
 --
 -- 안전 규칙: 읽기 전용. 잘못된 비밀번호 시도 없음. 비밀번호는 argv에 넣지 않는다.
+-- **ACK_FULL_SCAN='N'(기본)이면 대상 테이블 질의가 하나도 실행되지 않는다.**
+--   Q1·Q2·Q4 는 물론 Q3 도 게이트 뒤에 있다 — SAMPLE 은 표본 추출이지 I/O 절감이 아니다.
 -- =====================================================================
 
 SET SERVEROUTPUT ON SIZE UNLIMITED
@@ -82,7 +84,16 @@ BEGIN
 
   <<q3_only>>
   -- Q3. NULL watermark 행 — 단일 컬럼 B-tree 인덱스는 NULL을 담지 않으므로
-  --     이 질의는 인덱스로 가속되지 않는다. 기본은 표본 추정이다.
+  --     이 질의는 인덱스로 가속되지 않는다.
+  --     **중요**: 행 단위 SAMPLE(p) 는 I/O 절감이 아니다. Oracle 은 세그먼트의 모든 블록을
+  --     읽은 뒤 행을 확률로 버린다(TABLE ACCESS SAMPLE). 따라서 SAMPLE 을 쓰더라도
+  --     이 질의는 전수 스캔 계열이며, 같은 게이트를 받아야 한다. 생산라인과 붙은 원천에서
+  --     '표본이니까 가볍다' 는 오해가 사고로 이어진다.
+  IF NOT v_ack_full THEN
+    DBMS_OUTPUT.PUT_LINE('{"probe":"fence.null_wm_rows","query_ok":null,"skipped":true,'||
+      '"reason":"ACK_FULL_SCAN=N — SAMPLE 은 표본이지 I/O 절감이 아니다(모든 블록을 읽는다). 전수 스캔 계열이므로 승인 후 실행하라"}');
+    GOTO done;
+  END IF;
   BEGIN
     EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM '||v_from||' WHERE &WM_COLUMN IS NULL' INTO v_null;
     EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM '||v_from INTO v_scanned;

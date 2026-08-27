@@ -63,84 +63,116 @@ def main():
         print(json.dumps(ev["verdict"], ensure_ascii=False, indent=1))
         return 3
 
-    conns = [t for t in tr if t.get("event") == "connection"]
-    by_path = Counter(c.get("path_guess") for c in conns)
-    by_jvm = Counter(c.get("jvm") for c in conns)
-    sids = {(c.get("preamble") or {}).get("sid") for c in conns if (c.get("preamble") or {}).get("sid")}
-    ok_by_path = defaultdict(lambda: [0, 0])
-    for c in conns:
-        p = c.get("path_guess")
-        ok_by_path[p][1] += 1
-        if (c.get("preamble") or {}).get("ok"):
-            ok_by_path[p][0] += 1
+    # ── 회차(run)로 먼저 가른다 ────────────────────────────────────────
+    # coverage 와 failclosed 를 합산하면 failclosed 의 **의도된** 실패가 coverage 통계로
+    # 새어 들어가, 완벽한 실행도 영원히 NOT_PROVEN 이 된다.
+    conns_all = [t for t in tr if t.get("event") == "connection"]
+    runs = defaultdict(list)
+    for c in conns_all:
+        runs[c.get("run") or "unspecified"].append(c)
+    ev["runs_seen"] = {k: len(v) for k, v in runs.items()}
 
-    ev["connections_total"] = len(conns)
+    cov = runs.get("coverage") or runs.get("unspecified") or []
+    fcl = runs.get("failclosed") or []
+    if not cov:
+        ev["verdict"] = {"coverage": "MEASUREMENT_FAILED",
+                         "reason": ("coverage 회차의 추적이 없다. run.sh 가 -Dg0b1.run=coverage 를 "
+                                    f"넘겼는지 확인하라. 관측된 회차: {list(runs)}")}
+        pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(json.dumps(ev["verdict"], ensure_ascii=False, indent=1))
+        return 3
+
+    by_path = Counter(c.get("path_guess") for c in cov)
+    by_jvm = Counter(c.get("jvm") for c in cov)
+    sids = {(c.get("preamble") or {}).get("sid") for c in cov if (c.get("preamble") or {}).get("sid")}
+    ok_by_path = defaultdict(lambda: [0, 0])
+    for c in cov:
+        pth = c.get("path_guess")
+        ok_by_path[pth][1] += 1
+        if (c.get("preamble") or {}).get("ok"):
+            ok_by_path[pth][0] += 1
+
+    ev["connections_coverage"] = len(cov)
+    ev["connections_failclosed"] = len(fcl)
     ev["by_path"] = dict(by_path)
     ev["by_jvm"] = dict(by_jvm)
     ev["distinct_server_sids"] = len(sids)
     ev["preamble_ok_by_path"] = {k: f"{v[0]}/{v[1]}" for k, v in ok_by_path.items()}
 
-    # ── 핵심 질문 1: schema 경로가 provider 를 탔는가 ──────────────────
-    schema_seen = by_path.get("SCHEMA", 0) + by_path.get("MIXED", 0)
+    # ── 질문 1: 경로 커버리지. **SCHEMA 만 보고 "세 경로" 라 하지 않는다.** ──
+    seen_schema = by_path.get("SCHEMA", 0) + by_path.get("MIXED", 0)
+    seen_task = by_path.get("TASK", 0) + by_path.get("MIXED", 0)
+    seen_meta = by_path.get("METADATA", 0)
+    missing_paths = [n for n, v in (("SCHEMA", seen_schema), ("TASK", seen_task)) if not v]
     ev["findings"].append({
-        "q": "커스텀 provider 가 schema 해석 경로에서도 호출되는가",
-        "observed": f"SCHEMA {by_path.get('SCHEMA', 0)}건 / MIXED {by_path.get('MIXED', 0)}건",
-        "answer": "YES" if schema_seen else "NOT_OBSERVED",
-        "note": ("path_guess 는 스택 추정이다. raw_stack 을 직접 보고 재판정하라."
-                 if schema_seen else
-                 "schema 경로 connection 이 관측되지 않았다. 스택 분류가 틀렸을 수도 있으니 "
-                 "UNKNOWN 항목의 raw_stack 을 먼저 확인하라."),
+        "q": "provider 가 schema 경로와 task 경로 모두에서 호출되는가",
+        "observed": {"SCHEMA": seen_schema, "TASK": seen_task, "METADATA": seen_meta,
+                     "UNKNOWN": by_path.get("UNKNOWN", 0)},
+        "answer": "YES" if not missing_paths else "NO",
+        "note": ("METADATA 경로는 DSv2 카탈로그를 쓰지 않으면 나타나지 않는다 — 0 이라고 해서 "
+                 "덮지 못한 것이 아니다. 그래서 게이트에 넣지 않는다. "
+                 "path_guess 는 스택 추정이므로 UNKNOWN 이 있으면 raw_stack 을 직접 보라."
+                 if not missing_paths else f"관측되지 않은 경로: {missing_paths}"),
     })
 
-    # ── 핵심 질문 2: 모든 경로가 프리앰블을 받았는가 ────────────────────
+    # ── 질문 2: 프리앰블 적용 (coverage 회차 한정) ──────────────────────
     missing = {k: v for k, v in ok_by_path.items() if v[0] != v[1]}
     ev["findings"].append({
-        "q": "모든 물리 connection 이 프리앰블을 받았는가",
+        "q": "coverage 회차의 모든 물리 connection 이 프리앰블을 받았는가",
         "observed": ev["preamble_ok_by_path"],
         "answer": "YES" if not missing else "NO",
         "note": "" if not missing else f"프리앰블이 실패했거나 누락된 경로: {list(missing)}",
     })
 
-    # ── 핵심 질문 3: fail-closed 가 성립하는가 ─────────────────────────
+    # ── 질문 3: fail-closed. 시험하지 않았으면 **미확정이지 통과가 아니다.** ──
     fc = [r for r in res if r.get("mode") == "failclosed"]
-    if fc:
-        broken = [r for r in fc if r.get("status") == "FAIL_CLOSED_BROKEN"]
-        ev["findings"].append({
-            "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
-            "observed": [r.get("status") for r in fc],
-            "answer": "NO" if broken else "YES",
-            "note": ("**P0** — 프리앰블을 강제 실패시켰는데 읽기가 성공했다. 그 경로는 "
-                     "connection 예외를 삼킨다. 세션 단언 모델이 그 경로에서 성립하지 않는다."
-                     if broken else "의도대로 실패했다."),
-        })
-    else:
+    if not fc:
         ev["findings"].append({
             "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
             "observed": None, "answer": "NOT_TESTED",
-            "note": "failclosed 모드를 돌리지 않았다. run.sh 가 두 모드를 모두 돌린다.",
+            "note": ("failclosed 회차를 돌리지 않았다. **시험하지 않은 것은 통과가 아니다** — "
+                     "이 항목이 미확정인 한 coverage 는 PROVEN 이 될 수 없다."),
+        })
+    else:
+        broken = [r for r in fc if r.get("status") == "FAIL_CLOSED_BROKEN"]
+        swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
+        ev["findings"].append({
+            "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
+            "observed": {"statuses": [r.get("status") for r in fc],
+                         "failed_connections_in_failclosed": len(swallowed)},
+            "answer": "NO" if broken else "YES",
+            "note": ("**P0** — 프리앰블을 강제 실패시켰는데 읽기가 성공했다. 그 경로는 "
+                     "connection 예외를 삼킨다. 어느 경로인지는 failclosed 회차의 "
+                     "path_guess 별 실패 건수와 job 성공 여부를 대조해 좁혀라."
+                     if broken else "의도대로 실패했다."),
         })
 
-    # ── 핵심 질문 4: 한 회차가 여는 물리 세션 수 ────────────────────────
+    # ── 질문 4: 세션 수(참고값, 게이트 아님) ────────────────────────────
     ev["findings"].append({
-        "q": "한 회차가 여는 물리 connection·서버 세션 수",
-        "observed": {"connections": len(conns), "distinct_sids": len(sids), "jvms": len(by_jvm)},
+        "q": "한 회차가 여는 물리 connection·서버 세션 수(참고)",
+        "observed": {"connections": len(cov), "distinct_sids": len(sids), "jvms": len(by_jvm)},
         "answer": "MEASURED",
-        "note": ("서버 SID 는 재사용될 수 있으므로 connection 수와 SID 수가 다른 것은 정상이다. "
-                 "Control 의 동시 세션 예산은 connection 수가 아니라 **동시 피크**로 잡아야 하며, "
-                 "이 실행은 피크를 재지 않는다."),
+        "note": ("서버 SID 는 재사용될 수 있어 connection 수와 다를 수 있다. "
+                 "Control 의 동시 세션 예산은 총 개수가 아니라 **동시 피크**로 잡아야 하며, "
+                 "local[N] 실행은 피크를 재지 않는다."),
     })
 
+    # **통과로 인정하는 값은 YES 와 MEASURED 뿐이다.** NOT_TESTED·NOT_OBSERVED 는
+    # "아직 모른다" 이고, 이 도구의 규칙상 모르는 것은 통과가 아니다.
+    PASSING = {"YES", "MEASURED"}
     answers = {f["q"]: f["answer"] for f in ev["findings"]}
-    blocking = [q for q, v in answers.items() if v in ("NO", "NOT_OBSERVED")]
+    blocking = [q for q, v in answers.items() if v not in PASSING]
     ev["verdict"] = {
         "coverage": "PROVEN" if not blocking else "NOT_PROVEN",
         "blocking": blocking,
-        "reason": ("세 경로 모두에서 provider 가 호출되고 프리앰블이 적용됐다."
+        "reason": ("schema·task 경로에서 provider 가 호출되고, 프리앰블이 전부 적용됐으며, "
+                   "fail-closed 가 의도대로 동작했다."
                    if not blocking else
                    "아래 질문이 미해결이다. 해결 전에는 세션 단언 위의 모든 보장이 미확정이다."),
     }
     pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(json.dumps({"verdict": ev["verdict"], "by_path": ev["by_path"],
+    print(json.dumps({"verdict": ev["verdict"], "runs_seen": ev.get("runs_seen"),
+                      "by_path": ev["by_path"],
                       "preamble_ok_by_path": ev["preamble_ok_by_path"]}, ensure_ascii=False, indent=1))
     return 0 if ev["verdict"]["coverage"] == "PROVEN" else 3
 

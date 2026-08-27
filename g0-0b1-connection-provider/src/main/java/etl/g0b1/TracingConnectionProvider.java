@@ -66,11 +66,11 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         String preambleError = null;
 
         try {
-            Properties p = new Properties();
-            String user = opt(options, "user");
-            String pw = opt(options, "password");
-            if (user != null) p.setProperty("user", user);
-            if (pw != null) p.setProperty("password", pw);
+            // Spark 의 BasicConnectionProvider 는 JDBCOptions.asConnectionProperties 로
+            // **Spark 전용 키를 뺀 나머지 전부**를 드라이버에 넘긴다. user/password 만 넘기면
+            // oracle.jdbc.* 같은 드라이버 속성이 조용히 사라져, 우리 provider 를 켜는 순간
+            // 동작이 달라진다. 그래서 같은 규칙으로 복사한다.
+            Properties p = driverProps(options);
             c = driver.connect(url, p);
             if (c == null) {
                 openError = "driver.connect returned null (URL 을 이 driver 가 받지 않았다)";
@@ -88,7 +88,7 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         }
 
         // 기록은 던지기 **전에** 한다. 예외가 삼켜지든 말든 증거는 남아야 한다.
-        emit(connId, path, stack, url, openError, pr, preambleError, t0);
+        emit(connId, path, stack, url, openError, pr, preambleError, t0, passedKeys(options));
 
         if (openError != null) {
             throw new RuntimeException("[g0-0b1] connection open 실패: " + openError);
@@ -106,10 +106,12 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
     }
 
     private static void emit(String connId, String path, StackTraceElement[] stack, String url,
-                             String openError, Preamble.Result pr, String preambleError, long t0) {
+                             String openError, Preamble.Result pr, String preambleError, long t0,
+                             String passedKeysJson) {
         String jvm = ManagementFactory.getRuntimeMXBean().getName();
         StringBuilder b = new StringBuilder("{");
         b.append("\"event\":\"connection\"");
+        b.append(",\"run\":").append(Trace.q(Trace.run()));
         b.append(",\"conn_id\":").append(Trace.q(connId));
         b.append(",\"path_guess\":").append(Trace.q(path));
         b.append(",\"jvm\":").append(Trace.q(jvm));
@@ -119,15 +121,60 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         b.append(",\"preamble\":").append(Preamble.toJson(pr));
         b.append(",\"preamble_error\":").append(Trace.q(preambleError));
         b.append(",\"elapsed_ms\":").append((System.nanoTime() - t0) / 1000000L);
+        b.append(",\"driver_props_passed\":").append(passedKeysJson);
         b.append(",\"raw_stack\":").append(Trace.stackJson(stack, 18));
         b.append("}");
         Trace.line(b.toString());
     }
 
+    /**
+     * Spark 전용 옵션 키. 이것만 빼고 나머지는 드라이버에 그대로 넘긴다.
+     * <p><b>판본 의존</b>: Spark 가 옵션을 추가하면 이 목록도 늘어야 한다. 빠뜨리면
+     * Spark 전용 키가 드라이버로 새어 드라이버가 거부할 수 있다. 실행 시 passed_keys 를
+     * 확인하라 — 값은 남기지 않고 **키 이름만** 남긴다.
+     */
+    private static final java.util.Set<String> SPARK_ONLY = new java.util.HashSet<>(java.util.Arrays.asList(
+            "url", "dbtable", "query", "driver", "partitioncolumn", "lowerbound", "upperbound",
+            "numpartitions", "querytimeout", "fetchsize", "batchsize", "isolationlevel",
+            "sessioninitstatement", "truncate", "cascadetruncate", "createtablecolumntypes",
+            "createtableoptions", "customschema", "pushdownpredicate", "pushdownaggregate",
+            "pushdownlimit", "pushdownoffset", "pushdowntablesample", "keytab", "principal",
+            "refreshkrb5config", "connectionprovider", "prefertimestampntz", "tabletypes",
+            "inferTimestampNTZType".toLowerCase()));
+
+    private static Properties driverProps(scala.collection.immutable.Map<String, String> m) {
+        Properties p = new Properties();
+        if (m == null) return p;
+        scala.collection.Iterator<scala.Tuple2<String, String>> it = m.iterator();
+        while (it.hasNext()) {
+            scala.Tuple2<String, String> kv = it.next();
+            String k = kv._1();
+            if (k == null || kv._2() == null) continue;
+            if (SPARK_ONLY.contains(k.toLowerCase())) continue;
+            p.setProperty(k, kv._2());
+        }
+        return p;
+    }
+
+    /** 드라이버에 넘긴 키 **이름만** 모은다. 값은 절대 남기지 않는다(비밀번호 포함). */
+    private static String passedKeys(scala.collection.immutable.Map<String, String> m) {
+        StringBuilder b = new StringBuilder("[");
+        Properties p = driverProps(m);
+        java.util.List<String> ks = new java.util.ArrayList<>(p.stringPropertyNames());
+        java.util.Collections.sort(ks);
+        for (int i = 0; i < ks.size(); i++) {
+            if (i > 0) b.append(',');
+            b.append(Trace.q(ks.get(i)));
+        }
+        return b.append(']').toString();
+    }
+
     /** URL 에 비밀번호가 섞여 오는 형태가 있으므로 호스트 부분만 남긴다. */
     private static String hostOnly(String url) {
         if (url == null) return null;
-        int at = url.indexOf('@');
+        // **lastIndexOf** 다. 비밀번호에 '@' 가 들어 있으면 indexOf 는 비밀번호 잔여분을
+        // 그대로 남긴다. Oracle thin URL 은 자격증명 다음의 마지막 '@' 가 호스트 구분자다.
+        int at = url.lastIndexOf('@');
         return at >= 0 ? url.substring(at) : url;
     }
 

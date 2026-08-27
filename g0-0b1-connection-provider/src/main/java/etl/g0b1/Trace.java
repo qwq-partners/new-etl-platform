@@ -33,7 +33,10 @@ final class Trace {
         if (file == null) {
             String dir = System.getProperty("g0b1.trace.dir", System.getProperty("java.io.tmpdir"));
             String jvm = ManagementFactory.getRuntimeMXBean().getName().replaceAll("[^A-Za-z0-9_.@-]", "_");
-            file = Paths.get(dir, "g0-0b1-trace-" + jvm + ".jsonl");
+            // **회차(mode)를 파일명에 넣는다.** coverage 와 failclosed 가 같은 디렉터리에
+            // 섞이면 failclosed 의 의도된 실패가 coverage 통계로 합산되어, 완벽한 실행도
+            // 영원히 NOT_PROVEN 이 된다.
+            file = Paths.get(dir, "g0-0b1-trace-" + run() + "-" + jvm + ".jsonl");
             try {
                 Files.createDirectories(file.getParent());
             } catch (IOException ignored) {
@@ -41,6 +44,12 @@ final class Trace {
             }
         }
         return file;
+    }
+
+    /** 이 JVM 이 참여한 실행 회차 이름. run.sh 가 -Dg0b1.run 으로 준다. */
+    static String run() {
+        String r = System.getProperty("g0b1.run", "unspecified");
+        return r.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 
     static void line(String json) {

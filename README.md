@@ -73,9 +73,9 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 | 게이트 | 파일 | 대상 | 안전 등급 |
 |---|---|---|---|
-| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·**원천 이식성** 실측(78 probe) | 운영계 가능(대상 테이블 접촉 `ROWNUM=1` 3건) |
+| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·**원천 이식성** 실측(86 probe) | 운영계 가능(대상 테이블 접촉 `ROWNUM=1` 3건) |
 | **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | 운영계 제한적(ROWNUM 제한) |
-| **G0-0B1** | *(미구현)* | 커스텀 `JdbcConnectionProvider`가 schema·metadata·task 3경로를 덮는지 | — |
+| **G0-0B1** | `g0-0b1-connection-provider/` | 커스텀 `JdbcConnectionProvider`가 schema·task 경로를 덮는지 + fail-closed 성립 여부 | 운영계 제한적(`ROWNUM` 제한, 읽기 전용) |
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence 반례 fact collector | 운영계 제한적(`ACK_FULL_SCAN` 게이트) |
 | **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness (9종 구현 완료) | **폐기용 쓰기 가능 환경 전용** |
 
@@ -111,6 +111,6 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 ## 5. 다음 작업
 
 1. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전
-2. **G0-0B1 구현** — 커스텀 `JdbcConnectionProvider` tracer. 이것이 성립하지 않으면 Profile U의 세션 단언 모델 전체가 서지 않는다
+2. **G0-0B1 빌드·실행** — `cd g0-0b1-connection-provider && ./build.sh` 가 첫 단계다. 실제 Spark jar에 대고 빌드한 적이 없으므로, 거기서 실패하면 그것이 첫 측정 결과다(SPI 시그니처가 그 판본과 다름)
 3. **C01~C09 실행** — 폐기용 환경 확보 후
 4. capability 확정 → **A v2.0 / P v2.0**(단일 core + ConnectionRevision capability overlay, v1.2.3.1은 archive)
