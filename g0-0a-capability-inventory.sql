@@ -55,7 +55,7 @@ DECLARE
   v        VARCHAR2(4000);
   -- 정적 probe 호출 수. 값을 바꿀 때 이 상수도 함께 바꾼다.
   -- emitted != expected 이면 블록이 중간에 끊긴 것이므로 실패로 취급한다.
-  c_expected CONSTANT PLS_INTEGER := 86;   -- 실제 호출 수와 일치해야 한다
+  c_expected CONSTANT PLS_INTEGER := 87;   -- 실제 호출 수와 일치해야 한다
   -- probe 를 더하거나 뺄 때 이 값을 반드시 함께 고쳐라. 확인 방법(**공백에 무관해야 한다**):
   --   grep -cE "^[[:space:]]*p_(scalar|stmt)[[:space:]]*\(" g0-0a-capability-inventory.sql
   -- 이력: v1 은 57건을 56 으로 선언했고, 2026-08-27 1차 정정은 `p_stmt  (` 처럼 공백이 낀
@@ -225,6 +225,12 @@ BEGIN
   p_scalar('max_delay_zero.touch_target',       q'[SELECT TO_CHAR(COUNT(*)) FROM (SELECT 1 FROM &TARGET_OWNER..&TARGET_TABLE WHERE ROWNUM = 1)]');
   p_stmt  ('alter.STANDBY_MAX_DATA_DELAY.restore','ALTER SESSION SET STANDBY_MAX_DATA_DELAY = &MAX_DELAY_SEC');
 
+
+  DBMS_OUTPUT.PUT_LINE('--- 7b. 측정 대상 식별자 (증거가 무엇을 잰 것인지 스스로 밝힌다) ---');
+  -- 이것이 없으면 테이블 A 에서 얻은 ROWDEPENDENCIES 결과를 테이블 B 에 적용하는 것을
+  -- 증거가 막지 못한다(7차 교차 리뷰 P0-03).
+  p_scalar('target.identity',
+      q'[SELECT '&TARGET_OWNER' || '.' || '&TARGET_TABLE' || '#' || '&WM_COLUMN' FROM DUAL]');
 
   DBMS_OUTPUT.PUT_LINE('--- 8. PORTABILITY / 이기종 원천 (버전 추정 금지, 기능 직접 실행) ---');
   -- 8a. 맥락 기록용 버전·문자집합. PRODUCT_COMPONENT_VERSION·NLS_DATABASE_PARAMETERS 는

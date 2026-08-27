@@ -91,7 +91,8 @@ final class Preamble {
         try (Statement s = c.createStatement()) {
             s.setQueryTimeout(timeoutS);
             s.execute("ALTER SESSION SET TIME_ZONE = DBTIMEZONE");
-            s.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '. '");
+            // A 규범·G0-0A 와 같은 값이어야 한다. 다르면 B1 의 세션과 A 가 잰 세션이 다른 것이다.
+            s.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'");
             String d = prop("g0b1.max.delay", null);
             if (d != null) {
                 s.execute("ALTER SESSION SET STANDBY_MAX_DATA_DELAY = " + Integer.parseInt(d));

@@ -15,7 +15,7 @@ probe-README 가 "두 로그를 g0_evidence 로 정규화한다" 를 첫 단계�
   python3 g0-normalize.py --report-id RUN-2026-08-27-01 --profile LOCAL_WSL \\
       --a g0-0a.log --b0 b0.json --b1 g0-0b1-evidence.json \\
       --c00 c00.log --c-suite g0-0c-counterexamples/evidence.json \\
-      --versions-lock versions.lock --out g0-evidence.json
+      --versions-lock versions.lock --out g0-0-evidence.json
 """
 from __future__ import annotations
 
@@ -77,69 +77,137 @@ def val(p: dict | None):
     return p.get("value") if p else None
 
 
-# ── capability 축 파생 ────────────────────────────────────────────────
+# ── 실패의 성격 구분 ─────────────────────────────────────────────────
+# "기능이 없다" 와 "측정하지 못했다" 는 다르다. 뒤엣것을 NONE 으로 적으면
+# 미확정을 확정으로 바꾸는 것이고, 그게 이 저장소가 금지하는 바로 그 일이다.
+ABSENCE_ORA = {942, 1031, 900, 6550, 439, 2003, 1918, 990}   # 없음·권한없음·구문 미지원
+def absent(p: dict | None) -> bool:
+    """이 probe 의 실패가 '기능 부재' 로 읽혀도 되는가."""
+    if not p or p.get("query_ok") is True:
+        return False
+    o = p.get("ora")
+    return isinstance(o, int) and abs(o) in ABSENCE_ORA
+
+
+def unknown(p: dict | None) -> bool:
+    """probe 가 없거나, 실패했는데 그 원인이 기능 부재가 아니다(타임아웃·접속단절 등)."""
+    return p is None or (p.get("query_ok") is not True and not absent(p))
+
+
+# ── capability 축 파생 ───────────────────────────────────────────────
 def derive_axes(P: dict[str, dict]) -> dict:
-    """capability-overlay §3 의 축을 실제 probe id 에서 파생한다.
-    입력이 없으면 UNDETERMINED — 낙관적으로 채우지 않는다."""
+    """capability-overlay 의 축을 실제 probe id 에서 파생한다.
+
+    **규칙 셋 (2026-08-27 7차 교차 리뷰 P0-01 반영)**
+      1. 어떤 등급도 **그 등급 자신의 probe 가 성공했을 때만** 준다.
+         상위가 실패했다고 하위로 떨어뜨리지 않는다 — 하위도 실패했을 수 있다.
+      2. 실패가 '기능 부재'(ORA-00942/01031/00900 등)로 확인될 때만 NONE 이다.
+         원인 불명 실패·probe 부재는 UNDETERMINED.
+      3. `COUNT(*)` 가 되는 것과 그 뷰에서 **값을 읽을 수 있는 것**은 다르다.
+    """
     A: dict[str, dict] = {}
 
     def put(axis, value, used, note=None):
         A[axis] = {"value": value, "derived_from": used, **({"note": note} if note else {})}
 
-    # snapshot_read — AS OF 는 SCN 원점이 함께 있어야 성립한다(권한 판정서 §3).
-    asof, scn1, scn2 = P.get("as_of_timestamp.target"), P.get("dbms_flashback.get_scn"), P.get("view.v_database")
+    # ── snapshot_read ────────────────────────────────────────────────
+    # 주의: view.v_database 는 `SELECT COUNT(*) FROM v$database` 일 뿐 CURRENT_SCN 을
+    #       읽지 않는다. **SCN 원점이 아니다** — 여기서 제외한다(P0-01).
+    asof = P.get("as_of_timestamp.target")
+    scn = P.get("dbms_flashback.get_scn")
     ro, ro_sel = P.get("txn.set_read_only"), P.get("txn.select_inside")
-    used = ["as_of_timestamp.target", "dbms_flashback.get_scn", "view.v_database",
-            "txn.set_read_only", "txn.select_inside"]
-    if asof is None and ro is None:
-        put("snapshot_read", "UNDETERMINED", used, "G0-0A 결과가 없다")
-    elif ok(asof) and (ok(scn1) or ok(scn2)):
-        put("snapshot_read", "AS_OF_SCN", used)
+    reissue = P.get("txn.set_read_only.reissue")
+    used = ["as_of_timestamp.target", "dbms_flashback.get_scn",
+            "txn.set_read_only", "txn.select_inside", "txn.set_read_only.reissue"]
+    if ok(asof) and ok(scn):
+        put("snapshot_read", "AS_OF_SCN", used,
+            "AS OF 조회와 SCN 원점이 모두 성공했다. 다만 **여러 connection 이 같은 anchor 를 "
+            "공유하는지**는 이 probe 로 증명되지 않는다(G0-0B1 소관).")
     elif ok(asof):
-        put("snapshot_read", "READ_ONLY_TXN", used,
-            "AS OF 는 되지만 SCN 원점이 없어 AS OF TIMESTAMP(±3초 근삿값)뿐이다 — AS_OF_SCN 으로 올리지 않는다")
+        put("snapshot_read", "AS_OF_TIMESTAMP", used,
+            "AS OF 는 되지만 SCN 원점이 없다. SCN_TO_TIMESTAMP 계열은 약 3초 근삿값이라 "
+            "AS_OF_SCN 으로 올리지 않는다.")
     elif ok(ro) and ok(ro_sel):
-        put("snapshot_read", "READ_ONLY_TXN", used)
+        # ORA-01453(두 번째 SET TRANSACTION 거부)이 나와야 첫 트랜잭션이 실제로 열렸다는 양성 대조다.
+        pc = isinstance((reissue or {}).get("ora"), int) and abs(reissue["ora"]) == 1453
+        put("snapshot_read", "READ_ONLY_TXN", used,
+            "양성 대조(재발행 ORA-01453) 확인됨" if pc else
+            "**양성 대조 없음** — 재발행에서 ORA-01453 이 관측되지 않아 트랜잭션이 실제로 "
+            "열렸는지 확정되지 않았다. 이 값은 잠정이다.")
+    elif all(absent(x) for x in (asof, ro, ro_sel) if x is not None) and not all(
+            x is None for x in (asof, ro, ro_sel)):
+        put("snapshot_read", "NONE", used, "AS OF 와 READ ONLY 가 모두 기능 부재로 확인됐다")
     else:
-        put("snapshot_read", "NONE", used)
+        put("snapshot_read", "UNDETERMINED", used,
+            "상위 등급이 실패했다고 하위로 내리지 않는다 — 하위 probe 도 성공하지 않았다")
 
-    # row_hash — 표준 시험 벡터와 일치해야 SHA256 이다(값이 맞아야지 오류 부재로는 부족).
+    # ── row_hash ─────────────────────────────────────────────────────
     h = P.get("feat.standard_hash_sha256")
-    if h is None:
-        put("row_hash", "UNDETERMINED", ["feat.standard_hash_sha256"])
-    elif ok(h) and h.get("value_interpretable") is True:
-        put("row_hash", "SHA256", ["feat.standard_hash_sha256"])
+    used = ["feat.standard_hash_sha256"]
+    if ok(h) and h.get("value_interpretable") is True:
+        put("row_hash", "SHA256", used,
+            "표준 시험 벡터와 일치. **cross-engine canonical row hash 는 별개다** — "
+            "G0-3 의 V-01~V-16 전까지 행 대조 가능성으로 승격하지 마라.")
+    elif absent(h):
+        put("row_hash", "NONE", used + ["feat.ora_hash"],
+            "ORA_HASH 는 32비트라 대조용 대체재가 아니다 — Reconciliation 이 건수+PK 로 강등된다")
     else:
-        put("row_hash", "NONE", ["feat.standard_hash_sha256", "feat.ora_hash"],
-            "ORA_HASH 는 32비트라 대조용 해시로 쓸 수 없다 — Reconciliation 이 건수+PK 로 강등된다")
+        put("row_hash", "UNDETERMINED", used)
 
-    # row_change_scn — ROWDEPENDENCIES 는 테이블 생성 시 결정되고 사후 변경 불가다.
+    # ── row_change_scn ───────────────────────────────────────────────
     dep, rs = P.get("feat.rowdependencies_target"), P.get("feat.ora_rowscn_target")
     used = ["feat.rowdependencies_target", "feat.ora_rowscn_target"]
-    if dep is None and rs is None:
-        put("row_change_scn", "UNDETERMINED", used)
-    elif ok(rs) and str(val(dep) or "").upper() == "ENABLED":
+    if ok(rs) and ok(dep) and str(val(dep) or "").upper() == "ENABLED":
         put("row_change_scn", "ROW_LEVEL", used)
-    elif ok(rs):
+    elif ok(rs) and ok(dep):
         put("row_change_scn", "BLOCK_LEVEL", used,
-            "ROWDEPENDENCIES 가 ENABLED 가 아니다 — 블록 단위 SCN 은 상한만 보장한다. 사후 변경 불가")
-    else:
+            f"ROWDEPENDENCIES={val(dep)!r} — 블록 단위 SCN 은 상한만 보장한다. 사후 변경 불가")
+    elif absent(rs):
         put("row_change_scn", "NONE", used)
-
-    # lag_visibility — DG_STATS 는 측정, MAX_DELAY_ONLY 는 강제다(성질이 다르다).
-    dg, d = P.get("view.v_dataguard_stats"), P.get("alter.STANDBY_MAX_DATA_DELAY.D")
-    used = ["view.v_dataguard_stats", "alter.STANDBY_MAX_DATA_DELAY.D"]
-    if dg is None and d is None:
-        put("lag_visibility", "UNDETERMINED", used)
-    elif ok(dg):
-        put("lag_visibility", "DG_STATS", used)
-    elif ok(d):
-        put("lag_visibility", "MAX_DELAY_ONLY", used,
-            "값을 읽는 것이 아니라 임계 초과 시 ORA-03172 로 실패시킬 뿐이다. **측정이 아니라 강제**다")
     else:
-        put("lag_visibility", "NONE", used)
+        put("row_change_scn", "UNDETERMINED", used)
 
-    # wm_granularity — 결정자는 컬럼 타입이다. interval/timestamp9 probe 는 구문 지원 확인용.
+    # ── lag: 관측과 강제는 **독립 축**이다 (P0-05) ──────────────────────
+    dg = P.get("view.v_dataguard_stats")
+    used = ["view.v_dataguard_stats"]
+    if ok(dg):
+        try:
+            rows = int(str(val(dg)))
+        except (TypeError, ValueError):
+            rows = -1
+        if rows >= 1:
+            put("lag_observation", "DG_STATS", used,
+                "뷰에 행이 있다. 다만 이 probe 는 COUNT(*) 라 **lag 값·DATUM_TIME 을 해석하지 않는다** — "
+                "값 해석 가능성은 별도 probe 가 필요하다.")
+        else:
+            put("lag_observation", "UNDETERMINED", used,
+                f"뷰는 읽히지만 행이 {rows}건이다. 읽을 수 있다는 것과 lag 을 잴 수 있다는 것은 다르다.")
+    elif absent(dg):
+        put("lag_observation", "NONE", used)
+    else:
+        put("lag_observation", "UNDETERMINED", used)
+
+    d, zero = P.get("alter.STANDBY_MAX_DATA_DELAY.D"), P.get("max_delay_zero.touch_target")
+    used = ["alter.STANDBY_MAX_DATA_DELAY.D", "max_delay_zero.touch_target"]
+    pc3172 = isinstance((zero or {}).get("ora"), int) and abs(zero["ora"]) == 3172
+    if ok(d) and pc3172:
+        put("lag_admission", "ENFORCED", used, "ORA-03172 양성 대조 확보 — 강제가 실제로 걸린다")
+    elif ok(d):
+        put("lag_admission", "ACCEPTED_UNVERIFIED", used,
+            "**ALTER 가 수락됐을 뿐이다.** ORA-03172 양성 대조가 없으면 '오류가 안 났다' 가 "
+            "유일한 근거이고, 그것은 강제가 걸린다는 증거가 아니다. lag 이 큰 시간대에 재실행하라.")
+    elif absent(d):
+        put("lag_admission", "NONE", used)
+    else:
+        put("lag_admission", "UNDETERMINED", used)
+
+    # ── watermark_commit_bound — **측정 수단이 없다** (P0-05) ──────────
+    put("watermark_commit_bound", "UNDETERMINED", [],
+        "A 의 max_commit_minus_watermark_seconds 는 apply lag 과 **독립**이다 "
+        "(lag=0 이어도 오래된 UPDATE_DT 를 가진 트랜잭션이 늦게 commit 하면 overlap 밖 누락). "
+        "이 축을 재는 probe 가 G0-0 에 **없다**. lag_visibility 로 대체할 수 없다.")
+
+    # ── wm_granularity ───────────────────────────────────────────────
     t = P.get("wm_column.type_facts")
     used = ["wm_column.type_facts", "feat.interval_ns_successor", "feat.timestamp9_precision"]
     if not ok(t):
@@ -158,22 +226,21 @@ def derive_axes(P: dict[str, dict]) -> dict:
             put("wm_granularity", "SEC", used, f"NUMBER(*,{scale}) — 고정 scale 이라 successor 가 정의된다")
         else:
             put("wm_granularity", "UNDEFINED", used,
-                f"data_type={dt} scale={scale} — 고정 granularity 가 없어 successor(M)==M 이 된다(CE01). "
-                "반개구간 seal 대상에서 제외하고 overlap 재적재로만 처리한다")
+                f"data_type={dt} scale={scale} — 고정 granularity 가 없어 successor(M)==M 이 된다(CE01)")
 
-    # sql_dialect
+    # ── sql_dialect / charset ────────────────────────────────────────
     ff = P.get("feat.fetch_first")
-    put("sql_dialect", "UNDETERMINED" if ff is None else ("12C_PLUS" if ok(ff) else "11G"),
+    put("sql_dialect", "UNDETERMINED" if unknown(ff) else ("12C_PLUS" if ok(ff) else "11G"),
         ["feat.fetch_first"])
 
-    # charset_class — 원천 간 해시 정본화 비교 가능성
     cs = P.get("nls.characterset")
     used = ["nls.characterset", "nls.comp", "nls.sort"]
     if not ok(cs):
         put("charset_class", "UNDETERMINED", used)
     else:
         v = str(val(cs) or "").upper()
-        put("charset_class", "AL32UTF8" if v == "AL32UTF8" else "OTHER", used, f"NLS_CHARACTERSET={v}")
+        put("charset_class", "AL32UTF8" if v == "AL32UTF8" else "OTHER", used,
+            f"NLS_CHARACTERSET={v}. **이 DB 하나의 charset 이며 원천 간 비교 가능성은 별개다**")
     return A
 
 
@@ -187,7 +254,9 @@ def main() -> int:
     ap.add_argument("--b1", help="G0-0B1 g0-0b1-evidence.json")
     ap.add_argument("--c00", help="G0-0C00 spool 로그")
     ap.add_argument("--c-suite", help="G0-0C evidence.json")
-    ap.add_argument("--out", default="g0-evidence.json")
+    ap.add_argument("--target", help="SCHEMA.TABLE — target.identity probe 가 없는 옛 로그용 보조 입력")
+    ap.add_argument("--wm", help="워터마크 컬럼명 — --target 과 함께 쓴다")
+    ap.add_argument("--out", default="g0-0-evidence.json")
     a = ap.parse_args()
 
     warn: list[str] = []
@@ -242,14 +311,29 @@ def main() -> int:
                    ("characterset", "nls.characterset")):
         if ok(P.get(pid)):
             src[k] = str(val(P[pid]))
+    # 측정 대상 식별자 — 테이블 단위 축이 어느 테이블의 것인지 못 박는다(P0-03).
+    ti = P.get("target.identity")
+    if ok(ti) and "#" in str(val(ti)):
+        objpart, _, wmcol = str(val(ti)).partition("#")
+        owner, _, table = objpart.partition(".")
+        src.update({"target_owner": owner, "target_table": table, "wm_column": wmcol})
+    elif a.target:
+        owner, _, table = a.target.partition(".")
+        src.update({"target_owner": owner, "target_table": table, "wm_column": a.wm or ""})
 
     # ── B0 / B1 / C00 / C suite ──────────────────────────────────────
     cov_b0 = {"status": "NOT_RUN"}
     if pb0:
         b0 = jsonl(pb0)
-        cov_b0 = {"status": "MEASURED" if b0 else "FAILED",
-                  "counts": {"probes": len(b0)},
-                  **({} if b0 else {"reason": "파싱 가능한 결과 줄이 없다"})}
+        # **한 줄짜리 산출물을 MEASURED 로 만들지 않는다**(P0-02). B0 는 S0~S5 계열을 낸다.
+        sids = {str(r.get("probe", "")).split(".")[0] for r in b0}
+        if len(b0) >= 4 and len([x for x in sids if x.startswith("S")]) >= 2:
+            cov_b0 = {"status": "MEASURED", "counts": {"probes": len(b0), "step_groups": len(sids)}}
+        elif b0:
+            cov_b0 = {"status": "PARTIAL", "counts": {"probes": len(b0), "step_groups": len(sids)},
+                      "reason": "S 계열 step 이 2개 미만이거나 probe 가 4건 미만이다 — 완주로 볼 수 없다"}
+        else:
+            cov_b0 = {"status": "FAILED", "reason": "파싱 가능한 결과 줄이 없다"}
 
     spark_paths, cov_b1 = {}, {"status": "NOT_RUN"}
     if pb1:
@@ -259,8 +343,12 @@ def main() -> int:
             spark_paths = {"verdict": v.get("coverage"), "blocking": v.get("blocking", []),
                            "by_path": e.get("by_path", {}),
                            "preamble_ok_by_path": e.get("preamble_ok_by_path", {})}
-            cov_b1 = {"status": "MEASURED" if v.get("coverage") == "PROVEN" else "PARTIAL",
-                      "reason": v.get("reason", "")[:200]}
+            # verdict 만 있는 파일을 MEASURED 로 만들지 않는다 — 경로별 관측이 있어야 한다.
+            has_detail = bool(e.get("by_path")) and bool(e.get("preamble_ok_by_path"))
+            cov_b1 = {"status": "MEASURED" if (v.get("coverage") == "PROVEN" and has_detail)
+                      else "PARTIAL",
+                      "reason": v.get("reason", "")[:200] if has_detail
+                      else "by_path·preamble_ok_by_path 가 없다 — verdict 만으로는 측정으로 보지 않는다"}
         except Exception as ex:  # noqa: BLE001
             cov_b1 = {"status": "FAILED", "reason": f"{type(ex).__name__}"}
             warn.append(f"G0-0B1 증거를 읽지 못했다: {ex}")
@@ -270,9 +358,18 @@ def main() -> int:
         recs = jsonl(pc00)
         fence = {r["probe"]: r for r in recs if isinstance(r.get("probe"), str)}
         skipped = sum(1 for r in fence.values() if r.get("skipped"))
-        cov_c00 = {"status": "PARTIAL" if skipped else ("MEASURED" if fence else "FAILED"),
-                   "counts": {"probes": len(fence), "skipped": skipped},
-                   **({"reason": "ACK_FULL_SCAN=N — 전수 스캔 계열이 전부 건너뛰어졌다"} if skipped else {})}
+        # summary 한 줄만 있는 것을 MEASURED 로 만들지 않는다. 실제 fact probe 가 있어야 한다.
+        facts = [k for k in fence if k.startswith("fence.") and k != "fence.summary"]
+        got = [k for k in facts if fence[k].get("query_ok") is True]
+        if skipped or not got:
+            cov_c00 = {"status": "PARTIAL" if fence else "FAILED",
+                       "counts": {"probes": len(fence), "facts": len(facts), "measured": len(got),
+                                  "skipped": skipped},
+                       "reason": ("ACK_FULL_SCAN=N — 전수 스캔 계열이 건너뛰어졌다" if skipped
+                                  else "값이 나온 fence fact 가 없다")}
+        else:
+            cov_c00 = {"status": "MEASURED",
+                       "counts": {"probes": len(fence), "facts": len(facts), "measured": len(got)}}
 
     ces, cov_cs = {}, {"status": "NOT_RUN"}
     if pcs:
@@ -281,15 +378,25 @@ def main() -> int:
             v = e.get("suite_verdict", {})
             ces = {"pass": v.get("pass"), "reason": v.get("reason", "")[:300],
                    "outcomes": {s.get("id"): s.get("outcome") for s in e.get("scenarios", [])}}
-            cov_cs = {"status": "MEASURED" if v.get("pass") else "PARTIAL",
-                      "reason": v.get("reason", "")[:200]}
+            # scenario 0개인데 pass=true 인 파일을 MEASURED 로 만들지 않는다.
+            nsc = len(e.get("scenarios", []))
+            if v.get("pass") and nsc >= 9:
+                cov_cs = {"status": "MEASURED", "counts": {"scenarios": nsc}}
+            elif nsc == 0:
+                cov_cs = {"status": "FAILED", "counts": {"scenarios": 0},
+                          "reason": "scenario 가 0건이다 — suite_verdict 만으로는 측정이 아니다"}
+            else:
+                cov_cs = {"status": "PARTIAL", "counts": {"scenarios": nsc},
+                          "reason": v.get("reason", "")[:200]}
         except Exception as ex:  # noqa: BLE001
             cov_cs = {"status": "FAILED", "reason": f"{type(ex).__name__}"}
 
     rec = {
-        "schema_version": "1.0.0", "record_type": "g0_evidence",
+        "schema_version": "1.0.0", "record_type": "g0_0_evidence",
+        "scope": "CAPABILITY_INVENTORY", "gate_eligible": False,
         "g0_report_id": a.report_id,
         "executed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "normalized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "profile": a.profile,
         "versions_lock_digest": lock_digest,
         "source": src,
@@ -307,28 +414,44 @@ def main() -> int:
             "profile=LOCAL_WSL — 이 증거는 **하네스 동작 확인용**이며 설계 주장의 근거가 아니다. "
             "원천 capability 값·ADG 거동·규모는 사내 환경에서만 잴 수 있다.")
 
-    out = pathlib.Path(a.out)
-    out.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    # 자기 검증
+    # ── 검증을 **쓰기 전에** 한다. 위반한 레코드를 최종 경로에 두지 않는다(P0-02) ──
+    schema_errors: list[str] = []
     try:
         import jsonschema
-        sc = json.loads(pathlib.Path("g0-evidence.schema.json").read_text(encoding="utf-8"))
-        errs = sorted(jsonschema.Draft202012Validator(sc).iter_errors(rec), key=lambda e: list(e.path))
-        for e in errs[:5]:
-            print(f"[schema] {'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}", file=sys.stderr)
-        if errs:
-            print(f"[schema] {len(errs)}건 위반 — 레코드는 썼으나 계약을 지키지 못했다", file=sys.stderr)
+        sp = pathlib.Path(__file__).with_name("g0-0-evidence.schema.json")
+        sc = json.loads(sp.read_text(encoding="utf-8"))
+        probe = json.loads(json.dumps(rec, default=str))
+        schema_errors = [f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}"
+                         for e in sorted(jsonschema.Draft202012Validator(sc).iter_errors(probe),
+                                         key=lambda e: list(e.path))]
     except ImportError:
-        rec["warnings"].append("jsonschema 미설치 — 이 레코드를 계약으로 검증하지 못했다")
-        out.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+        schema_errors = ["jsonschema 미설치 — 계약 검증을 못 했다. 검증 없는 레코드는 근거가 아니다"]
+    except Exception as e:  # noqa: BLE001
+        schema_errors = [f"검증 중 오류: {type(e).__name__}: {e}"]
+
+    out = pathlib.Path(a.out)
+    if schema_errors:
+        bad = out.with_suffix(out.suffix + ".invalid")
+        rec["warnings"].extend(schema_errors)
+        bad.write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        for e in schema_errors[:5]:
+            print(f"[schema] {e}", file=sys.stderr)
+        print(f"[invalid] 계약 위반 {len(schema_errors)}건 — {bad} 에만 썼다. "
+              f"최종 경로({out})에는 쓰지 않는다.", file=sys.stderr)
+        return 4
+
+    out.write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
 
     axes = {k: v["value"] for k, v in rec["capability_axes"].items()}
-    print(json.dumps({"out": str(out), "coverage": {k: v["status"] for k, v in rec["coverage"].items()},
-                      "capability_axes": axes, "warnings": rec["warnings"]},
-                     ensure_ascii=False, indent=1))
+    incomplete = [k for k, v in rec["coverage"].items() if v["status"] != "MEASURED"]
     und = [k for k, v in axes.items() if v == "UNDETERMINED"]
-    return 0 if not und else 3
+    print(json.dumps({"out": str(out), "gate_eligible": False,
+                      "coverage": {k: v["status"] for k, v in rec["coverage"].items()},
+                      "capability_axes": axes,
+                      "incomplete": incomplete, "undetermined_axes": und,
+                      "warnings": rec["warnings"]}, ensure_ascii=False, indent=1))
+    # 0 = 유효하고 완결 / 3 = 유효하나 불완전 / 4 = 계약 위반
+    return 0 if not (incomplete or und) else 3
 
 
 if __name__ == "__main__":

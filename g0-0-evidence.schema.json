@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "g0-0-evidence.schema.json",
+  "title": "G0-0 부분 증거 레코드 (G0 전체가 아니다)",
+  "description": "**이것은 P §8.1 의 최종 g0_evidence 가 아니다.** G0-0(capability inventory) 범위의 부분 레코드이며 record_type 도 g0_0_evidence 로 다르다. 최종 g0_evidence 는 ddl_digest·verdict_sql_digest·canonical_hash_spec_digest·hash_vector_result·submission_path_result 를 요구하며 G0-1~G0-5 aggregator 만 생성한다. **이 레코드의 exit 0 을 G0 PASS 로 해석할 수 없다.**",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "record_type",
+    "scope",
+    "gate_eligible",
+    "g0_report_id",
+    "executed_at",
+    "normalized_at",
+    "profile",
+    "versions_lock_digest",
+    "coverage",
+    "not_covered",
+    "artifacts"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "record_type": {
+      "const": "g0_0_evidence"
+    },
+    "g0_report_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "회차 식별자. 같은 원천을 여러 번 재면 회차마다 달라야 한다 — 다회 실행이 요구되는 측정(F-13, ORA-03172 양성 대조)이 조립되려면 필수다."
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "child 산출물이 기록한 측정 시각. 정규화 시각이 아니다."
+    },
+    "profile": {
+      "enum": [
+        "LOCAL_WSL",
+        "CORP_POC"
+      ],
+      "description": "LOCAL_WSL 증거는 하네스 동작 확인용이며 설계 주장의 근거가 아니다."
+    },
+    "versions_lock_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$|^UNSET$",
+      "description": "versions.lock 의 sha256. UNSET 이면 '어느 판본에서 잰 값인가' 를 답할 수 없으므로 이 레코드는 근거가 되지 못한다."
+    },
+    "source": {
+      "type": "object",
+      "description": "측정 대상. **테이블 단위 축(row_change_scn·wm_granularity)이 있는 레코드는 이 셋이 필수다** — 없으면 테이블 A 결과를 테이블 B 에 적용하는 것을 막지 못한다.",
+      "properties": {
+        "db_unique_name": {
+          "type": "string"
+        },
+        "database_role": {
+          "type": "string"
+        },
+        "instance_name": {
+          "type": "string"
+        },
+        "oracle_version": {
+          "type": "string"
+        },
+        "characterset": {
+          "type": "string"
+        },
+        "target_owner": {
+          "type": "string"
+        },
+        "target_table": {
+          "type": "string"
+        },
+        "wm_column": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_owner",
+        "target_table",
+        "wm_column"
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "description": "G0-0 산출물별 수집 상태. MEASURED 가 아닌 것은 그 산출물이 답하는 질문이 전부 미확정이라는 뜻이다.",
+      "required": [
+        "g0_0a",
+        "g0_0b0",
+        "g0_0b1",
+        "g0_0c00",
+        "g0_0c_suite"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "g0_0a": {
+          "$ref": "#/$defs/cov"
+        },
+        "g0_0b0": {
+          "$ref": "#/$defs/cov"
+        },
+        "g0_0b1": {
+          "$ref": "#/$defs/cov"
+        },
+        "g0_0c00": {
+          "$ref": "#/$defs/cov"
+        },
+        "g0_0c_suite": {
+          "$ref": "#/$defs/cov"
+        }
+      }
+    },
+    "not_covered": {
+      "type": "array",
+      "minItems": 1,
+      "description": "P §8.1 의 g0_evidence 항목 중 **G0-0 이 도달하지 못하는 것**. 비어 있을 수 없다 — G0-0 은 G0 전체가 아니다.",
+      "items": {
+        "type": "object",
+        "required": [
+          "item",
+          "why"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "account_privs": {
+      "type": "array",
+      "description": "G0-0A 의 probe 결과 원본. query_ok / row_present / value_interpretable 3분리를 그대로 보존한다.",
+      "items": {
+        "type": "object",
+        "required": [
+          "probe"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "probe": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "capability_axes": {
+      "type": "object",
+      "description": "capability-overlay §3 의 축. **probe 결과에서 파생된 값이며 입력이 없으면 UNDETERMINED 다.** 낙관적으로 채우지 않는다.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "value",
+          "derived_from"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "derived_from": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "이 값을 만든 probe id 목록. 사람이 재판정할 수 있어야 한다."
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "description": "원본 산출물의 위치와 digest. 정규화 결과만 남기고 원본을 버리면 재판정이 불가능하다.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "spark_paths": {
+      "type": "object",
+      "description": "G0-0B1 판정 요약(verdict·경로별 건수)."
+    },
+    "fence_facts": {
+      "type": "object",
+      "description": "G0-0C00 결과. ACK_FULL_SCAN=N 이면 대부분 skipped 다."
+    },
+    "counterexamples": {
+      "type": "object",
+      "description": "G0-0C suite verdict 요약."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "정규화 중 발견한 것. manifest_ok=false 처럼 결과 전체를 무효화하는 것이 여기 들어간다."
+    },
+    "gate_eligible": {
+      "const": false,
+      "description": "이 레코드는 어떤 게이트도 통과시키지 못한다. 항상 false 다."
+    },
+    "scope": {
+      "const": "CAPABILITY_INVENTORY"
+    },
+    "normalized_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "정규화 시각. 측정 시각(child 가 기록)과 다르다."
+    }
+  },
+  "$defs": {
+    "cov": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "MEASURED",
+            "PARTIAL",
+            "FAILED",
+            "NOT_RUN"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

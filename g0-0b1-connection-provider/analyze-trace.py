@@ -100,14 +100,18 @@ def main():
     ev["preamble_ok_by_path"] = {k: f"{v[0]}/{v[1]}" for k, v in ok_by_path.items()}
 
     # ── 질문 1: 경로 커버리지. **SCHEMA 만 보고 "세 경로" 라 하지 않는다.** ──
-    seen_schema = by_path.get("SCHEMA", 0) + by_path.get("MIXED", 0)
-    seen_task = by_path.get("TASK", 0) + by_path.get("MIXED", 0)
+    # **MIXED 를 양쪽으로 세지 않는다**(7차 리뷰 P0-06). 한 건이 두 경로를 동시에
+    # 만족시키면 SCHEMA 하나로 TASK 까지 증명한 것이 된다. MIXED 는 사람이 raw_stack 을
+    # 보고 재분류할 대상이지 자동 통과 대상이 아니다.
+    seen_schema = by_path.get("SCHEMA", 0)
+    seen_task = by_path.get("TASK", 0)
+    seen_mixed = by_path.get("MIXED", 0)
     seen_meta = by_path.get("METADATA", 0)
     missing_paths = [n for n, v in (("SCHEMA", seen_schema), ("TASK", seen_task)) if not v]
     ev["findings"].append({
         "q": "provider 가 schema 경로와 task 경로 모두에서 호출되는가",
         "observed": {"SCHEMA": seen_schema, "TASK": seen_task, "METADATA": seen_meta,
-                     "UNKNOWN": by_path.get("UNKNOWN", 0)},
+                     "MIXED(자동 계수 제외)": seen_mixed, "UNKNOWN": by_path.get("UNKNOWN", 0)},
         "answer": "YES" if not missing_paths else "NO",
         "note": ("METADATA 경로는 DSv2 카탈로그를 쓰지 않으면 나타나지 않는다 — 0 이라고 해서 "
                  "덮지 못한 것이 아니다. 그래서 게이트에 넣지 않는다. "
@@ -138,6 +142,10 @@ def main():
         # 그 step 이 쓰는 경로가 예외를 삼킨 것이고, 그게 이 실험의 표적이다.
         broken = [r for r in fc if r.get("status") in ("FAIL_CLOSED_BROKEN", "FAIL_CLOSED_PARTIAL")]
         ok_steps = sorted({st for r in fc for st in (r.get("ok_steps_under_fail_all") or [])})
+        # **fail=all 은 첫 provider 호출(schema)에서 즉시 던진다.** 그러면 task connection 에
+        # 도달조차 못 하고, 그 상태를 "task 경로도 fail-closed 다" 로 읽으면 안 된다(P0-06).
+        fc_paths = Counter(c.get("path_guess") for c in fcl)
+        task_reached = fc_paths.get("TASK", 0) > 0
         swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
         ev["findings"].append({
             "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
@@ -145,11 +153,15 @@ def main():
                          "failed_connections_in_failclosed": len(swallowed),
                          "succeeded_steps_under_fail_all": ok_steps,
                          "failclosed_by_path": dict(Counter(c.get("path_guess") for c in fcl))},
-            "answer": "NO" if broken else "YES",
+            "answer": "NO" if broken else ("YES" if task_reached else "TASK_PATH_NOT_REACHED"),
             "note": (f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
                      "그 step 이 쓰는 경로가 connection 예외를 삼킨다. "
                      "failclosed_by_path 와 대조해 경로를 좁혀라."
-                     if broken else "의도대로 전 step 이 실패했다."),
+                     if broken else ("의도대로 전 step 이 실패했고 TASK 경로도 프리앰블을 거쳐 실패했다."
+                                     if task_reached else
+                                     "**TASK 경로에 도달하지 못했다.** fail=all 이 schema connection 에서 "
+                                     "즉시 던져 task connection 이 열리지 않았다면, task 경로의 fail-closed 는 "
+                                     "증명되지 않은 것이다. 경로별 주입(-Dg0b1.fail=schema|task)이 필요하다.")),
         })
 
     # ── 질문 4: 세션 수(참고값, 게이트 아님) ────────────────────────────

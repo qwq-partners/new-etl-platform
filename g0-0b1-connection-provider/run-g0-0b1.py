@@ -74,7 +74,7 @@ def main():
     if a.mode == "initstatement":
         # 대조군: provider 없이 sessionInitStatement 만. schema 경로가 이것을 실행하지 않는다는
         # 사실(NEW-04)을 tracer 없이 다시 보이기 위한 것이다.
-        opts["sessionInitStatement"] = "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '. '"
+        opts["sessionInitStatement"] = "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'"
 
     def marker(name, phase):
         """step 경계를 추적 파일에 남긴다. 이게 없으면 어떤 connection 이 어느 step 것인지

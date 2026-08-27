@@ -19,6 +19,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
 | DBA 권한 요청 방향 | **보류**(2026-08-27) — 받아도 순이익이 아니거나 요청서가 틀렸다 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
+| 7차 교차 리뷰 반영 | **완료**(2026-08-27) — P0 6건 확정·수정. 증거 계약을 `g0_0_evidence` 로 분리 |
 | **S0~S2 실행 완료**(2026-08-28) | **B1 tracer 가 실제 Spark 4.2.0 에 대고 빌드된다 — SPI 시그니처 일치 확인.** 저장소 최대 미지수의 절반이 닫혔다 |
 | A v2.0 / P v2.0 규범 개정 | G0-0 결과 확정 후 착수 |
 
@@ -53,6 +54,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 2차 | `etl-platform-v1.2.1-codex-second-cross-review.md` | `…-second-review-assessment.md` |
 | 3차 | `etl-platform-v1.2.2-codex-third-cross-review.md` | `…-third-review-assessment.md`(v3.1 — 4차 확인 반영) |
 | 5차 | `etl-platform-v2.0-codex-cross-review.md` | `etl-platform-v2.0-codex-review-assessment.md` |
+| 7차 | `etl-platform-v2.0-codex-seventh-cross-review.md` | `etl-platform-v2.0-codex-seventh-review-assessment.md` — **P0 6건 전부 확정** |
 | 6차 | `etl-platform-v2.0-codex-review-assessment-recheck.md`(재검증) | — |
 
 리뷰 요청서: `codex-cross-review-prompt.md`(1차) · `codex-cross-review-prompt-v2.0.md`(v2.0)
@@ -82,7 +84,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence 반례 fact collector | 운영계 제한적(`ACK_FULL_SCAN` 게이트) |
 | **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness (9종 구현 완료) | **폐기용 쓰기 가능 환경 전용** |
 
-**증거 계약**: `g0-evidence.schema.json` + `g0-normalize.py` — 각 단계의 산출물을 하나의
+**증거 계약**: `g0-0-evidence.schema.json` + `g0-normalize.py` — 각 단계의 산출물을 하나의
 `g0_evidence` 레코드로 정규화한다. capability 축을 probe 결과에서 파생하고 근거를 함께 남긴다.
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.

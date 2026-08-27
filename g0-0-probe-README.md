@@ -178,10 +178,10 @@ unset ORA_PW
 python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile CORP_POC \
     --a g0-0a.log --b0 b0.json --b1 g0-0b1-connection-provider/g0-0b1-evidence.json \
     --c00 c00.log --c-suite g0-0c-counterexamples/evidence.json \
-    --versions-lock versions.lock --out g0-evidence.json
+    --versions-lock versions.lock --out g0-0-evidence.json
 ```
 
-계약은 `g0-evidence.schema.json` 이고 도구가 자기 출력을 그것으로 검증한다.
+계약은 `g0-0-evidence.schema.json` 이고 도구가 자기 출력을 그것으로 검증한다.
 `--report-id` 는 **회차마다 달라야 한다** — F-13(유휴 정지)과 ORA-03172 양성 대조처럼
 여러 회차를 조립해야 하는 측정이 있다.
 
