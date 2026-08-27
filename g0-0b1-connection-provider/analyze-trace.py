@@ -99,20 +99,29 @@ def main():
     ev["distinct_server_sids"] = len(sids)
     ev["preamble_ok_by_path"] = {k: f"{v[0]}/{v[1]}" for k, v in ok_by_path.items()}
 
-    # ── 질문 1: 경로 커버리지. **SCHEMA 만 보고 "세 경로" 라 하지 않는다.** ──
-    seen_schema = by_path.get("SCHEMA", 0) + by_path.get("MIXED", 0)
-    seen_task = by_path.get("TASK", 0) + by_path.get("MIXED", 0)
+    # ── 질문 1: 경로 커버리지 ─────────────────────────────────────────
+    # **MIXED 를 양쪽으로 세지 않는다**(7차 교차 리뷰 P0-06). 이전 판은
+    #   seen_schema = SCHEMA + MIXED ; seen_task = TASK + MIXED
+    # 라서 MIXED 한 건이 두 경로의 관측으로 계상됐다. MIXED 는 분류기가 갈피를 못 잡은
+    # 것이므로 사람이 raw_stack 을 보고 재판정하기 전에는 어느 쪽에도 기여하지 않는다.
+    seen_schema = by_path.get("SCHEMA", 0)
+    seen_task = by_path.get("TASK", 0)
     seen_meta = by_path.get("METADATA", 0)
+    n_mixed = by_path.get("MIXED", 0)
+    n_unknown = by_path.get("UNKNOWN", 0)
     missing_paths = [n for n, v in (("SCHEMA", seen_schema), ("TASK", seen_task)) if not v]
     ev["findings"].append({
         "q": "provider 가 schema 경로와 task 경로 모두에서 호출되는가",
         "observed": {"SCHEMA": seen_schema, "TASK": seen_task, "METADATA": seen_meta,
-                     "UNKNOWN": by_path.get("UNKNOWN", 0)},
+                     "MIXED": n_mixed, "UNKNOWN": n_unknown},
         "answer": "YES" if not missing_paths else "NO",
         "note": ("METADATA 경로는 DSv2 카탈로그를 쓰지 않으면 나타나지 않는다 — 0 이라고 해서 "
-                 "덮지 못한 것이 아니다. 그래서 게이트에 넣지 않는다. "
-                 "path_guess 는 스택 추정이므로 UNKNOWN 이 있으면 raw_stack 을 직접 보라."
-                 if not missing_paths else f"관측되지 않은 경로: {missing_paths}"),
+                 "덮지 못한 것이 아니라 **이 하네스가 유발하지 않은 것**이다(미측정). "
+                 "그래서 게이트에 넣지 않는다."
+                 if not missing_paths else f"관측되지 않은 경로: {missing_paths}")
+                + (f" **MIXED {n_mixed}건·UNKNOWN {n_unknown}건은 어느 경로에도 계상하지 않았다** — "
+                   f"raw_stack 을 사람이 보고 재판정하라. 재판정 전에는 PASS 에 기여하지 않는다."
+                   if (n_mixed or n_unknown) else ""),
     })
 
     # ── 질문 2: 프리앰블 적용 (coverage 회차 한정) ──────────────────────
@@ -139,17 +148,40 @@ def main():
         broken = [r for r in fc if r.get("status") in ("FAIL_CLOSED_BROKEN", "FAIL_CLOSED_PARTIAL")]
         ok_steps = sorted({st for r in fc for st in (r.get("ok_steps_under_fail_all") or [])})
         swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
+        fc_by_path = Counter(c.get("path_guess") for c in fcl)
+        # **경로별로 실제 주입이 닿았는지 본다**(7차 교차 리뷰 P0-06).
+        # fail=all 은 provider 가 처음 불린 connection 에서 즉시 던진다. 그래서 각 step 이
+        # schema 해석에서 막혀 task connection 에 **도달조차 못 할 수 있다.** 그런 회차에서
+        # "전 step 이 실패했다"는 task 경로의 fail-closed 를 하나도 말해 주지 않는다.
+        # 이전 판은 그 경우에도 YES 를 줬다.
+        fc_reached = [nm for nm in ("SCHEMA", "TASK") if fc_by_path.get(nm)]
+        fc_missing = [nm for nm in ("SCHEMA", "TASK") if not fc_by_path.get(nm)]
+        if broken:
+            answer, note = "NO", (
+                f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
+                "그 step 이 쓰는 경로가 connection 예외를 삼킨다. "
+                "failclosed_by_path 와 대조해 경로를 좁혀라.")
+        elif fc_missing:
+            answer, note = "NOT_OBSERVED", (
+                f"전 step 이 실패했지만 **{fc_missing} 경로에는 주입이 닿지 않았다**"
+                f"(도달한 경로: {fc_reached or '없음'}). fail=all 은 provider 가 처음 불린 "
+                f"connection 에서 즉시 던지므로, 각 step 이 schema 해석에서 막혀 task "
+                f"connection 을 열지 못했을 수 있다. **그 경로의 fail-closed 는 시험되지 "
+                f"않았다** — 시험하지 않은 것은 통과가 아니다. 경로별 주입점"
+                f"(fail=schema|task)이 필요하다.")
+        else:
+            answer, note = "YES", (
+                f"두 경로({fc_reached}) 모두에 주입이 닿았고 전 step 이 실패했다.")
         ev["findings"].append({
             "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
             "observed": {"statuses": [r.get("status") for r in fc],
                          "failed_connections_in_failclosed": len(swallowed),
                          "succeeded_steps_under_fail_all": ok_steps,
-                         "failclosed_by_path": dict(Counter(c.get("path_guess") for c in fcl))},
-            "answer": "NO" if broken else "YES",
-            "note": (f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
-                     "그 step 이 쓰는 경로가 connection 예외를 삼킨다. "
-                     "failclosed_by_path 와 대조해 경로를 좁혀라."
-                     if broken else "의도대로 전 step 이 실패했다."),
+                         "failclosed_by_path": dict(fc_by_path),
+                         "injection_reached_paths": fc_reached,
+                         "injection_missing_paths": fc_missing},
+            "answer": answer,
+            "note": note,
         })
 
     # ── 질문 4: 세션 수(참고값, 게이트 아님) ────────────────────────────
@@ -167,18 +199,53 @@ def main():
     PASSING = {"YES", "MEASURED"}
     answers = {f["q"]: f["answer"] for f in ev["findings"]}
     blocking = [q for q, v in answers.items() if v not in PASSING]
+
+    # **성질이 다른 것을 한 verdict 로 내지 않는다**(7차 교차 리뷰 P0-06).
+    # 이전 판은 coverage 하나였다. provider 가 닿는가 / 단언이 걸리는가 /
+    # 실패하면 죽는가 / 읽기가 한 시점인가는 서로 다른 질문이고, 하나가 참이어도
+    # 나머지를 시사하지 않는다.
+    q_paths = "provider 가 schema 경로와 task 경로 모두에서 호출되는가"
+    q_pre = "coverage 회차의 모든 물리 connection 이 프리앰블을 받았는가"
+    q_fc = "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)"
+
+    def verdict_of(q):
+        v = answers.get(q)
+        return "PROVEN" if v in PASSING else ("NOT_TESTED" if v in ("NOT_TESTED", "NOT_OBSERVED")
+                                              else "NOT_PROVEN")
+
+    ev["verdicts"] = {
+        "provider_reachability": verdict_of(q_paths),
+        "session_assertion": verdict_of(q_pre),
+        "fail_closed": verdict_of(q_fc),
+        # 아래 둘은 이 하네스가 **시험하지 않는다.** 없는 것을 미확정으로 두는 것과
+        # 시험 자체가 없는 것을 구분한다.
+        "read_only_transaction": "NOT_IMPLEMENTED",
+        "common_snapshot": "NOT_IMPLEMENTED",
+    }
+    ev["scope"] = {
+        "paths_exercised": ["SCHEMA", "TASK"],
+        "paths_not_exercised": ["METADATA"],
+        "note": ("이 하네스는 DSv1(spark.read.format('jdbc'))만 쓰고 spark.sql.catalog.* 를 "
+                 "설정하지 않으므로 DSv2 METADATA 경로를 **유발하지 않는다**. "
+                 "그 경로가 0건인 것은 '덮지 못한다'가 아니라 '측정하지 않았다'다. "
+                 "read_only_transaction·common_snapshot 은 Preamble 에 "
+                 "SET TRANSACTION READ ONLY 가 없으므로 아예 시험 대상이 아니다 — "
+                 "**B1 통과는 snapshot capability 의 증거가 아니다.**"),
+    }
     ev["verdict"] = {
         "coverage": "PROVEN" if not blocking else "NOT_PROVEN",
         "blocking": blocking,
         "reason": ("schema·task 경로에서 provider 가 호출되고, 프리앰블이 전부 적용됐으며, "
-                   "fail-closed 가 의도대로 동작했다."
+                   "fail-closed 가 의도대로 동작했다. **이것은 verdicts 세 항에 대한 것이며 "
+                   "read_only_transaction·common_snapshot 은 여전히 NOT_IMPLEMENTED 다.**"
                    if not blocking else
                    "아래 질문이 미해결이다. 해결 전에는 세션 단언 위의 모든 보장이 미확정이다."),
     }
     pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(json.dumps({"verdict": ev["verdict"], "runs_seen": ev.get("runs_seen"),
-                      "by_path": ev["by_path"],
-                      "preamble_ok_by_path": ev["preamble_ok_by_path"]}, ensure_ascii=False, indent=1))
+    print(json.dumps({"verdict": ev["verdict"], "verdicts": ev["verdicts"],
+                      "runs_seen": ev.get("runs_seen"), "by_path": ev["by_path"],
+                      "preamble_ok_by_path": ev["preamble_ok_by_path"]},
+                     ensure_ascii=False, indent=1))
     return 0 if ev["verdict"]["coverage"] == "PROVEN" else 3
 
 

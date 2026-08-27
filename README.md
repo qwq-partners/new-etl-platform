@@ -96,7 +96,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 - **capability 축은 13축으로 재설계됐다**(`g0_axes.py` — 표 기반 pure function).
   `watermark_commit_bound` 를 복원했다. apply lag 와 `commit_time − watermark_value` 는
   독립인데 감축 과정에서 한 축으로 합쳐졌던 것이 P0-05 다.
-- 회귀 시험: `python3 g0-normalize-tests.py`(56건) · `python3 g0-axes-tests.py`(79건)
+- 회귀 시험: `g0-normalize-tests.py`(56건) · `g0-axes-tests.py`(79건) · `g0-b1-analyzer-tests.py`(30건)
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
 
@@ -134,8 +134,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 **S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 그러나 7차 교차 리뷰가 **G0-0 실행 전에 닫아야 할 P0 6건**을
 확정했다(`…-seventh-review-assessment.md`). 측정기를 고치는 것이 실측의 전제다 — 순서가 바뀌었다.
 
-0. **P0 6건 수정** — 검토서 §5 의 조치 순서. **0·1·2·3 완료**(NLS 정정 / gate_eligible const /
-   증거 봉투 fail-closed / 축 재설계). 남은 것은 **4(analyzer fail-closed·MIXED 판정)** 와
+0. **P0 6건 수정** — 검토서 §5 의 조치 순서. **0·1·2·3·4 완료**(NLS 정정 / gate_eligible const /
+   증거 봉투 fail-closed / 축 재설계 / analyzer 판정 수정). 남은 것은
    **5(B1 path-specific fail injection 하네스)**
 1. **Oracle 이 붙는 환경 확보** — S4~S8 이 전부 여기에 걸려 있다. **사용자 WSL2 에서 한다**
 2. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전

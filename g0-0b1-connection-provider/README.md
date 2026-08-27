@@ -98,6 +98,31 @@ classpath 에 오르지 않아 stock `BasicConnectionProvider` 가 조용히 쓰
 - **`NOT_PROVEN`** — 위 중 하나가 아니다. 어느 질문이 걸렸는지 `blocking` 에 나온다.
 - **`MEASUREMENT_FAILED`** — 추적 라인이 0건이다. 이건 **"덮지 못한다"가 아니라 "측정하지 못했다"** 이다. 둘을 섞으면 안 된다.
 
+### 2026-08-27 — verdict 를 성질별로 나눴다 (7차 교차 리뷰 P0-06)
+
+`verdict.coverage` 하나로 네 가지 다른 질문에 답하던 것을 `verdicts` 로 분리했다.
+
+| verdict | 뜻 |
+|---|---|
+| `provider_reachability` | provider 가 `SCHEMA`·`TASK` 에서 불렸는가 |
+| `session_assertion` | coverage 회차의 모든 connection 이 프리앰블을 받았는가 |
+| `fail_closed` | 프리앰블이 실패하면 죽는가 |
+| `read_only_transaction` | **`NOT_IMPLEMENTED`** — `Preamble` 에 `SET TRANSACTION READ ONLY` 가 없다 |
+| `common_snapshot` | **`NOT_IMPLEMENTED`** — 시험 대상이 아니다 |
+
+**그래서 `PROVEN` 은 snapshot capability 의 증거가 아니다.** 이 둘을 한 값에 담고 있었다.
+
+### 두 가지 판정 오류를 고쳤다
+
+1. **`MIXED` 를 양쪽으로 세던 것.** `seen_schema = SCHEMA + MIXED`, `seen_task = TASK + MIXED`
+   라서 `MIXED` 한 건이 두 경로의 관측으로 계상됐다. 이제 `MIXED`·`UNKNOWN` 은 **어느 쪽에도
+   기여하지 않고**, 사람이 `raw_stack` 을 보고 재판정해야 한다.
+2. **주입이 닿지 않은 경로를 통과로 세던 것.** `fail=all` 은 provider 가 처음 불린 connection
+   에서 즉시 던지므로, 각 step 이 schema 해석에서 막혀 **task connection 을 열지 못할 수 있다.**
+   그 회차의 "전 step 이 실패했다"는 task 경로에 대해 아무것도 말하지 않는다. 이제
+   `failclosed_by_path` 에 그 경로가 없으면 `NOT_OBSERVED` 이며 통과가 아니다.
+   경로별 주입점(`fail=schema|task|metadata`)이 필요하다 — **조치 5 의 과제다.**
+
 `path_guess` 는 **스택 추정이지 확정이 아니다.** 그래서 모든 라인에 `raw_stack` 상위 18프레임을 그대로 남긴다 — 분류기가 틀려도 사람이 재판정할 수 있어야 한다. `UNKNOWN` 이 많으면 분류기를 고칠 일이지 결론을 낼 일이 아니다.
 
 ---
@@ -141,7 +166,7 @@ classpath 에 오르지 않아 stock `BasicConnectionProvider` 가 조용히 쓰
 |---|---|
 | `build.sh` (`javac --release 17 -Xlint:all`) | **exit 0** — Spark 4.2.0/2.13.18 · 3.5.9/2.12.18 · 3.5.9/2.13.8 세 판본. 우리 코드 경고 0건 |
 | SPI 배선 | **도달 확인** — 세 판본 모두 `ConnectionProviderBase.create` 에서 호출. `path_guess=SCHEMA` 3건 |
-| `analyze-trace.py` | **실제 추적으로 처음 검증** — 추적 0건 → `MEASUREMENT_FAILED`(5), `SCHEMA` 만 → `NOT_PROVEN`(3) |
+| `analyze-trace.py` | **실제 추적으로 처음 검증** — 추적 0건 → `MEASUREMENT_FAILED`(5), `SCHEMA` 만 → `NOT_PROVEN`(3). 2026-08-27 판정 오류 2건 수정 후 반례 시험 30건 통과(`g0-b1-analyzer-tests.py`) |
 
 **아직 아닌 것.** 위 회차는 Oracle 서버 없이 도달 불가 URL 로 돌렸다. 따라서
 
