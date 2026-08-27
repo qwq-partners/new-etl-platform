@@ -73,7 +73,9 @@ def main():
     ev["runs_seen"] = {k: len(v) for k, v in runs.items()}
 
     cov = runs.get("coverage") or runs.get("unspecified") or []
-    fcl = runs.get("failclosed") or []
+    # **failclosed 회차가 여럿이다**(2026-08-27, 조치 5). 경로별 주입을 쓰면
+    # failclosed_schema / failclosed_task 처럼 나뉘므로 접두사로 모은다.
+    fcl = [c for k, v in runs.items() if k.startswith("failclosed") for c in v]
     if not cov:
         ev["verdict"] = {"coverage": "MEASUREMENT_FAILED",
                          "reason": ("coverage 회차의 추적이 없다. run.sh 가 -Dg0b1.run=coverage 를 "
@@ -149,13 +151,23 @@ def main():
         ok_steps = sorted({st for r in fc for st in (r.get("ok_steps_under_fail_all") or [])})
         swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
         fc_by_path = Counter(c.get("path_guess") for c in fcl)
+        # **주입이 닿았다는 것을 추적 라인의 사실로 읽는다.** tracer 가 injection_target /
+        # injection_applied 를 남기므로 preamble_error 존재로 추정하지 않아도 된다.
+        # 옛 추적(그 필드가 없는 것)은 폴백으로 preamble_error 를 본다.
+        has_flag = any("injection_applied" in c for c in fcl)
+        if has_flag:
+            applied_by_path = Counter(c.get("path_guess") for c in fcl
+                                      if c.get("injection_applied") is True)
+        else:
+            applied_by_path = Counter(c.get("path_guess") for c in fcl
+                                      if c.get("preamble_error"))
         # **경로별로 실제 주입이 닿았는지 본다**(7차 교차 리뷰 P0-06).
         # fail=all 은 provider 가 처음 불린 connection 에서 즉시 던진다. 그래서 각 step 이
         # schema 해석에서 막혀 task connection 에 **도달조차 못 할 수 있다.** 그런 회차에서
         # "전 step 이 실패했다"는 task 경로의 fail-closed 를 하나도 말해 주지 않는다.
         # 이전 판은 그 경우에도 YES 를 줬다.
-        fc_reached = [nm for nm in ("SCHEMA", "TASK") if fc_by_path.get(nm)]
-        fc_missing = [nm for nm in ("SCHEMA", "TASK") if not fc_by_path.get(nm)]
+        fc_reached = [nm for nm in ("SCHEMA", "TASK") if applied_by_path.get(nm)]
+        fc_missing = [nm for nm in ("SCHEMA", "TASK") if not applied_by_path.get(nm)]
         if broken:
             answer, note = "NO", (
                 f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
@@ -167,8 +179,9 @@ def main():
                 f"(도달한 경로: {fc_reached or '없음'}). fail=all 은 provider 가 처음 불린 "
                 f"connection 에서 즉시 던지므로, 각 step 이 schema 해석에서 막혀 task "
                 f"connection 을 열지 못했을 수 있다. **그 경로의 fail-closed 는 시험되지 "
-                f"않았다** — 시험하지 않은 것은 통과가 아니다. 경로별 주입점"
-                f"(fail=schema|task)이 필요하다.")
+                f"않았다** — 시험하지 않은 것은 통과가 아니다. "
+                f"`-Dg0b1.fail={','.join(m.lower() for m in fc_missing)}` 회차를 따로 돌려라 "
+                f"(run.sh 가 failclosed_schema·failclosed_task 로 나눠 돌린다).")
         else:
             answer, note = "YES", (
                 f"두 경로({fc_reached}) 모두에 주입이 닿았고 전 step 이 실패했다.")
@@ -178,6 +191,9 @@ def main():
                          "failed_connections_in_failclosed": len(swallowed),
                          "succeeded_steps_under_fail_all": ok_steps,
                          "failclosed_by_path": dict(fc_by_path),
+                         "injection_applied_by_path": dict(applied_by_path),
+                         "injection_evidence": "tracer flag" if has_flag else "preamble_error 추정(옛 추적)",
+                         "failclosed_runs": sorted(k for k in runs if k.startswith("failclosed")),
                          "injection_reached_paths": fc_reached,
                          "injection_missing_paths": fc_missing},
             "answer": answer,

@@ -388,7 +388,7 @@ G0-0 completed  != G0 PASS
 | 2 ✅ | P0-02~04 — evidence envelope · child manifest · binding 을 fail-closed 로 | **완료**(2026-08-27). `g0-0-evidence.schema.json` 신설·구 스키마 삭제, `g0-child-contract.md` + `g0-run-child.sh`, strict aggregator 재작성, exit 0/3/4 분리, CE returncode·config digest. 회귀 시험 `g0-normalize-tests.py` 40건 통과 |
 | 3 ✅ | P0-01·05 — 축 모델을 표 기반 pure function 으로 재작성 + §5.1 반례 자동화 | **완료**(2026-08-27). `g0_axes.py` 신설 — 7축 → **13축**. `watermark_commit_bound` 복원, 접근 가능성/값 probe 분리, 양성 대조 요구, 실패 taxonomy(transient≠NONE), binding 없으면 테이블 축 UNDETERMINED, 합성 축 분리. overlay §3 표는 폐기하고 부록 A 로 대체. 반례 시험 79건 통과 |
 | 4 ✅ | P0-06(a) — analyzer 의 fail-closed·`MIXED` 판정 수정 | **완료**(2026-08-27). `MIXED`·`UNKNOWN` 은 어느 경로에도 계상하지 않는다. `fail=all` 주입이 닿지 않은 경로는 `NOT_OBSERVED`(통과 아님). verdict 를 5개로 분리하고 `read_only_transaction`·`common_snapshot` 을 `NOT_IMPLEMENTED` 로 명시. 반례 시험 30건 통과. **(b)는 여전히 S6 에서 잰다** |
-| 5 | B1 을 path-specific fail injection 하네스로 확장 후 pinned Spark 에서 실행 | **build·SPI 배선은 2026-08-27 에 이미 했다**(3판본). 남은 것은 하네스 확장과 **Oracle 이 있는 환경** |
+| 5 ✅(코드) | B1 을 path-specific fail injection 하네스로 확장 후 pinned Spark 에서 실행 | **하네스 확장 완료**(2026-08-27). `g0b1.fail=none\|all\|schema\|task\|metadata\|조합`, 주입 사실을 추적에 기록(`injection_target`/`injection_applied`), `run.sh` 가 세 회차(coverage·failclosed_schema·failclosed_task)를 돌린다. Java 매트릭스 26건 + analyzer 40건 통과. **남은 것은 Oracle 이 있는 환경에서의 실행뿐이다** |
 | 6 | 가장 덜 민감한 사내 DR source 에서 A → B0 → B1 | 그대로. C00 full-scan 계열은 별도 승인 전 미실행 |
 | 7 | C01~C09 는 폐기 가능한 writable Oracle 에서만 | 그대로. child returncode·suite config digest 수정 후 |
 | 8 | overlay distribution 확인 후 A/P v2.0 개정 | 그대로 |

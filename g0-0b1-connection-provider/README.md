@@ -127,11 +127,45 @@ classpath 에 오르지 않아 stock `BasicConnectionProvider` 가 조용히 쓰
 
 ---
 
-## 5. fail-closed 실험
+## 5. fail-closed 실험 — **경로별로 나눠 돌린다**
 
-`-Dg0b1.fail=all` 로 **모든** 경로의 프리앰블을 강제 실패시킨다. 그러면 job 은 **죽어야 한다**.
+프리앰블을 강제 실패시켜 job 이 정말 죽는지 본다. 살아남으면 그 경로가 connection 예외를 삼킨 것이고, 그건 **P0** 다 — 그 경로는 세션 단언 없이 원천을 읽는다.
 
-살아남으면 그 경로가 connection 예외를 삼킨 것이고, 그건 **P0** 다 — 그 경로는 세션 단언 없이 원천을 읽는다. Spark 4.2.0 이 예외를 삼키는 metadata connection 을 하나 더 연다는 관측이 있어 이 실험을 넣었다.
+### `fail=all` 하나로는 부족했다 (2026-08-27, 7차 교차 리뷰 P0-06)
+
+`all` 은 provider 가 **처음 불린** connection 에서 즉시 던진다. 그래서 각 step 이 schema 해석에서 막혀 **task connection 을 아예 열지 못한다.** 그 회차의 "전 step 이 실패했다"는 task 경로의 fail-closed 에 대해 **아무것도 말하지 않는데**, 판정기는 그것을 통과로 세고 있었다.
+
+```
+-Dg0b1.fail=none              주입 없음(기본)
+-Dg0b1.fail=all               모든 경로
+-Dg0b1.fail=schema            SCHEMA 만
+-Dg0b1.fail=task              schema 는 통과시키고 TASK 에서만 던진다
+                              ← **task 경로 fail-closed 의 유일한 증거**
+-Dg0b1.fail=metadata          METADATA 만(이 하네스는 유발하지 않는다)
+-Dg0b1.fail=schema,task       조합
+```
+
+`run.sh` 는 이제 세 회차를 돌린다 — `coverage` → `failclosed_schema` → `failclosed_task`.
+
+**경로를 지정하면 `MIXED`·`UNKNOWN` 에는 주입하지 않는다.** 분류기가 갈피를 못 잡은 connection 에 주입하면 어느 경로를 시험한 것인지 말할 수 없다. `all` 만 예외다.
+
+### 주입 사실을 추적에 남긴다
+
+판정기가 "그 경로에 주입이 닿았는가"를 `preamble_error` 존재로 **추정**하던 것을 사실로 바꿨다. 추적 라인에 세 필드가 붙는다.
+
+| 필드 | 뜻 |
+|---|---|
+| `fail_mode` | 이 회차의 주입 설정 |
+| `injection_target` | **이 connection 이** 주입 대상인가 |
+| `injection_applied` | 대상이었고 실제로 던져졌는가 |
+
+`injection_applied=true` 인 경로만 "시험됐다"로 센다. 그 외에는 `NOT_OBSERVED` 이며 통과가 아니다.
+
+### 단위 시험
+
+```bash
+./build.sh && ./run-tests.sh      # Preamble.shouldFail 매트릭스 26건
+```
 
 ---
 

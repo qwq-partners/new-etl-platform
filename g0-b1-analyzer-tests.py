@@ -39,8 +39,9 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         print(f"  FAIL  {name}  {detail}")
 
 
-def conn(run: str, path: str, *, preamble_ok=True, preamble_error=None):
-    return {"event": "connection", "run": run, "conn_id": f"{run}-{path}-x",
+def conn(run: str, path: str, *, preamble_ok=True, preamble_error=None,
+         fail_mode=None, injection_target=None):
+    r = {"event": "connection", "run": run, "conn_id": f"{run}-{path}-x",
             "path_guess": path, "jvm": "1@t", "thread": "main",
             "url_host": "@//h:1521/s", "open_error": None,
             "preamble": ({"ok": preamble_ok, "db_unique_name": "ETLSTB",
@@ -49,6 +50,12 @@ def conn(run: str, path: str, *, preamble_ok=True, preamble_error=None):
                           "error": preamble_error} if preamble_ok or preamble_error else None),
             "preamble_error": preamble_error, "elapsed_ms": 1,
             "driver_props_passed": ["user"], "raw_stack": ["x.y"]}
+    if fail_mode is not None:
+        # tracer 가 남기는 주입 사실. 판정기가 preamble_error 로 추정하지 않게 한다.
+        r["fail_mode"] = fail_mode
+        r["injection_target"] = bool(injection_target)
+        r["injection_applied"] = bool(injection_target) and preamble_error is not None
+    return r
 
 
 def result(mode: str, status: str, ok_steps=None):
@@ -187,13 +194,61 @@ def t_measurement_failed():
     shutil.rmtree(w)
 
 
+def t_path_specific_injection():
+    """조치 5 — 경로별 회차를 돌리면 task 경로 fail-closed 가 실증된다."""
+    print("\n[8] 경로별 주입 회차(failclosed_schema · failclosed_task) — 조치 5")
+    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
+    # schema 만 주입한 회차: schema 는 죽고 task 는 애초에 열리지 않는다
+    traces += [conn("failclosed_schema", "SCHEMA", preamble_ok=False, preamble_error="f",
+                    fail_mode="schema", injection_target=True)]
+    # task 만 주입한 회차: schema 는 **정상 통과**하고 task 에서만 죽는다
+    traces += [conn("failclosed_task", "SCHEMA", preamble_ok=True,
+                    fail_mode="task", injection_target=False),
+               conn("failclosed_task", "TASK", preamble_ok=False, preamble_error="f",
+                    fail_mode="task", injection_target=True)]
+    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
+                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
+    check("두 회차가 모두 집계된다",
+          f["observed"]["failclosed_runs"] == ["failclosed_schema", "failclosed_task"],
+          str(f["observed"].get("failclosed_runs")))
+    check("주입 근거가 추정이 아니라 tracer flag 다",
+          f["observed"]["injection_evidence"] == "tracer flag",
+          f["observed"].get("injection_evidence"))
+    check("SCHEMA·TASK 양쪽에 주입이 닿았다",
+          f["observed"]["injection_reached_paths"] == ["SCHEMA", "TASK"],
+          str(f["observed"].get("injection_reached_paths")))
+    check("fail-closed=YES", f["answer"] == "YES", f["answer"])
+    check("PROVEN", ev["verdict"]["coverage"] == "PROVEN", ev["verdict"]["coverage"])
+    check("exit 0", rc == 0, f"rc={rc}")
+
+
+def t_injection_target_false_is_not_reach():
+    """주입 대상이 아니어서 통과한 connection 을 '닿았다' 로 세지 않는다."""
+    print("\n[9] 주입 대상이 아닌 통과를 '주입이 닿았다' 로 세지 않는다")
+    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
+    # task 만 주입했는데 task connection 이 아예 안 열린 회차
+    traces += [conn("failclosed_task", "SCHEMA", preamble_ok=True,
+                    fail_mode="task", injection_target=False)]
+    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
+                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
+    check("어느 경로에도 주입이 닿지 않았다",
+          f["observed"]["injection_reached_paths"] == [],
+          str(f["observed"].get("injection_reached_paths")))
+    check("NOT_OBSERVED", f["answer"] == "NOT_OBSERVED", f["answer"])
+    check("다음에 무엇을 돌릴지 알려 준다", "g0b1.fail=" in f["note"], f["note"][:100])
+    check("PROVEN 이 아니다", ev["verdict"]["coverage"] == "NOT_PROVEN")
+
+
 def main() -> int:
     print("=" * 70)
     print("analyze-trace.py 반례 회귀 시험 — 7차 교차 리뷰 P0-06(a)")
     print("=" * 70)
     for t in (t_mixed_not_double_counted, t_failclosed_without_task_injection,
               t_failclosed_positive, t_verdicts_separated, t_swallowed_path_still_no,
-              t_no_failclosed_run, t_measurement_failed):
+              t_no_failclosed_run, t_measurement_failed, t_path_specific_injection,
+              t_injection_target_false_is_not_reach):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")
