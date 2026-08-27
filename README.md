@@ -20,6 +20,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | DBA 권한 요청 방향 | **보류**(2026-08-27) — 받아도 순이익이 아니거나 요청서가 틀렸다 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
 | **S1~S3 실행 결과** | `g0-0-s1-s3-results.md` — B1 이 실제 Spark jar 3판본에 대고 빌드·배선됐다. 정정 2건 |
+| **7차 교차 리뷰 판정** | **완료**(2026-08-27) — 리뷰 23건 중 **기각 0건**. G0-0 실행 전에 닫아야 할 P0 6건 확정 |
 | A v2.0 / P v2.0 규범 개정 | G0-0 결과 확정 후 착수 |
 
 **핵심 원칙**: 실측(G0-0) 전에는 규범 문서를 대규모로 고치지 않는다. 실측 하나가 여러 절의 상태·enum을 뒤집기 때문이다.
@@ -54,6 +55,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 3차 | `etl-platform-v1.2.2-codex-third-cross-review.md` | `…-third-review-assessment.md`(v3.1 — 4차 확인 반영) |
 | 5차 | `etl-platform-v2.0-codex-cross-review.md` | `etl-platform-v2.0-codex-review-assessment.md` |
 | 6차 | `etl-platform-v2.0-codex-review-assessment-recheck.md`(재검증) | — |
+| 7차 | `etl-platform-v2.0-codex-seventh-cross-review.md` | `etl-platform-v2.0-codex-seventh-review-assessment.md` — **P0 6 / P1 12 / P2 5 재판정. 기각 0건** |
 
 리뷰 요청서: `codex-cross-review-prompt.md`(1차) · `codex-cross-review-prompt-v2.0.md`(v2.0)
 
@@ -119,9 +121,11 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 5. 다음 작업
 
-**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 남은 것은 전부 **실제 Oracle 이 있어야 하는 것**이다.
+**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 그러나 7차 교차 리뷰가 **G0-0 실행 전에 닫아야 할 P0 6건**을
+확정했다(`…-seventh-review-assessment.md`). 측정기를 고치는 것이 실측의 전제다 — 순서가 바뀌었다.
 
-1. **Oracle 이 붙는 환경 확보** — 이것이 지금 유일한 병목이다. S4~S8 이 전부 여기에 걸려 있다
+0. **P0 6건 수정** — 검토서 §5 의 조치 순서를 따른다. `NLS_NUMERIC_CHARACTERS` 정정(0번)은 완료
+1. **Oracle 이 붙는 환경 확보** — S4~S8 이 전부 여기에 걸려 있다. **사용자 WSL2 에서 한다**
 2. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전
 3. **G0-0B1 본실행** — 빌드·배선은 확인됐다. 남은 질문은 §1의 셋 그대로다:
    `TASK` 경로 커버리지 / 프리앰블 전면 적용 / fail-closed 성립. **셋 다 아직 미측정이다**

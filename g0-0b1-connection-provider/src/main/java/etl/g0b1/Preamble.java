@@ -91,7 +91,12 @@ final class Preamble {
         try (Statement s = c.createStatement()) {
             s.setQueryTimeout(timeoutS);
             s.execute("ALTER SESSION SET TIME_ZONE = DBTIMEZONE");
-            s.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '. '");
+            // **'.,' 다.** A(§6.1 세션 프리앰블)·P(§3.2 NUMBER 실행 규격 ⑥ 로케일 차단)·G0-0A
+            // ·G0-0B0 가 모두 '.,' 를 고정한다. 여기만 '. '(그룹 구분자 공백)였다 —
+            // Oracle 이 받는 유효한 값이라 조용히 달랐고, 그러면 B1 이 재는 세션이 규범이
+            // 규정한 세션이 아니게 되어 B1 통과가 규범 세션의 성립을 시사하지 못한다.
+            // 7차 교차 리뷰 P0-06 에서 지적, 2026-08-27 검토서에서 확정.
+            s.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'");
             String d = prop("g0b1.max.delay", null);
             if (d != null) {
                 s.execute("ALTER SESSION SET STANDBY_MAX_DATA_DELAY = " + Integer.parseInt(d));
