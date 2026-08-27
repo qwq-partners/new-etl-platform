@@ -24,3 +24,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.swp
+
+# G0-0B1 빌드 산출물
+g0-0b1-connection-provider/build/
+*.jar
+g0-0b1-evidence.json
