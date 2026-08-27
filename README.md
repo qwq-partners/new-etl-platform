@@ -85,8 +85,17 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence 반례 fact collector | 운영계 제한적(`ACK_FULL_SCAN` 게이트) |
 | **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness (9종 구현 완료) | **폐기용 쓰기 가능 환경 전용** |
 
-**증거 계약**: `g0-evidence.schema.json` + `g0-normalize.py` — 각 단계의 산출물을 하나의
-`g0_evidence` 레코드로 정규화한다. capability 축을 probe 결과에서 파생하고 근거를 함께 남긴다.
+**증거 계약**(2026-08-27 재설계 — 7차 리뷰 P0-02·03·04): `g0-0-evidence.schema.json` +
+`g0-normalize.py` + `g0-child-contract.md` + `g0-run-child.sh`.
+
+- record_type 은 **`g0_0_evidence`** 다. P §8.1 의 최종 `g0_evidence` 와 **이름이 다르다** —
+  같은 이름으로 두 계약을 정의하던 것이 P0-04 였다. `gate_eligible` 은 schema 의 `const false` 다.
+- 각 산출물은 `g0-run-child.sh` 로 실행해 **manifest 사이드카**를 남긴다. 실행 시점의
+  `versions.lock` digest·종료 코드·산출물 해시가 거기 박히고, 집계기가 그것을 대조한다.
+- 계약 위반·schema 위반은 경고가 아니라 **거부**다(exit 4, 최종 경로에 쓰지 않는다).
+- **capability 축 파생은 현재 중단 상태다** — 축 모델 재설계(조치 3)가 끝날 때까지
+  전부 `UNDETERMINED` 로 낸다. 틀린 값을 만드는 것보다 만들지 않는 것이 낫다.
+- 회귀 시험: `python3 g0-normalize-tests.py` (반례 15종 + 양성 대조 1종)
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
 

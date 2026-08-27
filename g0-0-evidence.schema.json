@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "g0-0-evidence.schema.json",
+  "title": "G0-0 capability inventory 증거 레코드",
+  "description": "**이것은 P §8.1 의 최종 g0_evidence 가 아니다.** 7차 교차 리뷰 P0-04 의 조치로 분리했다. 이전 g0-evidence.schema.json 은 record_type 을 'g0_evidence' 로 쓰면서 P §8.1 이 요구하는 ddl_digest·verdict_sql_digest·canonical_hash_spec_digest·hash_vector_result·submission_path_result·source_kind·oracle_env 를 additionalProperties:false 로 거부했다 — 즉 같은 이름으로 서로 다른 두 계약을 정의했고 최종 레코드는 오히려 schema-invalid 였다. 이 파일은 G0-0(capability inventory)만 표현하며 gate_eligible 은 const false 다. 최종 g0_evidence 스키마는 G0-1~G0-5 산출물이 생길 때 별도로 만든다 — 실물 없는 계약을 미리 만들지 않는다.",
+  "type": "object",
+  "required": ["schema_version", "record_type", "scope", "gate_eligible", "completeness",
+               "g0_report_id", "run_id", "profile", "normalized_at",
+               "versions_lock_digest", "children", "coverage", "not_covered", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "2.0.0" },
+
+    "record_type": { "const": "g0_0_evidence",
+      "description": "**g0_evidence 가 아니다.** 이름이 다른 것이 이 스키마의 요점이다 — 기계가 부분 레코드와 최종 G0 레코드를 구분할 수 있어야 한다." },
+
+    "scope": { "const": "CAPABILITY_INVENTORY",
+      "description": "G0-0 이 덮는 범위. G0-1(DDL)·G0-2(판정 SQL)·G0-3(canonical hash 벡터)·G0-4(제출 경로)·G0-5(동일 lock)은 이 레코드가 말하지 않는다." },
+
+    "gate_eligible": { "const": false,
+      "description": "**const 다. 도구가 이 값을 바꿀 방법이 없다.** G0-0 completed != G0 PASS. G0 PASS 는 G0-1 && G0-2 && G0-3 && G0-4 && same_lock(G0-5) 이며 그것을 판정하는 aggregator 는 아직 없다." },
+
+    "completeness": {
+      "enum": ["COMPLETE", "INCOMPLETE"],
+      "description": "COMPLETE 는 다섯 child 가 전부 MEASURED 라는 뜻일 뿐이다. 그래도 gate_eligible 은 false 다." },
+
+    "g0_report_id": { "type": "string", "minLength": 1,
+      "description": "이 정규화 회차의 식별자. 재실행마다 달라야 한다." },
+
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "child 들이 공유하는 실행 회차 식별자. 모든 child manifest 의 run_id 와 같아야 한다 — 다르면 서로 다른 회차의 산출물을 섞은 것이므로 집계를 거부한다." },
+
+    "profile": { "enum": ["LOCAL_WSL", "CORP_POC", "SANDBOX_CONTAINER"],
+      "description": "LOCAL_WSL·SANDBOX_CONTAINER 증거는 하네스 동작 확인용이며 설계 주장의 근거가 아니다. SANDBOX_CONTAINER 는 원천에 붙지 못하는 일회성 컨테이너(Oracle 없음)이므로 제약이 LOCAL_WSL 보다 강하다. child manifest 들과 일치해야 한다." },
+
+    "normalized_at": { "type": "string", "format": "date-time",
+      "description": "**정규화 시각이다. 측정 시각이 아니다.** 측정 시각은 children[*].measured_at 에 child 가 스스로 적은 것이 권위다(7차 리뷰 P0-03)." },
+
+    "versions_lock_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$",
+      "description": "versions.lock 의 sha256. **UNSET 을 허용하지 않는다** — 판본을 모르면 레코드를 만들지 않는다. 모든 child manifest 의 실행 시점 digest 와 같아야 한다." },
+
+    "children": {
+      "type": "object",
+      "description": "child manifest 요약(g0-child-contract.md). 집계기가 대조한 결과를 그대로 보존한다.",
+      "required": ["g0_0a", "g0_0b0", "g0_0b1", "g0_0c00", "g0_0c_suite"],
+      "additionalProperties": false,
+      "properties": {
+        "g0_0a":       { "$ref": "#/$defs/child" },
+        "g0_0b0":      { "$ref": "#/$defs/child" },
+        "g0_0b1":      { "$ref": "#/$defs/child" },
+        "g0_0c00":     { "$ref": "#/$defs/child" },
+        "g0_0c_suite": { "$ref": "#/$defs/child" }
+      }
+    },
+
+    "source": {
+      "type": "object",
+      "description": "서버가 스스로 밝힌 신원. 운영자 신고값이 아니다. **테이블 단위 축을 하나라도 확정값으로 내려면 target_owner·target_table 이 있어야 한다** — 그 강제는 capability_axes[*].binding 에서 한다.",
+      "additionalProperties": false,
+      "properties": {
+        "db_unique_name": { "type": "string" }, "database_role": { "type": "string" },
+        "instance_name": { "type": "string" }, "oracle_version": { "type": "string" },
+        "characterset": { "type": "string" }, "nchar_characterset": { "type": "string" },
+        "max_string_size": { "type": "string" },
+        "target_owner": { "type": "string" },
+        "target_table": { "type": "string" }, "wm_column": { "type": "string" }
+      }
+    },
+
+    "coverage": {
+      "type": "object",
+      "description": "G0-0 산출물별 수집 상태. MEASURED 가 아닌 것은 그 산출물이 답하는 질문이 전부 미확정이라는 뜻이다.",
+      "required": ["g0_0a", "g0_0b0", "g0_0b1", "g0_0c00", "g0_0c_suite"],
+      "additionalProperties": false,
+      "properties": {
+        "g0_0a":       { "$ref": "#/$defs/cov" },
+        "g0_0b0":      { "$ref": "#/$defs/cov" },
+        "g0_0b1":      { "$ref": "#/$defs/cov" },
+        "g0_0c00":     { "$ref": "#/$defs/cov" },
+        "g0_0c_suite": { "$ref": "#/$defs/cov" }
+      }
+    },
+
+    "not_covered": {
+      "type": "array", "minItems": 9, "uniqueItems": true,
+      "description": "**고정 집합이다.** 자유 텍스트였을 때는 dummy 한 항이면 minItems:1 을 통과했다(7차 리뷰 P0-04). 아홉 항이 전부 있어야 하며 그 밖의 값은 넣을 수 없다. 각 항의 why 는 자유롭게 쓴다.",
+      "items": {
+        "type": "object", "required": ["item", "why"], "additionalProperties": false,
+        "properties": {
+          "item": { "enum": [
+            "hash_vector_result (V-01~V-16)",
+            "ddl_digest",
+            "verdict_sql_digest",
+            "canonical_hash_spec_digest",
+            "submission_path_result",
+            "source_kind",
+            "oracle_env.nls_nchar_characterset",
+            "oracle_env.max_string_size",
+            "same_lock (G0-5)"
+          ] },
+          "why": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+
+    "account_privs": {
+      "type": "array",
+      "description": "G0-0A 의 probe 결과 원본. query_ok / row_present / value_interpretable 3분리를 그대로 보존한다.",
+      "items": { "type": "object", "required": ["probe"], "additionalProperties": true,
+        "properties": { "probe": { "type": "string" } } }
+    },
+
+    "capability_axes": {
+      "type": "object",
+      "description": "**축 이름과 값 enum 은 아직 고정하지 않는다.** 7차 리뷰 P0-05 가 현행 7축이 독립 성질을 합쳤다고 판정했고 그 재분리(조치 3)가 아직 끝나지 않았다. 축을 두 번 바꾸는 것이 한 번 늦게 바꾸는 것보다 나쁘므로, 이 스키마는 지금 **축의 형태만** 강제한다 — 값·근거·범위·묶인 대상·측정 시각·유효기간. 조치 3 이 끝나면 축 이름을 명시 property 로 박고 schema_version 을 올린다.",
+      "additionalProperties": { "$ref": "#/$defs/axis" }
+    },
+
+    "artifacts": {
+      "type": "object",
+      "description": "원본 산출물의 위치와 digest. 정규화 결과만 남기고 원본을 버리면 재판정이 불가능하다.",
+      "additionalProperties": {
+        "type": "object", "required": ["path", "sha256"], "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "lines": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+
+    "spark_paths": { "type": "object", "description": "G0-0B1 판정 요약(verdict·경로별 건수)." },
+    "fence_facts": { "type": "object", "description": "G0-0C00 결과. ACK_FULL_SCAN=N 이면 대부분 skipped 다." },
+    "counterexamples": { "type": "object", "description": "G0-0C suite verdict 요약." },
+
+    "contract_violations": {
+      "type": "array", "items": { "type": "string" },
+      "description": "child 계약(g0-child-contract.md) 위반. **비어 있지 않으면 이 레코드는 최종 경로에 쓰이지 않는다**(exit 4). 거부 사본에만 남는다." },
+
+    "warnings": { "type": "array", "items": { "type": "string" },
+      "description": "정규화 중 발견한 것. 계약 위반은 여기가 아니라 contract_violations 에 넣는다." }
+  },
+
+  "$defs": {
+    "cov": {
+      "type": "object", "required": ["status"], "additionalProperties": false,
+      "properties": {
+        "status": { "enum": ["MEASURED", "PARTIAL", "FAILED", "NOT_RUN"] },
+        "reason": { "type": "string" },
+        "counts": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    },
+
+    "child": {
+      "type": "object", "required": ["present"], "additionalProperties": false,
+      "description": "manifest 가 없으면 present:false 이며 그 child 는 coverage 에서 FAILED 다 — '안 돌렸다'(NOT_RUN)와 '계약을 안 지켰다'는 다르다.",
+      "properties": {
+        "present": { "type": "boolean" },
+        "run_id": { "type": "string" },
+        "measured_at": { "type": "string", "format": "date-time",
+          "description": "**child 가 적은 값이다. 집계기가 바꾸지 않는다.**" },
+        "exit_code": { "type": "integer" },
+        "versions_lock_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$|^MISSING$" },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$|^MISSING$" },
+        "artifact_verified": { "type": "boolean",
+          "description": "manifest 가 적은 해시와 집계 시점 파일 해시가 같은가. false 면 실행 후 산출물이 바뀐 것이다." },
+        "runtime": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+
+    "axis": {
+      "type": "object",
+      "required": ["value", "scope", "binding", "measured_at", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": "string", "minLength": 1 },
+        "scope": { "enum": ["DB", "ACCOUNT", "TABLE", "COLUMN", "CONNECTION", "RUNTIME", "UNDETERMINED"],
+          "description": "이 값이 무엇 하나당 한 번 재는 것인가. overlay §5 의 두 층을 형태로 강제한다." },
+        "binding": {
+          "description": "이 값이 묶인 대상. scope 가 UNDETERMINED 면 null 이어야 한다 — **묶이지 않은 확정값을 만들 수 없다**(7차 리뷰 P0-03). TABLE/COLUMN scope 면 owner·object 가 필수다.",
+          "oneOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false,
+              "required": ["db_identity"],
+              "properties": {
+                "db_identity": { "type": "string", "minLength": 1 },
+                "owner": { "type": "string" }, "object": { "type": "string" },
+                "object_type": { "type": "string" }, "column": { "type": "string" }
+              } }
+          ]
+        },
+        "measured_at": {
+          "oneOf": [ { "type": "null" }, { "type": "string", "format": "date-time" } ],
+          "description": "이 값을 만든 child 의 measured_at. UNDETERMINED 면 null." },
+        "expires_at": {
+          "oneOf": [ { "type": "null" }, { "type": "string", "format": "date-time" } ] },
+        "stale": { "type": "boolean",
+          "description": "유효기간이 지났는가. **stale 이면 effective_value 가 floor 로 내려간다** — 표시용 이전 값을 안전성 판정에 쓰지 않는다(7차 리뷰 P1-02)." },
+        "effective_value": { "type": "string",
+          "description": "실행에 쓰는 값. stale 이 아니면 value 와 같고, stale 이면 UNKNOWN 또는 축의 floor 다." },
+        "inputs": {
+          "type": "array", "minItems": 1,
+          "description": "**실제로 읽은** evidence id 만 적는다. 의도한 probe 목록이 아니다(7차 리뷰 P1-06).",
+          "items": { "type": "object", "required": ["probe", "used"], "additionalProperties": false,
+            "properties": {
+              "probe": { "type": "string", "minLength": 1 },
+              "used": { "type": "boolean" },
+              "observed": { "type": ["string", "boolean", "number", "null"] }
+            } }
+        },
+        "considered_but_not_used": { "type": "array", "items": { "type": "string" },
+          "description": "판정에 쓰지 않은 probe. inputs 와 섞지 않는다." },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

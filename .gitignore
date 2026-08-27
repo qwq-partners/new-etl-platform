@@ -5,7 +5,12 @@ evidence-*.json
 *-evidence.json
 *evidence*.log
 g0-0*-evidence-*
+*.rejected.json
+# child manifest 사이드카 — 실행 산출물이다(g0-child-contract.md).
+# 증거의 일부지만 원천 식별자·호스트 정보가 들어가므로 커밋하지 않는다.
+*.manifest.json
 !evidence.schema.json
+!g0-0-evidence.schema.json
 
 # 아카이브(트리가 그대로 있으므로 중복)
 *.tar.gz

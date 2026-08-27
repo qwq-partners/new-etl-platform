@@ -119,9 +119,19 @@ BEGIN
   END;
 
   <<done>>
+  -- **완결 선언.** 이 목록이 없던 동안 집계기는 이 summary 한 줄만 있어도 C00 을 MEASURED 로
+  -- 올렸다(7차 교차 리뷰 P0-02·P1-09). 몇 개를 낼 예정이었는지 산출물이 스스로 말해야
+  -- 집계기가 '블록이 중간에 죽었는가'를 판정할 수 있다.
+  -- 개수를 세어 되읽는 것이 아니라 **분기 조건에서 유도**한다 — 카운터를 세어 자기 자신과
+  -- 비교하면 항등식이라 언제나 통과한다(CE preflight 에서 이미 저지른 오류다).
+  --   · 항상 출력: max_wm / null_wm_rows / future_wm_rows (skipped 여도 라인은 나온다)
+  --   · 조건부   : rows_at_max_wm — ACK_FULL_SCAN=Y 이고 MAX(wm) 이 NULL 이 아닐 때만
   DBMS_OUTPUT.PUT_LINE('{"probe":"fence.summary","ack_full_scan":'||
     CASE WHEN v_ack_full THEN 'true' ELSE 'false' END||',"exact_mode":'||
     CASE WHEN v_exact THEN 'true' ELSE 'false' END||
+    ',"expected_probes":'||CASE WHEN v_ack_full AND v_max IS NOT NULL THEN '4' ELSE '3' END||
+    ',"expected_probe_ids":["fence.max_wm","fence.null_wm_rows","fence.future_wm_rows"'||
+    CASE WHEN v_ack_full AND v_max IS NOT NULL THEN ',"fence.rows_at_max_wm"' ELSE '' END||']'||
     ',"reminder":"F-13(유휴 정지)은 1회 실행으로 관측되지 않는다 — 회차를 나눠 MAX(wm)이 전진하는지 며칠에 걸쳐 기록하라"}');
 END;
 /

@@ -366,10 +366,10 @@ G0-0 completed  != G0 PASS
 
 | # | 조치 | 리뷰와 다른 점 |
 |---|---|---|
-| **0** | **`NLS_NUMERIC_CHARACTERS` `'. '` → `'.,'`** (`Preamble.java:94`, `run-g0-0b1.py:77`) | **신설.** 2문자 수정이고 다른 어느 것도 기다릴 필요가 없다. 이 검토서와 함께 고친다 |
-| 1 | 현재 normalizer 를 gate producer 로 쓰지 않는다 | 그대로 |
-| 2 | P0-02~04 — evidence envelope · child manifest · binding 을 fail-closed 로 | 그대로. **최우선** |
-| 3 | P0-01·05 — 축 모델을 표 기반 pure function 으로 재작성 + §5.1 반례 자동화 | 그대로 |
+| **0** ✅ | **`NLS_NUMERIC_CHARACTERS` `'. '` → `'.,'`** (`Preamble.java`, `run-g0-0b1.py`) | **완료**(2026-08-27). 2문자 수정이고 다른 어느 것도 기다릴 필요가 없었다 |
+| 1 ✅ | 현재 normalizer 를 gate producer 로 쓰지 않는다 | **완료** — `gate_eligible` 을 schema 의 `const false` 로 박았다. 도구가 그 값을 바꿀 방법이 없다 |
+| 2 ✅ | P0-02~04 — evidence envelope · child manifest · binding 을 fail-closed 로 | **완료**(2026-08-27). `g0-0-evidence.schema.json` 신설·구 스키마 삭제, `g0-child-contract.md` + `g0-run-child.sh`, strict aggregator 재작성, exit 0/3/4 분리, CE returncode·config digest. 회귀 시험 `g0-normalize-tests.py` 40건 통과 |
+| 3 | P0-01·05 — 축 모델을 표 기반 pure function 으로 재작성 + §5.1 반례 자동화 | **다음 차례.** 조치 2 에서 축 파생을 **중단**해 두었다(전부 `UNDETERMINED`) — 틀린 값을 만드는 것보다 만들지 않는 것이 낫다. 반례 harness 는 이미 섰다 |
 | 4 | P0-06(a) — analyzer 의 fail-closed·`MIXED` 판정 수정 | **(a)만 먼저.** (b)는 S6 에서 잰다 |
 | 5 | B1 을 path-specific fail injection 하네스로 확장 후 pinned Spark 에서 실행 | **build·SPI 배선은 2026-08-27 에 이미 했다**(3판본). 남은 것은 하네스 확장과 **Oracle 이 있는 환경** |
 | 6 | 가장 덜 민감한 사내 DR source 에서 A → B0 → B1 | 그대로. C00 full-scan 계열은 별도 승인 전 미실행 |

@@ -30,6 +30,16 @@ import argparse, json, os, sys, time, traceback
 
 RESULTS = []
 
+# **완결 선언.** 이 목록이 없던 동안 집계기는 파싱 가능한 줄이 1개만 있어도 이 산출물을
+# MEASURED 로 올렸다(7차 교차 리뷰 P0-02). 몇 개를 낼 예정인지 산출물이 스스로 말해야
+# 집계기가 완주 여부를 판정할 수 있다. emit 을 추가하면 여기도 늘려라 — 늘리지 않으면
+# 그 step 은 '예정에 없던 출력'이 되고, 빼먹으면 완주 판정이 PARTIAL 로 떨어진다.
+EXPECTED_STEPS = [
+    "env.versions", "S0.baseline_read", "S1a.semicolon_list", "S1b.single_alter",
+    "S1c.plsql_block", "S2.schema_bypass", "S3.per_task_sessions",
+    "S3b.action_session_reuse", "S4.init_query_timeout", "S5.max_delay_zero",
+]
+
 def emit(probe, ok, note=None, value=None, err=None, extra=None):
     rec = {"probe": probe, "ok": bool(ok)}
     if note is not None:  rec["note"] = note
@@ -48,9 +58,22 @@ def main():
     ap.add_argument("--wm", required=True, help="watermark 컬럼")
     ap.add_argument("--partitions", type=int, default=4)
     ap.add_argument("--probe-rows", type=int, default=1000,
-                    help="S3가 읽는 행 수 상한. 전체 테이블을 읽지 않는다(재검증 결함 4)")
+                    help="S3가 읽는 행 수 상한. 전체 테이블을 읽지 않는다(재검증 결함 4). "
+                         "1..PROBE_ROWS_MAX 범위여야 한다 — production-safe 라벨의 근거다")
     ap.add_argument("--skip-slow", action="store_true", help="S4(timeout) 생략")
     a = ap.parse_args()
+
+    # **상한을 강제한다.** type=int 만으로는 0·음수·과대값이 그대로 들어간다(7차 리뷰 P2).
+    # 이 스크립트가 '운영계 제한적'으로 분류돼 있는 근거가 ROWNUM 제한 하나뿐이므로,
+    # 그 제한이 실제로 걸리는지 여기서 확인하지 않으면 라벨이 사실이 아니게 된다.
+    PROBE_ROWS_MAX = 100_000
+    if not (1 <= a.probe_rows <= PROBE_ROWS_MAX):
+        print(f"--probe-rows 는 1..{PROBE_ROWS_MAX} 여야 한다 (받은 값 {a.probe_rows}). "
+              f"전수 스캔을 막는 것이 이 인자의 목적이다.", file=sys.stderr)
+        sys.exit(2)
+    if a.partitions < 1:
+        print(f"--partitions 는 1 이상이어야 한다 (받은 값 {a.partitions})", file=sys.stderr)
+        sys.exit(2)
 
     pw = os.environ.get(a.password_env)
     if not pw:
@@ -213,11 +236,27 @@ def main():
     except Exception as e:
         emit("S5.max_delay_zero", False, note="ORA-03172라면 fence 집행의 **양성 증거**다", err=e)
 
-    _dump()
+    _dump(skipped_slow=a.skip_slow)
     spark.stop()
 
-def _dump():
-    out = {"g0_0_spark_probe": RESULTS}
+def _dump(skipped_slow=False):
+    """완결 sentinel 을 **한 줄짜리 JSON 으로도** 낸다.
+
+    집계기는 줄 단위로 파싱하므로 indent 를 준 블록은 읽지 못한다. 블록은 사람용,
+    b0_summary 한 줄은 도구용이다.
+    """
+    emitted = [r["probe"] for r in RESULTS]
+    expected = [x for x in EXPECTED_STEPS
+                if not (skipped_slow and x == "S4.init_query_timeout")]
+    summary = {"b0_summary": {
+        "expected_steps": expected,
+        "emitted_steps": emitted,
+        "missing_steps": [x for x in expected if x not in emitted],
+        "skipped_slow": bool(skipped_slow),
+        "note": "missing_steps 가 비어 있어야 완주다. --skip-slow 를 주면 S4 는 예정에서 빠진다.",
+    }}
+    print("PROBE " + json.dumps(summary, ensure_ascii=False), flush=True)
+    out = {"g0_0_spark_probe": RESULTS, **summary}
     print("\n===== JSON EVIDENCE =====")
     print(json.dumps(out, ensure_ascii=False, indent=1))
 

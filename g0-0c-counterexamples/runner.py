@@ -219,6 +219,12 @@ def enforce_guard(suite: dict, observed: dict) -> list[str]:
 # 실행 산출물(evidence)과 바이트코드도 제외한다.
 _HASH_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache"}
 
+def sha256_file(p: Path) -> str:
+    """suite.yaml 처럼 **코드 해시에서 제외되는 파일**을 따로 묶기 위한 것이다.
+    제외 자체는 옳지만(순환 참조), 그러면 필수 시나리오·budget·pass rule 이 어떤
+    digest 에도 묶이지 않는다 — 7차 교차 리뷰 P1-10."""
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "0" * 64
+
 def artifact_hash(root: Path, exclude: set[str]) -> str:
     h = hashlib.sha256()
     for p in sorted(root.rglob("*")):
@@ -252,7 +258,11 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
            "fixture": {"objects_created": [], "rows_written": 0},
            "observations": [], "cleanup": {"attempted": False, "succeeded": False,
                                            "leftover_objects": []},
-           "error": None}
+           "error": None,
+           # **child process 의 종료 코드.** runner 가 이것을 읽지 않던 것이 7차 교차 리뷰
+           # P0-02 다 — 통과 모양의 SCENARIO_RESULT 를 찍은 뒤 exit 1 로 죽어도 PASS 후보가
+           # 됐다. -1 은 '실행하지 않았다'(dry-run·entrypoint 부재·내부 예외)를 뜻한다.
+           "child_returncode": -1}
 
     entry = sdir / str(meta.get("entrypoint") or "run.py")
     if dry:
@@ -284,6 +294,7 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=per,
                              cwd=str(sdir),
                              env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        rec["child_returncode"] = out.returncode
         payload = None
         for line in reversed(out.stdout.splitlines()):
             if line.startswith("SCENARIO_RESULT "):
@@ -338,6 +349,18 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
     if rec["outcome"] not in OUTCOMES:
         rec["observations"].append({"name": "invalid_outcome", "value": str(rec["outcome"])})
         rec["outcome"] = "INCONCLUSIVE"
+
+    # R0 — **종료 코드가 0 이 아니면 payload 를 믿지 않는다.**
+    # 시나리오 stdout 은 신뢰 대상이 아니다(위 주석과 같은 이유). 통과 모양의 결과를 찍고
+    # 죽은 경우가 정확히 이 검사가 막는 것이다. 7차 교차 리뷰 P0-02.
+    if rec["child_returncode"] not in (0, -1):
+        rec["observations"].append({"name": "child_returncode_nonzero",
+                                    "value": rec["child_returncode"],
+                                    "note": "시나리오가 0 이 아닌 코드로 끝났다. 보고된 outcome 을 "
+                                            "그대로 받지 않는다."})
+        rec["outcome"] = "INCONCLUSIVE"
+        if not rec["error"]:
+            rec["error"] = f"child exit {rec['child_returncode']}"
 
     # R4 — 시나리오가 신고한 객체 이름이 object_prefix 를 벗어나면 실패로 본다.
     # prefix 강제는 _ce.Fixture 안에만 있어 시나리오가 우회할 수 있으므로 여기서 다시 본다.
@@ -528,6 +551,10 @@ def main() -> int:
     ev = {"schema_version": SCHEMA_VERSION, "suite_id": SUITE_ID,
           "run_id": str(uuid.uuid4()), "started_at": scen[0]["started_at"] if scen else now(),
           "finished_at": now(), "artifact_sha256": h,
+          # artifact_sha256 은 순환 참조를 피하려고 suite.yaml 을 제외하고 계산한다.
+          # 그래서 필수 시나리오·budget·pass rule 이 어떤 digest 에도 묶이지 않았다
+          # (7차 리뷰 P1-10). code digest 와 config digest 를 **따로** 남긴다.
+          "suite_config_sha256": sha256_file(Path(a.suite)),
           "environment": envrec,
           "versions": suite.get("versions", {}),
           "scenarios": scen,

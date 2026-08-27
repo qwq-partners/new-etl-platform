@@ -5,16 +5,17 @@
   "description": "시나리오 누락·injection 미관측은 PASS가 아니다. runner는 이 스키마로 자기 출력을 검증한 뒤 종료 코드를 정한다.",
   "type": "object",
   "required": [
-    "schema_version",
-    "suite_id",
-    "run_id",
-    "started_at",
-    "finished_at",
-    "environment",
-    "versions",
     "artifact_sha256",
+    "environment",
+    "finished_at",
+    "run_id",
     "scenarios",
-    "suite_verdict"
+    "schema_version",
+    "started_at",
+    "suite_config_sha256",
+    "suite_id",
+    "suite_verdict",
+    "versions"
   ],
   "additionalProperties": false,
   "properties": {
@@ -135,14 +136,15 @@
       "items": {
         "type": "object",
         "required": [
-          "id",
-          "outcome",
-          "injection_observed",
-          "started_at",
+          "child_returncode",
+          "cleanup",
           "finished_at",
           "fixture",
+          "id",
+          "injection_observed",
           "observations",
-          "cleanup"
+          "outcome",
+          "started_at"
         ],
         "additionalProperties": false,
         "properties": {
@@ -290,6 +292,10 @@
               "string",
               "null"
             ]
+          },
+          "child_returncode": {
+            "type": "integer",
+            "description": "시나리오 child process 의 종료 코드. **runner 가 이것을 읽지 않던 것이 7차 교차 리뷰 P0-02 였다** — 통과 모양의 SCENARIO_RESULT 를 찍은 뒤 exit 1 로 죽어도 suite PASS 후보가 됐다. -1 은 실행하지 않았다는 뜻이다(dry-run·entrypoint 부재)."
           }
         }
       },
@@ -334,6 +340,11 @@
           "type": "string"
         }
       }
+    },
+    "suite_config_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "suite.yaml 자체의 sha256. artifact_sha256 은 순환 참조를 피하려고 suite.yaml 을 제외하고 계산하므로(runner.py 주석 참조), 필수 시나리오·budget·pass rule 이 어떤 digest 에도 묶이지 않았다(7차 리뷰 P1-10). code digest 와 config digest 를 **별도로** 기록해 둘 다 증거에 bind 한다."
     }
   }
 }

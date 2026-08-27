@@ -40,6 +40,19 @@ def main():
                     help="추적 디렉터리. step 경계 마커를 여기에 남겨 connection 을 step 에 귀속시킨다.")
     a = ap.parse_args()
 
+    # **상한을 강제한다.** type=int 만으로는 0·음수·과대값이 그대로 들어간다(7차 리뷰 P2).
+    # 이 하네스가 '운영계 제한적'인 근거가 ROWNUM 제한이므로 그 제한을 실제로 건다.
+    LIMIT_MAX = 100_000
+    if not (1 <= a.limit <= LIMIT_MAX):
+        emit({"mode": a.mode, "status": "ABORT",
+              "reason": f"--limit 은 1..{LIMIT_MAX} 여야 한다 (받은 값 {a.limit}). "
+                        f"전수 스캔을 막는 것이 이 인자의 목적이다"})
+        return 2
+    if a.num_partitions < 1:
+        emit({"mode": a.mode, "status": "ABORT",
+              "reason": f"--num-partitions 는 1 이상이어야 한다 (받은 값 {a.num_partitions})"})
+        return 2
+
     pw = os.environ.get(a.password_env)
     if not pw:
         emit({"mode": a.mode, "status": "ABORT",

@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
-"""G0-0 산출물 → `g0_evidence` 레코드 정규화.
+"""G0-0 산출물 → `g0_0_evidence` 레코드 정규화 (strict aggregator).
 
-probe-README 가 "두 로그를 g0_evidence 로 정규화한다" 를 첫 단계로 지시하는데
-그 형식의 스키마도 도구도 없었다(2026-08-27 리뷰 확정). 이 파일이 그 도구다.
+**2026-08-27 재작성.** 7차 교차 리뷰 P0-02·P0-03·P0-04 의 조치다. 이전 판은 다음을 전부
+통과시켰다 — B0 로그 한 줄, B1 의 `{"verdict":{"coverage":"PROVEN"}}` 뿐인 파일, C00 의
+summary 한 줄, scenario 0개인 CE `pass=true`, schema 위반에도 exit 0. 그리고 어제 로그를
+오늘 `versions.lock` 과 함께 정규화해도 아무 말이 없었다.
 
 **규율**
   · 없는 입력을 낙관적으로 채우지 않는다. 안 잰 것은 NOT_RUN, 못 정한 것은 UNDETERMINED.
-  · capability 축은 **probe 결과에서 파생**하며, 어떤 probe 로 정했는지(derived_from)를
-    반드시 남긴다. 사람이 재판정할 수 있어야 한다.
-  · G0-0A 의 `manifest_ok=false` 는 그 산출물 전체를 무효로 만든다(문서 규칙).
-  · G0-0 은 G0 의 부분집합이다 — 덮지 못하는 항목을 not_covered 에 명시한다.
+  · **완결을 선언하지 않은 산출물은 MEASURED 가 되지 않는다.** 한 줄로는 부족하다.
+  · child manifest(g0-child-contract.md)가 없으면 그 child 는 FAILED 다 —
+    '안 돌렸다'(NOT_RUN)와 '계약을 안 지켰다'는 다르다.
+  · 계약 위반은 warning 이 아니라 **거부**다(exit 4). 무효한 레코드를 최종 경로에 쓰지 않는다.
+  · G0-0 은 G0 의 부분집합이다 — `gate_eligible` 은 schema 의 const false 다.
+
+종료 코드 (g0-child-contract.md §4)
+  0  유효한 레코드를 썼다
+  3  불완전 — child 중 NOT_RUN/PARTIAL 이 있다. 레코드는 쓴다(completeness=INCOMPLETE)
+  4  무효 — 계약 위반 또는 schema 위반. **최종 경로에 쓰지 않고** <out>.rejected.json 에만 남긴다
+  2  실행 전 조건 미비(인자·파일 없음 등)
 
 사용:
-  python3 g0-normalize.py --report-id RUN-2026-08-27-01 --profile LOCAL_WSL \\
-      --a g0-0a.log --b0 b0.json --b1 g0-0b1-evidence.json \\
+  python3 g0-normalize.py --report-id NORM-2026-08-27-01 --run-id RUN-2026-08-27-01 \\
+      --profile LOCAL_WSL --a g0-0a.log --b0 b0.json --b1 g0-0b1-evidence.json \\
       --c00 c00.log --c-suite g0-0c-counterexamples/evidence.json \\
-      --versions-lock versions.lock --out g0-evidence.json
+      --versions-lock versions.lock --out g0-0-evidence.json
 """
 from __future__ import annotations
 
@@ -27,7 +36,10 @@ import re
 import sys
 from datetime import datetime, timezone
 
+SCHEMA_FILE = "g0-0-evidence.schema.json"
+
 # P §8.1 의 g0_evidence 항목 중 G0-0 이 도달하지 못하는 것.
+# **고정 집합이다.** item 값은 schema 의 enum 과 정확히 일치해야 한다(7차 리뷰 P0-04).
 NOT_COVERED = [
     {"item": "hash_vector_result (V-01~V-16)",
      "why": "canonical hash 벡터 시험은 G0-3 소관이다. G0-0 은 STANDARD_HASH 가용성만 본다."},
@@ -39,16 +51,35 @@ NOT_COVERED = [
      "why": "ETL_CANON 함수·pinned 매핑표가 아직 없다(원천 DDL 불가로 보류)."},
     {"item": "submission_path_result",
      "why": "Dagster 제출 경로 시험은 G1 소관이다."},
+    {"item": "source_kind",
+     "why": "ORACLE_TEST_INSTANCE / ORACLE_COMPATIBLE_STUB 구분은 G0-1~5 aggregator 가 정한다. "
+            "G0-0 은 접속한 서버가 스스로 밝힌 신원만 기록한다."},
+    {"item": "oracle_env.nls_nchar_characterset",
+     "why": "G0-0A 가 NLS_CHARACTERSET 은 재지만 NCHAR charset probe 가 없다. "
+            "STRING 경로가 TO_NCHAR 경유이므로 G0-3 전에 별도 probe 를 추가해야 한다."},
+    {"item": "oracle_env.max_string_size",
+     "why": "probe 는 있으나 그 값이 canonical hash 규격에 미치는 영향 판정은 G0-3 소관이다."},
+    {"item": "same_lock (G0-5)",
+     "why": "동일 lock 실증은 G0-1~G0-4 산출물이 모두 있어야 성립한다. G0-0 하나로는 불가능하다."},
 ]
+
+CHILD_KEYS = [("g0_0a", "G0_0A", "a"), ("g0_0b0", "G0_0B0", "b0"), ("g0_0b1", "G0_0B1", "b1"),
+              ("g0_0c00", "G0_0C00", "c00"), ("g0_0c_suite", "G0_0C_SUITE", "c_suite")]
+
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def sha(p: pathlib.Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "MISSING"
 
 
-def jsonl(path: pathlib.Path, key: str = "probe") -> list[dict]:
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def jsonl(path: pathlib.Path | None, key: str = "probe") -> list[dict]:
     """DBMS_OUTPUT spool 이나 stdout 에서 JSON 객체 줄만 뽑는다. 다른 줄은 무시한다."""
-    out = []
+    out: list[dict] = []
     if not path or not path.is_file():
         return out
     for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -60,126 +91,294 @@ def jsonl(path: pathlib.Path, key: str = "probe") -> list[dict]:
             o = json.loads(ln[i:])
         except json.JSONDecodeError:
             continue
-        if isinstance(o, dict) and (key in o or "probe_summary" in o):
+        if isinstance(o, dict):
             out.append(o)
     return out
 
 
-def by_id(recs: list[dict]) -> dict[str, dict]:
-    return {r["probe"]: r for r in recs if isinstance(r.get("probe"), str)}
+UNSET_VALUE = re.compile(r"(?::|^\s*-)\s*UNSET\s*$")
 
 
-def ok(p: dict | None) -> bool:
-    return bool(p) and p.get("query_ok") is True
+def lock_has_unset(text: str) -> bool:
+    """`UNSET` 이 **값 토큰 자체**로 남아 있는가.
+
+    이전 판은 파일 전체를 문자열 검색해서, 8행 주석의 "UNSET 은 빈칸이 아니라 판정이다"
+    때문에 모든 값을 채워도 경고가 사라지지 않았다(7차 리뷰 P2). 주석을 떼고, 그 다음
+    **값 토큰 전체가 UNSET 인 줄만** 센다 — 설명문에 그 단어가 들어간 값(`note: "… UNSET …"`)은
+    미측정 항목이 아니다. YAML 파서를 쓰지 않는 이유는 의존성을 늘리지 않기 위해서이고,
+    그래서 이것은 완전한 판정이 아니라 **보수적 근사**다. 놓치는 쪽이 아니라 과탐지 쪽으로
+    틀리도록 정규식을 좁게 잡았다.
+    """
+    for ln in text.splitlines():
+        if UNSET_VALUE.search(ln.split("#", 1)[0].rstrip()):
+            return True
+    return False
 
 
-def val(p: dict | None):
-    return p.get("value") if p else None
+# ── child manifest ───────────────────────────────────────────────────
+def read_manifest(art: pathlib.Path) -> dict | None:
+    m = art.with_name(art.name + ".manifest.json")
+    if not m.is_file():
+        return None
+    try:
+        o = json.loads(m.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return o if isinstance(o, dict) else None
 
 
-# ── capability 축 파생 ────────────────────────────────────────────────
-def derive_axes(P: dict[str, dict]) -> dict:
-    """capability-overlay §3 의 축을 실제 probe id 에서 파생한다.
-    입력이 없으면 UNDETERMINED — 낙관적으로 채우지 않는다."""
-    A: dict[str, dict] = {}
+def check_child(child_const: str, art: pathlib.Path,
+                run_id: str, profile: str, lock_digest: str) -> tuple[dict, list[str]]:
+    """manifest 를 읽고 계약을 대조한다.
 
-    def put(axis, value, used, note=None):
-        A[axis] = {"value": value, "derived_from": used, **({"note": note} if note else {})}
+    반환: (children[...] 레코드, 계약 위반 목록). 위반이 있으면 그 child 는 coverage 에서
+    FAILED 다 — 본문이 아무리 그럴듯해도.
+    """
+    V: list[str] = []
+    man = read_manifest(art)
+    if man is None:
+        V.append(f"{child_const}: manifest 사이드카가 없다({art.name}.manifest.json). "
+                 f"g0-run-child.sh 로 실행하지 않았다 — 이 산출물은 언제·어느 판본으로 "
+                 f"만들어졌는지 스스로 말하지 못한다")
+        return {"present": False}, V
 
-    # snapshot_read — AS OF 는 SCN 원점이 함께 있어야 성립한다(권한 판정서 §3).
-    asof, scn1, scn2 = P.get("as_of_timestamp.target"), P.get("dbms_flashback.get_scn"), P.get("view.v_database")
-    ro, ro_sel = P.get("txn.set_read_only"), P.get("txn.select_inside")
-    used = ["as_of_timestamp.target", "dbms_flashback.get_scn", "view.v_database",
-            "txn.set_read_only", "txn.select_inside"]
-    if asof is None and ro is None:
-        put("snapshot_read", "UNDETERMINED", used, "G0-0A 결과가 없다")
-    elif ok(asof) and (ok(scn1) or ok(scn2)):
-        put("snapshot_read", "AS_OF_SCN", used)
-    elif ok(asof):
-        put("snapshot_read", "READ_ONLY_TXN", used,
-            "AS OF 는 되지만 SCN 원점이 없어 AS OF TIMESTAMP(±3초 근삿값)뿐이다 — AS_OF_SCN 으로 올리지 않는다")
-    elif ok(ro) and ok(ro_sel):
-        put("snapshot_read", "READ_ONLY_TXN", used)
-    else:
-        put("snapshot_read", "NONE", used)
+    actual = sha(art)
+    declared = str((man.get("artifact") or {}).get("sha256", "MISSING"))
+    rec: dict = {
+        "present": True,
+        "run_id": str(man.get("run_id", "")),
+        "exit_code": man.get("exit_code") if isinstance(man.get("exit_code"), int) else -1,
+        "versions_lock_digest": str(man.get("versions_lock_digest", "MISSING")),
+        "artifact_sha256": declared if (HEX64.match(declared) or declared == "MISSING") else "MISSING",
+        "artifact_verified": declared == actual,
+        "runtime": {k: str(v) for k, v in (man.get("runtime") or {}).items()
+                    if isinstance(k, str)},
+    }
+    measured = str(man.get("ended_at") or man.get("started_at") or "")
+    if measured:
+        rec["measured_at"] = measured
+    if not (HEX64.match(rec["versions_lock_digest"]) or rec["versions_lock_digest"] == "MISSING"):
+        rec["versions_lock_digest"] = "MISSING"
 
-    # row_hash — 표준 시험 벡터와 일치해야 SHA256 이다(값이 맞아야지 오류 부재로는 부족).
-    h = P.get("feat.standard_hash_sha256")
-    if h is None:
-        put("row_hash", "UNDETERMINED", ["feat.standard_hash_sha256"])
-    elif ok(h) and h.get("value_interpretable") is True:
-        put("row_hash", "SHA256", ["feat.standard_hash_sha256"])
-    else:
-        put("row_hash", "NONE", ["feat.standard_hash_sha256", "feat.ora_hash"],
-            "ORA_HASH 는 32비트라 대조용 해시로 쓸 수 없다 — Reconciliation 이 건수+PK 로 강등된다")
+    if man.get("child") != child_const:
+        V.append(f"{child_const}: manifest 의 child 가 {man.get('child')!r} 이다 — 다른 산출물의 manifest 다")
+    if rec["run_id"] != run_id:
+        V.append(f"{child_const}: run_id 불일치 (manifest={rec['run_id']!r}, 요청={run_id!r}) — "
+                 f"서로 다른 회차의 산출물을 섞었다")
+    if man.get("profile") != profile:
+        V.append(f"{child_const}: profile 불일치 (manifest={man.get('profile')!r}, 요청={profile!r})")
+    if str(man.get("versions_lock_digest", "")) != lock_digest:
+        V.append(f"{child_const}: versions_lock_digest 불일치 — 실행 시점 판본과 집계 시점 판본이 "
+                 f"다르다 (child={str(man.get('versions_lock_digest'))[:16]}…, 지금={lock_digest[:16]}…)")
+    if not rec["artifact_verified"]:
+        V.append(f"{child_const}: 산출물이 실행 후 변경됐다 "
+                 f"(manifest={declared[:16]}…, 지금={actual[:16]}…)")
+    if rec["exit_code"] != 0:
+        V.append(f"{child_const}: exit_code={rec['exit_code']} — 실행이 성공으로 끝나지 않았다")
 
-    # row_change_scn — ROWDEPENDENCIES 는 테이블 생성 시 결정되고 사후 변경 불가다.
-    dep, rs = P.get("feat.rowdependencies_target"), P.get("feat.ora_rowscn_target")
-    used = ["feat.rowdependencies_target", "feat.ora_rowscn_target"]
-    if dep is None and rs is None:
-        put("row_change_scn", "UNDETERMINED", used)
-    elif ok(rs) and str(val(dep) or "").upper() == "ENABLED":
-        put("row_change_scn", "ROW_LEVEL", used)
-    elif ok(rs):
-        put("row_change_scn", "BLOCK_LEVEL", used,
-            "ROWDEPENDENCIES 가 ENABLED 가 아니다 — 블록 단위 SCN 은 상한만 보장한다. 사후 변경 불가")
-    else:
-        put("row_change_scn", "NONE", used)
-
-    # lag_visibility — DG_STATS 는 측정, MAX_DELAY_ONLY 는 강제다(성질이 다르다).
-    dg, d = P.get("view.v_dataguard_stats"), P.get("alter.STANDBY_MAX_DATA_DELAY.D")
-    used = ["view.v_dataguard_stats", "alter.STANDBY_MAX_DATA_DELAY.D"]
-    if dg is None and d is None:
-        put("lag_visibility", "UNDETERMINED", used)
-    elif ok(dg):
-        put("lag_visibility", "DG_STATS", used)
-    elif ok(d):
-        put("lag_visibility", "MAX_DELAY_ONLY", used,
-            "값을 읽는 것이 아니라 임계 초과 시 ORA-03172 로 실패시킬 뿐이다. **측정이 아니라 강제**다")
-    else:
-        put("lag_visibility", "NONE", used)
-
-    # wm_granularity — 결정자는 컬럼 타입이다. interval/timestamp9 probe 는 구문 지원 확인용.
-    t = P.get("wm_column.type_facts")
-    used = ["wm_column.type_facts", "feat.interval_ns_successor", "feat.timestamp9_precision"]
-    if not ok(t):
-        put("wm_granularity", "UNDETERMINED", used, "wm_column.type_facts 를 읽지 못했다")
-    else:
-        raw = str(val(t) or "")
-        dt = raw.split("|")[0].upper()
-        m = re.search(r"scale=(-?\d+)", raw)
-        scale = int(m.group(1)) if m and m.group(1) != "-" else None
-        if dt.startswith("TIMESTAMP"):
-            g = {9: "NS", 6: "US", 3: "MS", 0: "SEC"}.get(scale if scale is not None else 6, "US")
-            put("wm_granularity", g, used, f"data_type={dt}, scale={scale}")
-        elif dt == "DATE":
-            put("wm_granularity", "SEC", used, "DATE 의 최소 단위는 1초다")
-        elif dt == "NUMBER" and scale is not None and scale >= 0:
-            put("wm_granularity", "SEC", used, f"NUMBER(*,{scale}) — 고정 scale 이라 successor 가 정의된다")
-        else:
-            put("wm_granularity", "UNDEFINED", used,
-                f"data_type={dt} scale={scale} — 고정 granularity 가 없어 successor(M)==M 이 된다(CE01). "
-                "반개구간 seal 대상에서 제외하고 overlap 재적재로만 처리한다")
-
-    # sql_dialect
-    ff = P.get("feat.fetch_first")
-    put("sql_dialect", "UNDETERMINED" if ff is None else ("12C_PLUS" if ok(ff) else "11G"),
-        ["feat.fetch_first"])
-
-    # charset_class — 원천 간 해시 정본화 비교 가능성
-    cs = P.get("nls.characterset")
-    used = ["nls.characterset", "nls.comp", "nls.sort"]
-    if not ok(cs):
-        put("charset_class", "UNDETERMINED", used)
-    else:
-        v = str(val(cs) or "").upper()
-        put("charset_class", "AL32UTF8" if v == "AL32UTF8" else "OTHER", used, f"NLS_CHARACTERSET={v}")
-    return A
+    return rec, V
 
 
+# ── child 별 완결 판정 ────────────────────────────────────────────────
+def cov_a(path: pathlib.Path | None) -> tuple[dict, dict[str, dict], list[str]]:
+    """G0-0A. 완결 조건: sentinel ∧ manifest_ok ∧ 중복 0 ∧ summary 정확히 1개."""
+    if path is None:
+        return {"status": "NOT_RUN"}, {}, []
+    recs = jsonl(path)
+    V: list[str] = []
+    summaries = [r["probe_summary"] for r in recs
+                 if isinstance(r.get("probe_summary"), dict)]
+    sentinel = any("probe_run_end" in r for r in recs)
+    probes = [r for r in recs if isinstance(r.get("probe"), str)]
+
+    ids = [r["probe"] for r in probes]
+    dups = sorted({i for i in ids if ids.count(i) > 1})
+    if dups:
+        V.append(f"G0_0A: probe id 가 중복이다 {dups[:5]} — 여러 회차의 로그가 한 파일에 섞였을 수 "
+                 f"있다. 마지막 값이 이기는 조립은 증거가 아니다")
+    if len(summaries) > 1:
+        V.append(f"G0_0A: probe_summary 가 {len(summaries)}개다 — 한 파일에 한 회차만 있어야 한다")
+
+    P = {r["probe"]: r for r in probes}
+    if not summaries:
+        return ({"status": "PARTIAL",
+                 "reason": "probe_summary sentinel 이 없다 — 블록이 끝까지 갔는지 확인 불가",
+                 "counts": {"parsed": len(P)}}, P, V)
+    s = summaries[0]
+    counts = {k: int(s.get(k) or 0) for k in ("expected", "emitted", "query_failed", "value_mismatch")
+              if s.get(k) is not None}
+    if s.get("manifest_ok") is False:
+        return ({"status": "FAILED",
+                 "reason": "manifest_ok=false — 블록이 중간에 끊겼다. 결과 전체를 폐기한다.",
+                 "counts": counts}, {}, V)
+    if not sentinel:
+        return ({"status": "PARTIAL",
+                 "reason": "probe_run_end sentinel 이 없다 — 스크립트가 끝까지 도달했다는 증거가 없다",
+                 "counts": counts}, P, V)
+    return {"status": "MEASURED", "counts": counts}, P, V
+
+
+def cov_b0(path: pathlib.Path | None) -> dict:
+    """G0-0B0. **완결 sentinel 이 없으면 MEASURED 가 아니다.**
+
+    이전 판은 파싱 가능한 줄이 1개만 있어도 MEASURED 였다(7차 리뷰 P0-02).
+    """
+    if path is None:
+        return {"status": "NOT_RUN"}
+    recs = jsonl(path)
+    if not recs:
+        return {"status": "FAILED", "reason": "파싱 가능한 결과 줄이 없다"}
+    summ = next((r["b0_summary"] for r in recs if isinstance(r.get("b0_summary"), dict)), None)
+    if summ is None:
+        return {"status": "PARTIAL",
+                "reason": "b0_summary 완결 sentinel 이 없다 — 몇 개를 낼 예정이었는지 산출물이 "
+                          "말하지 않으므로 완주 여부를 판정할 수 없다",
+                "counts": {"records": len(recs)}}
+    exp = [x for x in (summ.get("expected_steps") or []) if isinstance(x, str)]
+    got = [x for x in (summ.get("emitted_steps") or []) if isinstance(x, str)]
+    missing = sorted(set(exp) - set(got))
+    if missing:
+        return {"status": "PARTIAL", "reason": f"미출력 step: {missing[:6]}",
+                "counts": {"expected": len(exp), "emitted": len(got)}}
+    return {"status": "MEASURED", "counts": {"expected": len(exp), "emitted": len(got)}}
+
+
+def cov_b1(path: pathlib.Path | None) -> tuple[dict, dict]:
+    """G0-0B1. 필수 키가 다 있고 두 회차가 다 관측돼야 MEASURED."""
+    if path is None:
+        return {"status": "NOT_RUN"}, {}
+    try:
+        e = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as ex:
+        return {"status": "FAILED", "reason": f"{type(ex).__name__}"}, {}
+    if not isinstance(e, dict):
+        return {"status": "FAILED", "reason": "최상위가 객체가 아니다"}, {}
+
+    v = e.get("verdict") if isinstance(e.get("verdict"), dict) else {}
+    summary = {"verdict": v.get("coverage"), "blocking": v.get("blocking", []),
+               "by_path": e.get("by_path", {}),
+               "preamble_ok_by_path": e.get("preamble_ok_by_path", {}),
+               "runs_seen": e.get("runs_seen", {})}
+
+    need = [k for k in ("verdict", "by_path", "preamble_ok_by_path", "runs_seen") if k not in e]
+    if need:
+        return ({"status": "FAILED",
+                 "reason": f"필수 키 누락 {need} — verdict 만 있는 파일은 증거가 아니다"}, summary)
+    runs = e.get("runs_seen") if isinstance(e.get("runs_seen"), dict) else {}
+    missing_runs = [r for r in ("coverage", "failclosed") if not runs.get(r)]
+    if missing_runs:
+        return ({"status": "PARTIAL",
+                 "reason": f"관측되지 않은 회차 {missing_runs} — fail-closed 를 시험하지 않았으면 "
+                           f"그 질문은 미확정이지 통과가 아니다"}, summary)
+    if v.get("coverage") != "PROVEN":
+        return {"status": "PARTIAL", "reason": str(v.get("reason", ""))[:200]}, summary
+    return {"status": "MEASURED"}, summary
+
+
+def cov_c00(path: pathlib.Path | None) -> tuple[dict, dict]:
+    if path is None:
+        return {"status": "NOT_RUN"}, {}
+    recs = jsonl(path)
+    fence = {r["probe"]: r for r in recs if isinstance(r.get("probe"), str)}
+    if not fence:
+        return {"status": "FAILED", "reason": "파싱 가능한 결과 줄이 없다"}, {}
+    summ = fence.get("fence.summary")
+    emitted = len([k for k in fence if k != "fence.summary"])
+    if summ is None:
+        return ({"status": "PARTIAL", "reason": "fence.summary 가 없다 — 블록이 끝까지 갔는지 확인 불가",
+                 "counts": {"probes": emitted}}, fence)
+    exp_ids = [x for x in (summ.get("expected_probe_ids") or []) if isinstance(x, str)]
+    exp = summ.get("expected_probes")
+    if not exp_ids and not isinstance(exp, int):
+        return ({"status": "PARTIAL",
+                 "reason": "fence.summary 에 expected_probe_ids 가 없다 — 무엇을 낼 예정이었는지 "
+                           "산출물이 말하지 않으므로 완주 여부를 판정할 수 없다",
+                 "counts": {"probes": emitted}}, fence)
+    skipped = sum(1 for k, r in fence.items() if k != "fence.summary" and r.get("skipped"))
+    # **개수가 아니라 id 집합을 본다.** 개수만 맞고 다른 probe 가 나온 경우를 놓치지 않는다.
+    missing = [i for i in exp_ids if i not in fence]
+    if missing:
+        return ({"status": "PARTIAL", "reason": f"미출력 probe: {missing[:6]} — 블록이 중간에 끊겼다",
+                 "counts": {"expected": len(exp_ids), "emitted": emitted, "skipped": skipped}}, fence)
+    if isinstance(exp, int) and emitted != exp:
+        return ({"status": "PARTIAL", "reason": f"expected={exp} emitted={emitted}",
+                 "counts": {"expected": exp, "emitted": emitted, "skipped": skipped}}, fence)
+    if skipped:
+        return ({"status": "PARTIAL", "reason": "ACK_FULL_SCAN=N — 전수 스캔 계열이 건너뛰어졌다",
+                 "counts": {"expected": len(exp_ids) or (exp or 0), "emitted": emitted,
+                            "skipped": skipped}}, fence)
+    return ({"status": "MEASURED",
+             "counts": {"expected": len(exp_ids) or (exp or 0), "emitted": emitted}}, fence)
+
+
+def cov_ce(path: pathlib.Path | None) -> tuple[dict, dict, list[str]]:
+    """G0-0C suite. scenario 0개 pass 를 거부한다(7차 리뷰 P0-02)."""
+    if path is None:
+        return {"status": "NOT_RUN"}, {}, []
+    V: list[str] = []
+    try:
+        e = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as ex:
+        return {"status": "FAILED", "reason": f"{type(ex).__name__}"}, {}, V
+    if not isinstance(e, dict):
+        return {"status": "FAILED", "reason": "최상위가 객체가 아니다"}, {}, V
+
+    v = e.get("suite_verdict") if isinstance(e.get("suite_verdict"), dict) else {}
+    scen = [s for s in (e.get("scenarios") or []) if isinstance(s, dict)]
+    ces = {"pass": v.get("pass"), "reason": str(v.get("reason", ""))[:300],
+           "outcomes": {s.get("id"): s.get("outcome") for s in scen},
+           "scenario_count": len(scen)}
+
+    if not scen:
+        return ({"status": "FAILED",
+                 "reason": "scenario 가 0개다. suite_verdict.pass 가 참이어도 아무것도 실행되지 "
+                           "않았다 — 이것은 통과가 아니라 미실행이다"}, ces, V)
+    bad_rc = [s.get("id") for s in scen
+              if isinstance(s.get("child_returncode"), int) and s["child_returncode"] != 0]
+    if bad_rc:
+        V.append(f"G0_0C_SUITE: child 프로세스가 0 이 아닌 코드로 끝난 시나리오 {bad_rc[:5]} — "
+                 f"통과 모양의 결과를 찍고 죽어도 PASS 후보가 되던 경로다")
+    no_rc = [s.get("id") for s in scen if "child_returncode" not in s]
+    if no_rc:
+        return ({"status": "PARTIAL",
+                 "reason": f"child_returncode 를 기록하지 않은 시나리오 {no_rc[:5]} — "
+                           f"runner 를 갱신하고 다시 실행하라",
+                 "counts": {"scenarios": len(scen)}}, ces, V)
+    if not v.get("pass"):
+        return ({"status": "PARTIAL", "reason": str(v.get("reason", ""))[:200],
+                 "counts": {"scenarios": len(scen)}}, ces, V)
+    return {"status": "MEASURED", "counts": {"scenarios": len(scen)}}, ces, V
+
+
+# ── capability 축 ────────────────────────────────────────────────────
+AXES_SUSPENDED_REASON = (
+    "축 파생을 중단했다. 7차 교차 리뷰 P0-01·P0-05 가 현행 파생기와 축 모델을 결함으로 "
+    "판정했고(`SELECT COUNT(*) FROM v$database` 성공이 AS_OF_SCN 승격 근거가 되고, "
+    "AS OF TIMESTAMP 만 성공해도 READ_ONLY_TXN 이 되며, TIMESTAMP(2) 가 US 로, "
+    "NUMBER(10,2) 가 SEC 으로 나온다), 그 재설계(조치 3)가 아직 끝나지 않았다. "
+    "**틀린 값을 만드는 것보다 만들지 않는 것이 낫다.**"
+)
+
+# 재설계 전까지 자리만 지킨다. 이름은 overlay §3 의 현행 7축 그대로 둔다 —
+# 조치 3 에서 리뷰의 9축으로 재분리하고 그때 schema 에 명시 property 로 박는다.
+AXIS_NAMES = ["snapshot_read", "row_hash", "row_change_scn", "lag_visibility",
+              "wm_granularity", "sql_dialect", "charset_class"]
+
+
+def axes_suspended() -> dict:
+    return {name: {"value": "UNDETERMINED", "scope": "UNDETERMINED", "binding": None,
+                   "measured_at": None, "stale": False, "effective_value": "UNDETERMINED",
+                   "inputs": [{"probe": "<파생 중단>", "used": False}],
+                   "note": AXES_SUSPENDED_REASON}
+            for name in AXIS_NAMES}
+
+
+# ── main ─────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--report-id", required=True, help="회차 식별자. 재실행마다 달라야 한다.")
+    ap.add_argument("--report-id", required=True, help="이 정규화 회차의 식별자.")
+    ap.add_argument("--run-id", required=True,
+                    help="child 들이 공유하는 실행 회차 식별자. manifest 와 대조한다.")
     ap.add_argument("--profile", required=True,
                     choices=["LOCAL_WSL", "CORP_POC", "SANDBOX_CONTAINER"])
     ap.add_argument("--versions-lock", default="versions.lock")
@@ -188,154 +387,170 @@ def main() -> int:
     ap.add_argument("--b1", help="G0-0B1 g0-0b1-evidence.json")
     ap.add_argument("--c00", help="G0-0C00 spool 로그")
     ap.add_argument("--c-suite", help="G0-0C evidence.json")
-    ap.add_argument("--out", default="g0-evidence.json")
+    ap.add_argument("--out", default="g0-0-evidence.json")
+    ap.add_argument("--allow-missing-manifest", action="store_true",
+                    help="manifest 없는 산출물을 계약 위반이 아니라 경고로 낮춘다. "
+                         "**증거 생성에 쓰지 마라** — 계약 도입 이전 로그를 살펴볼 때만 쓴다.")
     a = ap.parse_args()
 
-    warn: list[str] = []
-    arts: dict = {}
-
-    def art(name, path):
-        if not path:
-            return None
-        p = pathlib.Path(path)
-        if not p.is_file():
-            warn.append(f"{name}: 파일 없음 ({path})")
-            return None
-        arts[name] = {"path": str(p), "sha256": sha(p),
-                      "lines": len(p.read_text(encoding='utf-8', errors='replace').splitlines())}
-        return p
+    V: list[str] = []   # contract_violations — 하나라도 있으면 exit 4
+    W: list[str] = []   # warnings
 
     lock = pathlib.Path(a.versions_lock)
-    lock_digest = sha(lock) if lock.is_file() else "UNSET"
-    if lock_digest == "UNSET":
-        warn.append("versions.lock 이 없다 — 이 레코드는 '어느 판본에서 잰 값인가' 를 답하지 못한다")
-    elif "UNSET" in lock.read_text(encoding="utf-8"):
-        warn.append("versions.lock 에 UNSET 항목이 남아 있다 — 그 항목에 의존하는 측정은 미확정이다")
+    if not lock.is_file():
+        print(f"[fatal] versions.lock 이 없다: {lock}", file=sys.stderr)
+        return 2
+    lock_text = lock.read_text(encoding="utf-8")
+    lock_digest = sha(lock)
+    if not HEX64.match(lock_digest):
+        print("[fatal] versions.lock 을 해시하지 못했다", file=sys.stderr)
+        return 2
+    if lock_has_unset(lock_text):
+        W.append("versions.lock 의 **값 자리에** UNSET 이 남아 있다 — 그 항목에 의존하는 측정은 미확정이다")
 
-    pa, pb0, pb1, pc00, pcs = (art(k, getattr(a, v)) for k, v in
-                               (("g0_0a", "a"), ("g0_0b0", "b0"), ("g0_0b1", "b1"),
-                                ("g0_0c00", "c00"), ("g0_0c_suite", "c_suite")))
+    # ── child 대조 ────────────────────────────────────────────────
+    paths: dict[str, pathlib.Path | None] = {}
+    arts: dict = {}
+    children: dict = {}
+    contract_ok: dict[str, bool] = {}
 
-    # ── G0-0A ────────────────────────────────────────────────────────
-    arecs = jsonl(pa) if pa else []
-    P = by_id(arecs)
-    summ = next((r["probe_summary"] for r in arecs if "probe_summary" in r), None)
-    if not pa:
-        cov_a = {"status": "NOT_RUN"}
-    elif summ and summ.get("manifest_ok") is False:
-        cov_a = {"status": "FAILED", "reason": "manifest_ok=false — 블록이 중간에 끊겼다. 결과 전체를 폐기한다.",
-                 "counts": {"expected": summ.get("expected", 0), "emitted": summ.get("emitted", 0)}}
-        warn.append("G0-0A manifest_ok=false → account_privs 와 capability_axes 를 신뢰할 수 없다")
+    for key, const, argname in CHILD_KEYS:
+        raw = getattr(a, argname)
+        if not raw:
+            paths[key] = None
+            children[key] = {"present": False}
+            contract_ok[key] = True     # 안 돌린 것은 위반이 아니다
+            continue
+        p = pathlib.Path(raw)
+        if not p.is_file():
+            paths[key] = None
+            children[key] = {"present": False}
+            contract_ok[key] = False
+            V.append(f"{const}: 지정한 산출물이 없다({raw})")
+            continue
+        paths[key] = p
+        rec, viol = check_child(const, p, a.run_id, a.profile, lock_digest)
+        children[key] = rec
+        if viol and a.allow_missing_manifest and not rec.get("present"):
+            W.append(f"[--allow-missing-manifest] {viol[0]}")
+            contract_ok[key] = True
+        else:
+            V.extend(viol)
+            contract_ok[key] = not viol
+        arts[key] = {"path": str(p), "sha256": sha(p),
+                     "lines": len(p.read_text(encoding="utf-8", errors="replace").splitlines())}
+
+    # ── 본문 판정 ─────────────────────────────────────────────────
+    ca, P, va = cov_a(paths["g0_0a"])
+    V.extend(va)
+    cb0 = cov_b0(paths["g0_0b0"])
+    cb1, spark_paths = cov_b1(paths["g0_0b1"])
+    cc00, fence = cov_c00(paths["g0_0c00"])
+    ccs, ces, vce = cov_ce(paths["g0_0c_suite"])
+    V.extend(vce)
+
+    coverage = {"g0_0a": ca, "g0_0b0": cb0, "g0_0b1": cb1, "g0_0c00": cc00, "g0_0c_suite": ccs}
+
+    # 계약을 못 지킨 child 는 본문이 아무리 그럴듯해도 FAILED 다.
+    for key in coverage:
+        if not contract_ok[key] and coverage[key]["status"] != "NOT_RUN":
+            coverage[key] = {"status": "FAILED", "reason": "child 계약 위반 — contract_violations 참조"}
+
+    # A 가 실패했으면 그 산출물에서 나온 것을 쓰지 않는다.
+    if coverage["g0_0a"]["status"] == "FAILED":
         P = {}
-    elif summ:
-        cov_a = {"status": "MEASURED",
-                 "counts": {"emitted": summ.get("emitted", 0),
-                            "query_failed": summ.get("query_failed", 0),
-                            "value_mismatch": summ.get("value_mismatch", 0)}}
-    else:
-        cov_a = {"status": "PARTIAL", "reason": "probe_summary sentinel 이 없다 — 블록이 끝까지 갔는지 확인 불가",
-                 "counts": {"parsed": len(P)}}
-        warn.append("G0-0A 에 probe_summary 가 없다. exit code 와 sentinel 을 함께 확인하라")
+        W.append("G0-0A 가 FAILED 다 → account_privs 와 그로부터 파생될 값을 신뢰하지 않는다")
 
+    # source — 서버가 스스로 밝힌 신원만.
     src = {}
-    for k, pid in (("db_unique_name", "userenv.DB_UNIQUE_NAME"), ("database_role", "userenv.DATABASE_ROLE"),
-                   ("instance_name", "userenv.INSTANCE_NAME"), ("oracle_version", "ver.product_component"),
+    for k, pid in (("db_unique_name", "userenv.DB_UNIQUE_NAME"),
+                   ("database_role", "userenv.DATABASE_ROLE"),
+                   ("instance_name", "userenv.INSTANCE_NAME"),
+                   ("oracle_version", "ver.product_component"),
                    ("characterset", "nls.characterset")):
-        if ok(P.get(pid)):
-            src[k] = str(val(P[pid]))
+        r = P.get(pid)
+        if r and r.get("query_ok") is True and r.get("value") is not None:
+            src[k] = str(r["value"])
 
-    # ── B0 / B1 / C00 / C suite ──────────────────────────────────────
-    cov_b0 = {"status": "NOT_RUN"}
-    if pb0:
-        b0 = jsonl(pb0)
-        cov_b0 = {"status": "MEASURED" if b0 else "FAILED",
-                  "counts": {"probes": len(b0)},
-                  **({} if b0 else {"reason": "파싱 가능한 결과 줄이 없다"})}
-
-    spark_paths, cov_b1 = {}, {"status": "NOT_RUN"}
-    if pb1:
-        try:
-            e = json.loads(pb1.read_text(encoding="utf-8"))
-            v = e.get("verdict", {})
-            spark_paths = {"verdict": v.get("coverage"), "blocking": v.get("blocking", []),
-                           "by_path": e.get("by_path", {}),
-                           "preamble_ok_by_path": e.get("preamble_ok_by_path", {})}
-            cov_b1 = {"status": "MEASURED" if v.get("coverage") == "PROVEN" else "PARTIAL",
-                      "reason": v.get("reason", "")[:200]}
-        except Exception as ex:  # noqa: BLE001
-            cov_b1 = {"status": "FAILED", "reason": f"{type(ex).__name__}"}
-            warn.append(f"G0-0B1 증거를 읽지 못했다: {ex}")
-
-    fence, cov_c00 = {}, {"status": "NOT_RUN"}
-    if pc00:
-        recs = jsonl(pc00)
-        fence = {r["probe"]: r for r in recs if isinstance(r.get("probe"), str)}
-        skipped = sum(1 for r in fence.values() if r.get("skipped"))
-        cov_c00 = {"status": "PARTIAL" if skipped else ("MEASURED" if fence else "FAILED"),
-                   "counts": {"probes": len(fence), "skipped": skipped},
-                   **({"reason": "ACK_FULL_SCAN=N — 전수 스캔 계열이 전부 건너뛰어졌다"} if skipped else {})}
-
-    ces, cov_cs = {}, {"status": "NOT_RUN"}
-    if pcs:
-        try:
-            e = json.loads(pcs.read_text(encoding="utf-8"))
-            v = e.get("suite_verdict", {})
-            ces = {"pass": v.get("pass"), "reason": v.get("reason", "")[:300],
-                   "outcomes": {s.get("id"): s.get("outcome") for s in e.get("scenarios", [])}}
-            cov_cs = {"status": "MEASURED" if v.get("pass") else "PARTIAL",
-                      "reason": v.get("reason", "")[:200]}
-        except Exception as ex:  # noqa: BLE001
-            cov_cs = {"status": "FAILED", "reason": f"{type(ex).__name__}"}
+    complete = all(c["status"] == "MEASURED" for c in coverage.values())
 
     rec = {
-        "schema_version": "1.0.0", "record_type": "g0_evidence",
+        "schema_version": "2.0.0",
+        "record_type": "g0_0_evidence",
+        "scope": "CAPABILITY_INVENTORY",
+        "gate_eligible": False,
+        "completeness": "COMPLETE" if complete else "INCOMPLETE",
         "g0_report_id": a.report_id,
-        "executed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run_id": a.run_id,
         "profile": a.profile,
+        "normalized_at": now_iso(),
         "versions_lock_digest": lock_digest,
-        "source": src,
-        "coverage": {"g0_0a": cov_a, "g0_0b0": cov_b0, "g0_0b1": cov_b1,
-                     "g0_0c00": cov_c00, "g0_0c_suite": cov_cs},
+        "children": children,
+        "coverage": coverage,
         "not_covered": NOT_COVERED,
-        "account_privs": [r for r in arecs if "probe" in r],
-        "capability_axes": derive_axes(P),
+        "account_privs": list(P.values()),
+        "capability_axes": axes_suspended(),
         "artifacts": arts,
         "spark_paths": spark_paths, "fence_facts": fence, "counterexamples": ces,
-        "warnings": warn,
+        "contract_violations": V,
+        "warnings": W,
     }
-    if a.profile == "LOCAL_WSL":
+    if src:
+        rec["source"] = src
+
+    if a.profile in ("LOCAL_WSL", "SANDBOX_CONTAINER"):
         rec["warnings"].append(
-            "profile=LOCAL_WSL — 이 증거는 **하네스 동작 확인용**이며 설계 주장의 근거가 아니다. "
-            "원천 capability 값·ADG 거동·규모는 사내 환경에서만 잴 수 있다.")
-    if a.profile == "SANDBOX_CONTAINER":
-        rec["warnings"].append(
-            "profile=SANDBOX_CONTAINER — 이 증거는 **하네스 동작 확인용**이며 설계 주장의 근거가 아니다. "
-            "이 환경에는 Oracle 서버가 없다(컨테이너 이미지 반입 불가). 따라서 원천에 붙는 모든 측정은 "
-            "미실행이며, 여기서 확인된 것은 코드가 그 Spark 판본에 대해 컴파일·배선되는가 뿐이다. "
-            "LOCAL_WSL 보다 제약이 강하다 — 로컬 WSL2 회차의 대체물이 아니다.")
+            f"profile={a.profile} — 이 증거는 **하네스 동작 확인용**이며 설계 주장의 근거가 아니다. "
+            + ("원천 capability 값·ADG 거동·규모는 사내 환경에서만 잴 수 있다."
+               if a.profile == "LOCAL_WSL" else
+               "이 환경에는 Oracle 서버가 없다. 원천에 붙는 모든 측정은 미실행이며, 확인된 것은 "
+               "코드가 그 Spark 판본에 대해 컴파일·배선되는가 뿐이다. LOCAL_WSL 보다 제약이 강하다."))
+
+    # ── schema 검증 — 위반이면 최종 경로에 쓰지 않는다 ──────────────
+    schema_errs: list[str] = []
+    sp = pathlib.Path(__file__).resolve().parent / SCHEMA_FILE
+    if not sp.is_file():
+        schema_errs.append(f"{SCHEMA_FILE} 이 없다 — 계약으로 검증하지 못했다")
+    else:
+        try:
+            import jsonschema
+        except ImportError:
+            schema_errs.append("jsonschema 미설치 — 이 레코드를 계약으로 검증하지 못했다. "
+                               "검증하지 못한 것을 통과로 두지 않는다")
+        else:
+            sc = json.loads(sp.read_text(encoding="utf-8"))
+            for e in sorted(jsonschema.Draft202012Validator(sc).iter_errors(rec),
+                            key=lambda x: list(x.path))[:8]:
+                schema_errs.append(f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}")
 
     out = pathlib.Path(a.out)
+    if V or schema_errs:
+        rejected = out.with_name(out.name + ".rejected.json")
+        rejected.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+        for e in schema_errs:
+            print(f"[schema] {e}", file=sys.stderr)
+        for v in V:
+            print(f"[contract] {v}", file=sys.stderr)
+        print(json.dumps({
+            "verdict": "REJECTED",
+            "why": "계약 위반 또는 schema 위반이 있다. **최종 경로에 쓰지 않았다.**",
+            "rejected_copy": str(rejected),
+            "contract_violations": V,
+            "schema_errors": schema_errs,
+        }, ensure_ascii=False, indent=1))
+        return 4
+
     out.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    # 자기 검증
-    try:
-        import jsonschema
-        sc = json.loads(pathlib.Path("g0-evidence.schema.json").read_text(encoding="utf-8"))
-        errs = sorted(jsonschema.Draft202012Validator(sc).iter_errors(rec), key=lambda e: list(e.path))
-        for e in errs[:5]:
-            print(f"[schema] {'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}", file=sys.stderr)
-        if errs:
-            print(f"[schema] {len(errs)}건 위반 — 레코드는 썼으나 계약을 지키지 못했다", file=sys.stderr)
-    except ImportError:
-        rec["warnings"].append("jsonschema 미설치 — 이 레코드를 계약으로 검증하지 못했다")
-        out.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    axes = {k: v["value"] for k, v in rec["capability_axes"].items()}
-    print(json.dumps({"out": str(out), "coverage": {k: v["status"] for k, v in rec["coverage"].items()},
-                      "capability_axes": axes, "warnings": rec["warnings"]},
-                     ensure_ascii=False, indent=1))
-    und = [k for k, v in axes.items() if v == "UNDETERMINED"]
-    return 0 if not und else 3
+    print(json.dumps({
+        "out": str(out),
+        "record_type": rec["record_type"],
+        "gate_eligible": rec["gate_eligible"],
+        "completeness": rec["completeness"],
+        "coverage": {k: v["status"] for k, v in coverage.items()},
+        "capability_axes": "SUSPENDED — 조치 3(축 재설계) 전까지 파생하지 않는다",
+        "warnings": rec["warnings"],
+    }, ensure_ascii=False, indent=1))
+    return 0 if complete else 3
 
 
 if __name__ == "__main__":

@@ -119,3 +119,15 @@ SIGKILL 이후 서버에 남은 상태. "예외가 안 났다"·클라이언트 
 6. **CE08 의 crash 모델.** 자식은 각 partition 을 commit 한 뒤 죽는다. 관측되는 잔여물은
    미commit 조각이 아니라 **commit 된 부분 진행 상태**다. 미commit 조각이 남는 경로는
    별도 실험이 필요하다.
+
+---
+
+## 부록 — 2026-08-27 증거 형식 변경 (7차 교차 리뷰 조치)
+
+| 필드 | 왜 생겼나 |
+|---|---|
+| `scenarios[*].child_returncode` | **runner 가 자식 프로세스의 종료 코드를 읽지 않았다**(P0-02). 통과 모양의 `SCENARIO_RESULT` 를 찍은 뒤 exit 1 로 죽어도 suite PASS 후보가 됐다. 이제 0 이 아니면 그 시나리오는 `INCONCLUSIVE` 로 강등된다. `-1` 은 '실행하지 않았다'(dry-run·entrypoint 부재)를 뜻한다 |
+| `suite_config_sha256` | `artifact_sha256` 은 순환 참조를 피하려고 `suite.yaml` 을 제외하고 계산한다. 그래서 **필수 시나리오·budget·pass rule 이 어떤 digest 에도 묶이지 않았다**(P1-10). code digest 와 config digest 를 따로 남긴다 |
+
+두 필드 모두 `evidence.schema.json` 의 `required` 다. 옛 증거 파일은 이 스키마를 통과하지 못한다 —
+그것이 의도다. 증거 형식이 바뀌면 이전 증거는 그 판본의 것이며 새 판본의 근거로 재사용하지 않는다.
