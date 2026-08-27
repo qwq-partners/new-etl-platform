@@ -30,6 +30,18 @@
 ## 2. 실행
 
 ```bash
+# (0-a) 이 블록에서 쓰는 변수를 먼저 정의한다. 정의 없이 쓰면 빈 문자열로 접속을 시도한다.
+export ORA_USER='ETL_USER'                     # 접속 계정
+export ORA_TNS='//dbhost:1521/SVC'             # easy connect 또는 tnsnames alias
+export URL="jdbc:oracle:thin:@$ORA_TNS"        # B0/B1 이 쓰는 JDBC URL
+export USER="$ORA_USER"                        # B1 run.sh 의 두 번째 인자
+export CE_DOC_PATH="$PWD/etl-platform-target-architecture-v1.2.3.1.md"   # CE09 공시 검사 대상(필수)
+# 대상 스키마·테이블·워터마크 컬럼은 각 SQL 파일 상단 DEFINE 을 직접 편집한다:
+#   g0-0a-capability-inventory.sql  : TARGET_OWNER / TARGET_TABLE / WM_COLUMN / EXPECT_ROLE / EXPECT_DBUNAME
+#   g0-0c-fence-facts.sql           : TARGET_OWNER / TARGET_TABLE / WM_COLUMN / ACK_FULL_SCAN
+# EXPECT_DBUNAME 을 모르면 먼저 한 줄로 확인한다:
+#   SELECT SYS_CONTEXT('USERENV','DB_UNIQUE_NAME'), SYS_CONTEXT('USERENV','DATABASE_ROLE') FROM DUAL;
+
 # (0) 비밀번호를 명령줄 인자로 절대 넘기지 않는다. /nolog + stdin CONNECT를 쓴다.
 read -rs -p "ETL password: " ORA_PW; export ORA_PW
 
@@ -48,14 +60,16 @@ spark-submit --jars /path/ojdbc11.jar g0-0b0-spark-smoke.py \
   | tee g0-0b0-evidence-$(date +%Y%m%d).log
 
 # (3) G0-0C00 — fence fact collector. **G0-0A의 wm_column.leading_valid_visible 를 먼저 확인**하고,
-#     0이면 ACK_FULL_SCAN=N(기본)으로 둔 채 Q3만 돌린다.
+#     ACK_FULL_SCAN=N(기본)이면 **대상 테이블 질의가 하나도 실행되지 않는다** —
+#     Q1·Q2·Q4 는 물론 Q3 도 게이트 뒤에 있다(SAMPLE 은 표본 추출이지 I/O 절감이 아니다).
+#     즉 기본 설정으로 돌리면 산출물이 0건이다. 승인 후 ACK_FULL_SCAN=Y 로 실행하라.
 sqlplus -S /nolog <<EOF | tee g0-0c00-evidence-$(date +%Y%m%d).log
 CONNECT $ORA_USER/$ORA_PW@//host:1521/service
 @g0-0c-fence-facts.sql
 EXIT
 EOF
 
-# (3.5) G0-0B1 — provider tracer. **B0 다음, C 앞에 온다.**
+# (2.5) G0-0B1 — provider tracer. **B0 다음, C00 앞이다.**
 cd g0-0b1-connection-provider
 export SPARK_HOME=/opt/spark OJDBC_JAR=/path/ojdbc11.jar
 ./build.sh                      # 실제 Spark 판본에 대고 컴파일. 실패도 측정 결과다.
@@ -68,6 +82,9 @@ cd ..
 #     접속 정보는 환경변수로만 넘긴다(argv 금지). 자세한 것은 패키지 README 참조.
 cd g0-0c-counterexamples
 export CE_USER=ETL_CE CE_DSN='host:1521/etlpoc'
+# CE_DOC_PATH 는 **필수**다. 없으면 runner 가 preflight 에서 exit 2 로 중단한다
+# (CE09 가 공시 검사로 HOLDS/FAIL 을 가르는데, 그 문서가 이 패키지 tarball 에 없다).
+export CE_DOC_PATH="${CE_DOC_PATH:-$PWD/../etl-platform-target-architecture-v1.2.3.1.md}"
 read -rs -p 'CE password: ' CE_PASSWORD && export CE_PASSWORD && echo
 # suite.yaml 의 expected_*_db_unique_name / allowed_schema / versions 를 먼저 채운다.
 python3 runner.py --suite suite.yaml --dry-run          # 가드·계획만
@@ -158,4 +175,4 @@ unset ORA_PW
 1. 두 로그를 `g0_evidence`(§4 표의 capability 목록 + `QUERY_OK`/`ROW_PRESENT`/`VALUE_INTERPRETABLE`)로 정규화한다.
 2. §4 분기표대로 **capability 목록을 확정**한다 — 이것이 A v2.0의 `ConnectionRevision capability overlay` 초기값이 된다.
 3. 그 다음에야 A v2.0 / P v2.0 규범 개정을 시작한다.
-4. 남은 세 산출물(리뷰 §7.4): exact preamble spike · Spark connection-path tracer · fence 반례 harness. 앞의 둘은 이 probe의 `S1c`·`S2`·`S3`가 이미 상당 부분 덮는다.
+4. 남은 세 산출물(리뷰 §7.4): exact preamble spike · ~~Spark connection-path tracer~~ (**철회** — B0 의 S1c·S2·S3 는 stock 경로 관측일 뿐 provider 가 3경로를 덮는지는 증명하지 못한다. G0-0B1 이 그 역할이다) 구 서술: Spark connection-path tracer · fence 반례 harness. 앞의 둘은 이 probe의 `S1c`·`S2`·`S3`가 이미 상당 부분 덮는다.

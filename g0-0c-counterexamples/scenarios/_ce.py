@@ -308,7 +308,15 @@ class Fixture:
 
     def table(self, suffix: str, body: str, opts: str = "") -> str:
         n = self.name(suffix)
-        self.drop(n)
+        # 같은 이름의 객체가 **이미** 있으면 그것이 이 harness 의 것인지 알 수 없다.
+        # PURGE 는 recyclebin 으로도 복구되지 않으므로 조용히 지우지 않고 멈춘다.
+        # (직전 실행이 비정상 종료해 남긴 것일 수도 있다 — 그때는 사람이 확인하고 지운다.)
+        exists = q1(self.conn,
+                    "SELECT COUNT(*) FROM user_objects WHERE object_name = :n", n=n)
+        if exists:
+            raise Unavailable(
+                f"객체 {n} 이 이미 존재한다. 이 harness 가 만든 것인지 확인할 수 없어 "
+                f"지우지 않는다. 직전 실행의 잔여물이면 손으로 DROP 한 뒤 다시 실행하라.")
         with self.conn.cursor() as cur:
             cur.execute(f"CREATE TABLE {n} ({body}){(' ' + opts) if opts else ''}")
         self.tables.append(n)

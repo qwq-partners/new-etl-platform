@@ -17,7 +17,12 @@ echo "[build] SPARK_HOME=$SPARK_HOME"
 echo "[build] spark jars: $(find "$SPARK_HOME/jars" -name '*.jar' | wc -l)개"
 "$SPARK_HOME"/bin/spark-submit --version 2>&1 | grep -iE 'version|scala' | sed 's/^/[build] /' || true
 
-javac -Xlint:all -cp "$CP" -d "$OUT/classes" $(find src/main/java -name '*.java')
+# 바이트코드 레벨을 Spark 실행 JVM 에 맞춘다. 빌드 JDK 가 실행 JVM 보다 높으면
+# ServiceLoader 가 UnsupportedClassVersionError 로 조용히 실패하고,
+# 그 실패는 "추적 0건" 으로만 나타나 원인을 찾기 어렵다.
+: "${TARGET_RELEASE:=17}"
+echo "[build] --release $TARGET_RELEASE (TARGET_RELEASE 로 바꿀 수 있다)"
+javac --release "$TARGET_RELEASE" -Xlint:all -cp "$CP" -d "$OUT/classes" $(find src/main/java -name '*.java')
 cp -r src/main/resources/* "$OUT/classes/"
 ( cd "$OUT/classes" && jar cf "../../$JAR" . )
 

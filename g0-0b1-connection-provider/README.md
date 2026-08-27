@@ -10,11 +10,11 @@ Profile U 의 모든 보장은 **"모든 물리 connection 이 세션 프리앰�
 
 | # | 질문 | 아니면 무엇이 무너지는가 |
 |---|---|---|
-| 1 | 커스텀 provider 가 **세 경로 모두**에서 호출되는가 | schema/metadata 경로가 fence 밖에서 읽는다 |
+| 1 | 커스텀 provider 가 **`SCHEMA`·`TASK` 경로**에서 호출되는가 | 그 경로가 fence 밖에서 읽는다 |
 | 2 | 프리앰블 실패 시 job 이 정말 죽는가(**fail-closed**) | 어떤 경로가 예외를 삼키면 그 경로는 단언 없이 계속 간다 |
 | 3 | 한 회차가 여는 물리 connection·서버 세션은 몇 개인가 | Control 의 동시 세션 예산 근거가 없다 |
 
-`sessionInitStatement` 로는 1번을 만족시킬 수 없다는 것이 출발점이다. Spark SPI 인 `JdbcConnectionProvider` 는 Spark 가 **모든** JDBC connection 을 만들 때 거치는 지점이므로, 여기에 붙는 것이 stock Spark 에서 세 경로를 덮는 유일한 방법이다.
+`sessionInitStatement` 로는 1번을 만족시킬 수 없다는 것이 출발점이다. Spark SPI 인 `JdbcConnectionProvider` 는 Spark 가 **모든** JDBC connection 을 만들 때 거치는 지점이므로, 여기에 붙는 것이 stock Spark 에서 여러 경로를 한 지점에서 덮는 유일한 방법이다(다만 이 하네스가 실제로 유발하는 것은 `SCHEMA`·`TASK` 두 경로다 — §7).
 
 ---
 
@@ -47,10 +47,19 @@ export SPARK_HOME=/opt/spark
 ```bash
 export OJDBC_JAR=/path/to/ojdbc11.jar
 read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
-./run.sh "jdbc:oracle:thin:@//host:1521/svc" ETL_USER SCHEMA.TABLE ETLPOC_STB "PHYSICAL STANDBY" 300
+./run.sh "jdbc:oracle:thin:@//host:1521/svc" ETL_USER SCHEMA.TABLE ETLPOC_STB PHYSICAL_STANDBY 300
+# role 은 **공백 없이** 넘긴다. JVM 인자에서 공백이 잘리므로 run.sh 가 공백 입력을 거부한다.
 ```
 
-종료 코드: **0** = 세 경로 커버 증명됨 · **3** = 미증명 · **2** = 실행 전 조건 미비
+종료 코드
+  **0** = `SCHEMA`·`TASK` 두 경로 커버 + coverage 회차 프리앰블 전면 적용 + fail-closed 성립
+  **2** = 실행 전 조건 미비(빌드 안 됨·환경변수 없음 등)
+  **3** = `NOT_PROVEN` — 측정은 했으나 위 조건 중 하나가 미충족
+  **5** = `MEASUREMENT_FAILED` — 추적 0건. **측정 자체를 못 했다**(대개 conf 누락)
+
+> `METADATA`(DSv2 `JDBCTableCatalog`) 경로는 이 하네스가 **유발하지 않는다** — `run-g0-0b1.py` 는
+> DSv1(`spark.read.format("jdbc")`)만 쓰고 `spark.sql.catalog.*` 를 설정하지 않는다.
+> 따라서 **exit 0 은 그 경로를 증명하지 않는다.** 미측정이다.
 
 ### 반드시 필요한 conf
 
@@ -66,7 +75,7 @@ read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
 
 `analyze-trace.py` 는 세 결론만 낸다.
 
-- **`PROVEN`** — 세 경로에서 provider 가 호출됐고 프리앰블이 전부 적용됐으며 fail-closed 가 성립한다.
+- **`PROVEN`** — `SCHEMA`·`TASK` 경로에서 provider 가 호출됐고 프리앰블이 전부 적용됐으며 fail-closed 가 성립한다. **`METADATA` 는 포함하지 않는다**(§7).
 - **`NOT_PROVEN`** — 위 중 하나가 아니다. 어느 질문이 걸렸는지 `blocking` 에 나온다.
 - **`MEASUREMENT_FAILED`** — 추적 라인이 0건이다. 이건 **"덮지 못한다"가 아니라 "측정하지 못했다"** 이다. 둘을 섞으면 안 된다.
 
@@ -94,6 +103,10 @@ read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
 
 ## 7. 이 도구가 증명하지 못하는 것
 
+- **`METADATA`(DSv2 카탈로그) 경로.** 이 하네스는 그 경로를 **유발하지 않으므로 미측정**이다.
+  재려면 `spark.sql.catalog.*` 를 등록해야 하는데, 그 conf 는 비밀번호를 Spark conf·이벤트로그·Web UI 에
+  남기므로 §6-3(비밀번호는 환경변수로만)과 충돌한다. 사내 PoC 에서 별도 step 으로 다루고,
+  켤 때의 노출 경로를 그때 명시하라.
 - **운영 규모의 동시성.** `local[4]` 는 정시 burst 500건을 재현하지 않는다. 동시 세션 **피크**는 이 실행으로 알 수 없다.
 - **다른 Spark 판본.** SPI 시그니처와 내부 호출 경로는 판본마다 다르다. `versions.lock` 의 그 버전으로 빌드·실행한 결과만 근거가 된다.
 - **Oracle 쪽 부하.** 이건 connection 경로 실측이지 부하 시험이 아니다.

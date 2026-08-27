@@ -61,7 +61,7 @@ def main():
         }
         pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1), encoding="utf-8")
         print(json.dumps(ev["verdict"], ensure_ascii=False, indent=1))
-        return 3
+        return 5   # MEASUREMENT_FAILED 는 NOT_PROVEN(3) 과 다른 것이다. 섞으면 안 된다.
 
     # ── 회차(run)로 먼저 가른다 ────────────────────────────────────────
     # coverage 와 failclosed 를 합산하면 failclosed 의 **의도된** 실패가 coverage 통계로
@@ -80,7 +80,7 @@ def main():
                                     f"넘겼는지 확인하라. 관측된 회차: {list(runs)}")}
         pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1), encoding="utf-8")
         print(json.dumps(ev["verdict"], ensure_ascii=False, indent=1))
-        return 3
+        return 5   # MEASUREMENT_FAILED 는 NOT_PROVEN(3) 과 다른 것이다. 섞으면 안 된다.
 
     by_path = Counter(c.get("path_guess") for c in cov)
     by_jvm = Counter(c.get("jvm") for c in cov)
@@ -134,17 +134,22 @@ def main():
                      "이 항목이 미확정인 한 coverage 는 PROVEN 이 될 수 없다."),
         })
     else:
-        broken = [r for r in fc if r.get("status") == "FAIL_CLOSED_BROKEN"]
+        # PARTIAL 도 깨진 것이다 — fail=all 인데 일부 step 이 성공했다면
+        # 그 step 이 쓰는 경로가 예외를 삼킨 것이고, 그게 이 실험의 표적이다.
+        broken = [r for r in fc if r.get("status") in ("FAIL_CLOSED_BROKEN", "FAIL_CLOSED_PARTIAL")]
+        ok_steps = sorted({st for r in fc for st in (r.get("ok_steps_under_fail_all") or [])})
         swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
         ev["findings"].append({
             "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
             "observed": {"statuses": [r.get("status") for r in fc],
-                         "failed_connections_in_failclosed": len(swallowed)},
+                         "failed_connections_in_failclosed": len(swallowed),
+                         "succeeded_steps_under_fail_all": ok_steps,
+                         "failclosed_by_path": dict(Counter(c.get("path_guess") for c in fcl))},
             "answer": "NO" if broken else "YES",
-            "note": ("**P0** — 프리앰블을 강제 실패시켰는데 읽기가 성공했다. 그 경로는 "
-                     "connection 예외를 삼킨다. 어느 경로인지는 failclosed 회차의 "
-                     "path_guess 별 실패 건수와 job 성공 여부를 대조해 좁혀라."
-                     if broken else "의도대로 실패했다."),
+            "note": (f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
+                     "그 step 이 쓰는 경로가 connection 예외를 삼킨다. "
+                     "failclosed_by_path 와 대조해 경로를 좁혀라."
+                     if broken else "의도대로 전 step 이 실패했다."),
         })
 
     # ── 질문 4: 세션 수(참고값, 게이트 아님) ────────────────────────────

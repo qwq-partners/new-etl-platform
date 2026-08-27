@@ -1,0 +1,62 @@
+# versions.lock — 실행 판본 고정
+#
+# A(§6.1)·P(§8.1)가 `versions_lock_digest` 를 증거 레코드의 필수 항목으로 규정하는데
+# 정작 이 파일이 저장소에 없었다(2026-08-27 리뷰에서 확인 — 17개 문서가 참조, 실물 0).
+# 이 파일이 없으면 "어느 판본에서 잰 값인가" 를 답할 수 없고, 그러면 어떤 측정도
+# 규범 근거가 되지 못한다.
+#
+# **UNSET 은 빈칸이 아니라 판정이다.** 채우지 않은 항목이 있으면 그 항목에 의존하는
+# 측정은 미확정으로 남는다. 값을 지어내지 말고, 실제로 쓴 것을 적어라.
+#
+# 채우는 법은 각 항목의 verify 줄에 있다. 실행 후 반드시 실측값으로 갱신한다.
+
+schema_version: "1.0.0"
+profile: UNSET          # LOCAL_WSL | CORP_POC — 이 lock 이 어느 환경의 것인가
+
+runtime:
+  jdk:
+    version: UNSET      # 예: 17.0.11
+    vendor: UNSET       # 예: Temurin
+    verify: "java -version 2>&1 | head -1"
+    note: "빌드 JDK 가 Spark 실행 JVM 보다 높으면 ServiceLoader 가 조용히 실패한다.
+           build.sh 는 --release 로 바이트코드 레벨을 맞춰야 한다."
+  spark:
+    version: UNSET      # 예: 3.5.1
+    scala: UNSET        # 예: 2.12 | 2.13  — JdbcConnectionProvider SPI 시그니처가 갈린다
+    distribution: UNSET # 예: apache-spark-3.5.1-bin-hadoop3
+    verify: "$SPARK_HOME/bin/spark-submit --version"
+  python:
+    version: UNSET      # 예: 3.12.3
+    verify: "python3 -V"
+    packages:
+      oracledb: UNSET   # thin 모드. 서버 최소 버전 제약이 있다 — CE README §6 참조
+      jsonschema: UNSET # 4.x 필요. 3.x 는 Draft 2020-12 미지원이라 suite 가 통과하지 못한다
+      pyspark: UNSET    # spark-submit 을 쓰면 불필요할 수 있다
+      verify: "python3 -m pip list --format=freeze | grep -Ei 'oracledb|jsonschema|pyspark'"
+
+oracle:
+  server_version: UNSET     # 예: 19.21.0.0 — g0-0a 의 ver.product_component 실측값을 적는다
+  edition: UNSET            # 예: EE | XE | FREE
+  database_role: UNSET      # PRIMARY | PHYSICAL STANDBY
+  data_guard: UNSET         # true | false — XE/FREE 는 지원하지 않는다(확인 필요)
+  characterset: UNSET       # g0-0a 의 nls.characterset 실측값
+  ojdbc:
+    artifact: UNSET         # 예: ojdbc11-23.4.0.24.05.jar
+    sha256: UNSET
+    verify: "unzip -p $OJDBC_JAR META-INF/MANIFEST.MF | grep -i implementation-version"
+  sqlplus:
+    version: UNSET          # G0-0A·C00 실행에 필요
+    source: UNSET           # instantclient 패키지명·반입 경로
+
+platform:                   # 아직 세우지 않았다면 UNSET 그대로 둔다
+  dagster: UNSET
+  iceberg: UNSET
+  polaris: UNSET
+  postgres: UNSET
+  object_store: UNSET       # 예: MinIO RELEASE.xxxx
+
+# 이 lock 으로 얻은 증거를 어디에 묶는가
+evidence_binding:
+  rule: "모든 G0-0 증거 레코드는 이 파일의 sha256 을 versions_lock_digest 로 함께 기록한다.
+         lock 이 바뀌면 이전 증거는 그 판본의 것이며, 새 판본의 근거로 재사용하지 않는다."
+  digest_cmd: "sha256sum versions.lock"

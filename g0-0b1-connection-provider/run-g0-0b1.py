@@ -64,7 +64,10 @@ def main():
 
     # partition 컬럼을 원천에 요구하지 않기 위해 파생 컬럼을 만든다.
     # ROWNUM 으로 먼저 잘라 전수 스캔을 막는다.
-    dbtable = (f"(SELECT t.*, MOD(ROWNUM, {a.num_partitions}) AS g0b1_part "
+    # partition 키는 **행 자체의 함수**여야 한다. MOD(ROWNUM, n) 은 파티션 쿼리마다
+    # 독립 재실행되어 같은 행이 매번 다른 파티션에 배정될 수 있고, 그러면 파티션들의
+    # 합집합이 원래 행 집합과 달라진다. ORA_HASH(ROWID) 는 재실행해도 같다.
+    dbtable = (f"(SELECT t.*, MOD(ORA_HASH(ROWIDTOCHAR(t.ROWID)), {a.num_partitions}) AS g0b1_part "
                f"FROM (SELECT * FROM {a.table} WHERE ROWNUM <= {a.limit}) t) x")
 
     opts = {"url": a.url, "user": a.user, "password": pw, "dbtable": dbtable}
@@ -89,15 +92,26 @@ def main():
         except OSError:
             pass
 
+    # 자격증명 오류는 한 회차 안에서도 여러 step 이 각각 로그온을 시도해 누적된다.
+    # 한 번 관측되면 남은 step 을 돌리지 않는다(계정 잠금 방지).
+    FATAL = ("ORA-01017", "ORA-28000", "ORA-01005", "ORA-28001", "invalid username")
+    state = {"abort": None}
+
     def step(name, fn):
+        if state["abort"]:
+            rec["steps"].append({"step": name, "ok": False, "error": "SKIPPED: " + state["abort"]})
+            return None
         marker(name, "begin")
         try:
             v = fn()
             rec["steps"].append({"step": name, "ok": True, "value": v})
             return v
         except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            if any(k in msg for k in FATAL):
+                state["abort"] = "자격증명 오류 관측 — 남은 step 을 실행하지 않는다(계정 잠금 방지)"
             rec["steps"].append({"step": name, "ok": False,
-                                 "error": f"{type(e).__name__}: {str(e)[:400]}"})
+                                 "error": f"{type(e).__name__}: {msg[:400]}"})
             return None
         finally:
             marker(name, "end")
@@ -135,9 +149,22 @@ def main():
 
     ok = all(s["ok"] for s in rec["steps"])
     rec["all_steps_ok"] = ok
+    if state["abort"]:
+        rec["status"] = "ABORT_CREDENTIALS"
+        rec["note"] = state["abort"]
+        emit(rec); spark.stop(); return 2
     if a.mode == "failclosed":
         # 이 모드에서는 **실패가 정상**이다.
-        rec["status"] = "EXPECTED_FAILURE_OBSERVED" if not ok else "FAIL_CLOSED_BROKEN"
+        # 전부 실패 / 일부 성공 / 전부 성공을 구분한다. 일부 성공이면 **그 step 의 경로가
+        # 예외를 삼킨 것**이고, 그게 이 실험을 넣은 이유다.
+        n_ok = sum(1 for s in rec["steps"] if s["ok"])
+        if n_ok == len(rec["steps"]):
+            rec["status"] = "FAIL_CLOSED_BROKEN"
+        elif n_ok > 0:
+            rec["status"] = "FAIL_CLOSED_PARTIAL"
+        else:
+            rec["status"] = "EXPECTED_FAILURE_OBSERVED"
+        rec["ok_steps_under_fail_all"] = [s["step"] for s in rec["steps"] if s["ok"]]
         rec["note"] = ("프리앰블을 강제로 실패시켰는데 읽기가 성공했다면, 그 경로는 "
                        "connection 예외를 삼킨 것이다 — 세션 단언이 그 경로에서 성립하지 않는다."
                        if ok else "의도한 대로 실패했다. 각 step 의 error 를 경로별로 대조하라.")

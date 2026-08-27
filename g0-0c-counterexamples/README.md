@@ -104,6 +104,7 @@ SIGKILL 이후 서버에 남은 상태. "예외가 안 났다"·클라이언트 
 
 명시해 둔다 — 여기서 나온 결과로 아래를 대신 주장하면 안 된다.
 
+0. **구버전 Oracle.** 이 harness 는 `python-oracledb` **thin 모드 고정**이다(`init_oracle_client` 호출이 없다). thin 모드는 구버전 서버에 붙지 못하므로, 이 프로젝트가 코어 성립 조건으로 잡은 **최저 버전(11.2)에서는 CE01~CE09 를 하나도 재현할 수 없다.** 그 버전대를 재려면 thick 모드(Instant Client)로 바꾸거나 별도 하네스가 필요하다.
 1. **OJDBC·Spark 계층.** 이 harness 는 python-oracledb thin 이다. CE01 의 왕복 손실 중
    드라이버 정밀도 탓인 것은 `driver_scoped: true` 로 표시하고 설계 결함으로 승격하지 않는다.
    CE01·CE06·CE08 은 `spark_layer_pending: true` 를 남긴다. **G0-0B1**(커스텀

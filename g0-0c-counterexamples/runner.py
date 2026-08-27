@@ -36,6 +36,16 @@ OUTCOMES = {"COUNTEREXAMPLE_REPRODUCED", "MITIGATION_HOLDS", "MITIGATION_FAIL",
 PASSING_OUTCOMES = {"COUNTEREXAMPLE_REPRODUCED", "MITIGATION_HOLDS", "MITIGATION_FAIL"}
 EVIDENCE_KINDS = {"ORA_ERROR", "SERVER_STATE", "TIMING", "ROW_STATE", "LOG_WITH_SERVER_ID"}
 
+
+def _valid_ev(ev) -> int:
+    """kind·value 가 모두 규격에 맞는 증거만 센다. 배열 길이를 유효 건수로 쓰면
+    전부 무효인데도 증거가 있었던 것처럼 기록된다."""
+    if not isinstance(ev, list):
+        return 0
+    return sum(1 for e in ev
+               if isinstance(e, dict) and e.get("kind") in EVIDENCE_KINDS
+               and isinstance(e.get("value"), str) and e["value"].strip())
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -343,8 +353,8 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
             rec["observations"].append({
                 "name": "downgraded",
                 "value": f"injection_observed={rec['injection_observed']!r}, "
-                         f"유효한 injection_evidence {len(ev) if isinstance(ev, list) else 0}건 "
-                         "→ INJECTION_NOT_OBSERVED 로 강등"})
+                         f"제출 {len(ev) if isinstance(ev, list) else 0}건 중 "
+                         f"유효 {_valid_ev(ev)}건 → INJECTION_NOT_OBSERVED 로 강등"})
             rec["outcome"] = "INJECTION_NOT_OBSERVED"
         rec["injection_observed"] = False
     rec["finished_at"] = now()
@@ -435,11 +445,22 @@ def main() -> int:
         # --observed-env 를 줬다면 **서버가 돌려준 값과도** 일치해야 한다.
         if a.observed_env:
             claimed = json.loads(a.observed_env)
+            compared, unknown = [], []
             for k, v in claimed.items():
-                if k in observed and str(observed[k]) != str(v):
+                if k not in observed:
+                    unknown.append(k)          # 서버에서 읽지 않은 키 — 조용히 넘기지 않는다
+                    continue
+                if str(observed[k]) != str(v):
                     die(2, f"--observed-env 의 {k}={v!r} 가 서버가 돌려준 {observed[k]!r} 와 다르다. "
                            "운영자 신고와 실제 접속 대상이 어긋났다.")
-            print("[preflight] --observed-env 신고값이 서버 관측과 일치한다")
+                compared.append(k)
+            if unknown:
+                die(2, f"--observed-env 에 서버가 읽지 않는 키가 있다: {unknown}. "
+                       "대조되지 않은 신고값을 '일치' 로 취급하지 않는다.")
+            if not compared:
+                die(2, "--observed-env 를 줬는데 대조된 키가 하나도 없다.")
+            observed["_cross_checked_keys"] = compared
+            print(f"[preflight] --observed-env 대조 {compared} 전부 서버 관측과 일치")
 
     # CE09 는 공시 검사로 HOLDS/FAIL 을 가른다. 대상 문서가 없으면 그 시나리오는
     # 자기 판정 기준을 한 번도 평가하지 못하고, suite 는 9개를 다 돌린 뒤에야 PASS 불가가 된다.
