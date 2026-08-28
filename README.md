@@ -70,6 +70,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 판정 — **보류**. 후보 37건 중 검증 9건이 전부 기각된 이유 |
 | `etl-platform-v2.0-grant-request-candidates.md` | 그 판정의 **원자료** — 후보 37건 전체 + 기각 사유 전문. 28건은 미검증으로 표시 |
 | **`etl-platform-local-poc-plan.md`** | 로컬 WSL2 에서 G0-0 를 처음 돌리기 위한 실행 계획. **로컬이 증명하는 것/못하는 것 경계**가 핵심 |
+| **`etl-platform-transfer-guide.md`** | **사내 반입 안내** — `git bundle` 오프라인 반입, 폐쇄망 의존물, 결과 반출, 변경관리 문답 |
 | `CHANGELOG.md` | 아키텍처 변경 이력(규범 아님). 본문에서 분리 |
 
 ---
