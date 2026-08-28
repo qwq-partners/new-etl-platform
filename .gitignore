@@ -32,3 +32,6 @@ Thumbs.db
 g0-0b1-connection-provider/build/
 *.jar
 g0-0b1-evidence.json
+
+# 배포용 zip — 커밋하지 않는다(내용이 저장소 자신이다)
+new-etl-platform-*.zip

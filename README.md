@@ -1,5 +1,8 @@
 # ETL Platform — 목표 아키텍처 · PoC 기준서 · 교차 리뷰 기록
 
+> **처음 이어받는 사람은 [`HANDOFF.md`](HANDOFF.md) 를 먼저 읽어라.** 이 문서는 무엇이 어디 있는지의
+> 지도이고, `HANDOFF.md` 는 **왜 그렇게 돼 있는지**와 **무엇을 하면 안 되는지**를 담는다.
+
 Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼의 설계 문서와, 그 설계를 여섯 차례 교차 리뷰로 검증한 기록이다.
 
 - **규모**: Job 약 10,000개 · Run 약 40,000건/일 · 정시 burst 약 500건
