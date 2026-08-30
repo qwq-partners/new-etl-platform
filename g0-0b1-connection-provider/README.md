@@ -196,6 +196,28 @@ classpath 에 오르지 않아 stock `BasicConnectionProvider` 가 조용히 쓰
 
 ---
 
+### 2026-08-30 — 세션 프리앰블의 `TIME_ZONE` 을 규범값으로 고친다
+
+`Preamble` 이 `ALTER SESSION SET TIME_ZONE = DBTIMEZONE` 을 쓰고 있었다. **규범값은
+`'+00:00'` 이다** — A §11.3 의 sessionInitStatement 가 그것을 고정하고(P §3.2 TIMESTAMP
+실행 규격 ⑤), G0-0A(`g0-0a-capability-inventory.sql:136`)·G0-0B0
+(`g0-0b0-spark-smoke.py:129,:147`) 도 그 값이다. **B1 만 달랐다.**
+
+`DBTIMEZONE` 은 원천 DB 를 만들 때 정해진 값이라 무엇인지 모른다. A 는 그것을 등록조차 하지
+않는다 — §6.1 capability 목록의 `DB 시간대` 는 필드 이름 없는 산문이고 §22-4 의 미결이다.
+그러면 **B1 이 재는 세션이 규범이 규정한 세션이 아니게 되고**, B1 통과가 규범 세션의 성립을
+시사하지 못한다.
+
+**7차 리뷰 P0-06 의 `NLS_NUMERIC_CHARACTERS` `'. '` → `'.,'` 와 정확히 같은 종류의 결함**이다.
+그때 NUMBER 축만 대조하고 TIMESTAMP 축을 놓쳤다. 규범이 세션 값을 고정하는 이유는 canonical
+row hash 재현성이므로(A §12.3), 두 축 중 하나만 맞아서는 그 재현성이 서지 않는다.
+
+> **G0-0C 는 아직 다르다.** `g0-0c-counterexamples/scenarios/_ce.py` 는 여전히 `DBTIMEZONE`
+> 이며 그것은 실수가 아니라 CE03·CE04 의 자격 술어가 naive TIMESTAMP 와 `SYSTIMESTAMP` 를
+> 직접 비교하기 때문이다. **그래서 CE 결과는 규범 세션에 대한 증거가 아니다.** 술어를
+> `'+00:00'` 에서 다시 쓸지, CE 증거에 "규범 세션 아님" 을 명시할지는 **Oracle 에 붙여
+> 술어를 돌려 본 뒤**(S7) 정한다 — 그 파일의 주석에 같은 내용을 남겼다.
+
 ## 6. 안전 규칙
 
 1. 원천 객체 DDL·DML을 의도하지 않지만 **현재 source-safe 승인은 없다**.

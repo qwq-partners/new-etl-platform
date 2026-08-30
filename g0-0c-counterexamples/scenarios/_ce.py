@@ -229,6 +229,18 @@ class Ora:
 
         # 시간 축을 서버 기준으로 고정한다. SESSIONTIMEZONE 이 DB 와 다르면 naive
         # TIMESTAMP 와 SYSTIMESTAMP 비교가 통째로 어긋난다(CE03·CE04 의 자격 술어).
+        #
+        # ⚠ **A 의 규범 세션과 다르다**(2026-08-30 확인, 미해소). A §11.3 의
+        # sessionInitStatement 는 `TIME_ZONE = '+00:00'` 을 고정하고 G0-0A(:136)·
+        # G0-0B0(:129)·G0-0B1 이 모두 그 값이다. 여기만 DBTIMEZONE 인데, 이것은 실수가 아니라
+        # 위 두 줄의 이유 때문이다 — CE03·CE04 의 자격 술어가 naive TIMESTAMP 컬럼과
+        # SYSTIMESTAMP 를 직접 비교한다.
+        #
+        # **그래서 CE 결과를 규범 세션에 대한 증거로 읽으면 안 된다.** 둘 중 하나여야 한다 —
+        # (a) 술어를 `'+00:00'` 세션에서도 성립하게 다시 쓰거나, (b) CE 증거에
+        # "규범 세션 아님" 을 명시하고 그 범위에서만 인용하거나.
+        # 어느 쪽인지는 **Oracle 에 붙여 술어를 실제로 돌려 봐야** 정할 수 있다(S7). 그 전에
+        # 여기를 '+00:00' 로 바꾸면 시험해 본 적 없는 술어로 갈아 끼우는 것이다.
         try:
             ex(conn, "ALTER SESSION SET TIME_ZONE = DBTIMEZONE")
         except Exception as e:  # noqa: BLE001

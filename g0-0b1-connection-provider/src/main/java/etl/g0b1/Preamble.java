@@ -133,7 +133,20 @@ final class Preamble {
         //     오래 도는 추출은 이것으로 self-fail 하지 않는다(권한 판정서 §2 참조).
         try (Statement s = c.createStatement()) {
             s.setQueryTimeout(timeoutS);
-            s.execute("ALTER SESSION SET TIME_ZONE = DBTIMEZONE");
+            // **'+00:00' 이지 DBTIMEZONE 이 아니다**(2026-08-30 정정). A §11.3 의
+            // sessionInitStatement 가 `TIME_ZONE = '+00:00'` 을 고정하고(P §3.2 TIMESTAMP
+            // 실행 규격 ⑤), G0-0A(:136)·G0-0B0(:129,:147) 도 그 값이다. **여기만
+            // DBTIMEZONE 이었다.**
+            //
+            // DBTIMEZONE 은 원천 DB 를 만들 때 정해진 값이라 무엇인지 모른다 — A 는 그것을
+            // 등록조차 하지 않는다(§6.1 capability 목록의 'DB 시간대' 는 필드 이름이 없는
+            // 산문이고 §22-4 의 미결이다). 그러면 B1 이 재는 세션이 규범이 규정한 세션이
+            // 아니게 되고, B1 통과가 규범 세션의 성립을 시사하지 못한다.
+            //
+            // NLS_NUMERIC_CHARACTERS 의 '. ' → '.,' 와 **정확히 같은 종류의 결함**이다.
+            // 7차 리뷰 P0-06 조치 때 NUMBER 축만 보고 TIMESTAMP 축을 놓쳤다.
+            // 규범이 세션 값을 고정하는 이유는 canonical row hash 재현성이다(A §12.3).
+            s.execute("ALTER SESSION SET TIME_ZONE = '+00:00'");
             // **'.,' 다.** A(§6.1 세션 프리앰블)·P(§3.2 NUMBER 실행 규격 ⑥ 로케일 차단)·G0-0A
             // ·G0-0B0 가 모두 '.,' 를 고정한다. 여기만 '. '(그룹 구분자 공백)였다 —
             // Oracle 이 받는 유효한 값이라 조용히 달랐고, 그러면 B1 이 재는 세션이 규범이
