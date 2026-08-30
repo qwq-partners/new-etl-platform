@@ -3,6 +3,11 @@
 > 작업 사본: `~/g0/` (**ext4**). `/mnt/c` 에서는 실행하지 않는다 — drvfs/9p 는 파일 락·fsync 의미가 달라 DB 파일과 docker 레이어를 두면 안 된다.
 >
 > **이 계획의 한 문장**: 로컬은 "사내 PoC 의 축소판"이 아니라 **하네스를 처음 돌려 보는 곳**이다.
+>
+> **2026-08-30 상태**: B1의 partial Maven classpath compile·SPI linkage만 수행됐다. 8차 리뷰에서
+> M0 실행 안전성·M1 child evidence contract·M2 B1 경로 검증 전에는 S5~S8 결과를
+> 신뢰 가능한 G0-0 증거로 받을 수 없다고 판정했다. 이 문서는 수정 후 목표 계획이며,
+> 현재 스크립트를 사내 원천에 실행하라는 승인이 아니다.
 
 실측 자원: WSL2 Ubuntu 24.04 · vCPU 24 · RAM 31Gi(가용 29Gi) · `/` 778G · systemd=true · 컨테이너 도구 없음.
 
@@ -16,17 +21,20 @@
 |---|---|---|
 | **H** | 하네스가 돈다 / 이 결함이 코드 안에 있다 | 하네스에 대한 사실로만. **설계에 대해 아무 말도 하지 않는다** |
 | **D** | Spark 판본 내부 사실 또는 SQL 의미론의 **존재 증명** | **조건부**. 조건 불충족 시 H 로 강등 |
-| **X** | 원리적으로 측정 불가 | 이전 없음. "안 나왔다"는 부재의 증거가 아니라 **측정 불가**다 |
+| **X** | 현재 로컬 계획 범위 밖 | 이전 없음. `REQUIRES_CORP_ENV`·`NOT_INDUCED`·`NO_TEST_ARTIFACT`·`G1_SCOPE`를 구분하며, 원리적 측정 불가라는 뜻이 아니다 |
 
 ### H — 로컬의 주된 산출
 
-- G0-0A 86 probe 완주 — `exit 0` ∧ `probe_run_end` sentinel ∧ `manifest_ok=true` ∧ `emitted=86`. **넷 다여야 한다**
-- `c_expected=86` 의 경험적 확정 — 57→78→86 세 번 정정된 값이 처음으로 검증된다
+- G0-0A 87 probe 완주 — producer `exit 0` ∧ `probe_run_end` sentinel ∧ `manifest_ok=true` ∧ `emitted=87`. **넷 다여야 한다**
+- `c_expected=87` 정적 일치 확인. 실제 Oracle 완주는 아직 없으므로 경험적 확정으로 부르지 않는다
 - §8 이식성 21건의 파싱 가능성 — `ORA-00900`/`ORA-06550`/미정의 `&변수` 같은 실행 차단 결함 색출
 - B1 컴파일 + SPI 배선
 - **CE01~CE09 최초 실행** — 특히 CE08 의 `SIGKILL`, CE06 의 다중 connection, CE02 의 미commit 유지. **사내 생산라인 DB 에서는 영원히 못 돌린다. 로컬의 최고 가치다**
 
-### D — 조건부 이전 (조건: 사내 Spark 가 **동일 판본 vanilla**)
+### D — 조건부 이전
+
+같은 Spark 버전만으로는 부족하다. full distribution/classpath·JDK·OJDBC·provider 설정·datasource 경로·실행 방식까지
+evidence에 결속되고 동일해야 이전 후보가 된다.
 
 - **SCHEMA·TASK 2경로 커버리지** / **fail-closed 성립 여부**(어느 경로가 예외를 삼키는가)
 - 한 회차의 물리 connection 개수·open/close 패턴(NEW-05/13/18)
@@ -34,26 +42,28 @@
 - CE02·CE04·CE05·CE06·CE07 — Oracle read consistency·SQL 의미론이라 에디션 무관. **단 "그 위험이 실재한다"는 존재 증명으로만.** "얼마나 자주 일어나는가"로는 **절대 이전 금지**
 - CE01 typed successor / overflow ORA 코드 — **로컬은 26ai, 원천은 19c 계열.** 판본 병기 필수
 
-### X — 원리적으로 불가
+### X — 현재 로컬 계획 범위 밖
 
 | 항목 | 근거 |
 |---|---|
-| **ADG lag 거동 일체** (`ORA-03172`, `ORA-03173`, `STANDBY_MAX_DATA_DELAY` 실효) | §2 |
-| `DATABASE_ROLE='PHYSICAL STANDBY'` **양성** 분기 | 로컬 역할은 항상 PRIMARY. Preamble 의 음성 경로만 시험된다 |
-| 원천의 실제 capability 값 (charset·`MAX_STRING_SIZE`·`ROWDEPENDENCIES`·실제 grant/profile) | **로컬 계정은 우리가 만든 것이다.** 권한 결과는 자기가 정한 값의 되읽기일 뿐 |
-| canonical hash 벡터 V-01~V-16 | 로컬은 **AL32UTF8 고정이고 바꿀 수 없다**(이미지에 DB 가 이미 생성돼 있다). 원천이 `KO16MSWIN949` 면 로컬 통과가 사내 통과를 시사하지 않는다 → **인용 금지** |
-| **METADATA 경로 커버리지** | 하네스가 DSv1 만 쓰고 `spark.sql.catalog.*` 를 설정하지 않아 **유발조차 하지 않는다**. 로컬·사내 **공통 공백** |
-| F-13 유휴 정지 | 하루 2~3회·최소 3일 반복 필요 |
-| 규모 (10k Job / 40k Run / burst 500) | 단일 호스트. G1 소관 |
-| **플랫폼 자체** (Control Plane·Guard·lease·Commit Adjudication·FI-01~66) | **저장소에 플랫폼 코드가 0줄이다.** 로컬이든 사내든 아직 시험 대상이 아니다 |
+| **ADG lag 거동 일체** (`ORA-03172`, `ORA-03173`, `STANDBY_MAX_DATA_DELAY` 실효) | `REQUIRES_CORP_ENV` — §2 |
+| `DATABASE_ROLE='PHYSICAL STANDBY'` **양성** 분기 | `REQUIRES_CORP_ENV` — 로컬 역할은 항상 PRIMARY. Preamble의 음성 경로만 시험된다 |
+| 원천의 실제 capability 값 (charset·`MAX_STRING_SIZE`·`ROWDEPENDENCIES`·실제 grant/profile) | `REQUIRES_CORP_ENV` — 로컬 계정은 우리가 만든 것이므로 권한 결과는 자기가 정한 값의 되읽기일 뿐 |
+| canonical hash 벡터 V-01~V-16 | `REQUIRES_CORP_ENV` — 로컬은 AL32UTF8 고정이다. 원천이 `KO16MSWIN949`면 로컬 통과를 인용하지 않는다 |
+| **METADATA 경로 커버리지** | `NOT_INDUCED` — 현재 하네스가 유발하지 않는다. 다른 DSv2 trigger/config로 후속 측정 가능 |
+| F-13 유휴 정지 | `LOCAL_DEFERRED` — 하루 2~3회·최소 3일 반복이 필요한 후속 측정 |
+| 규모 (10k Job / 40k Run / burst 500) | `G1_SCOPE` — 단일 호스트 범위 밖이며 G1에서 측정 |
+| **플랫폼 자체** (Control Plane·Guard·lease·Commit Adjudication·FI-01~66) | `NO_TEST_ARTIFACT` — 플랫폼 코드가 없어 현재 시험 대상이 없고 구현 뒤 측정 가능 |
 
-### 오독 방지 장치는 이미 있다
+### 현재 오독 방지 경고는 불충분하다
 
 `g0-normalize.py` 는 `--profile LOCAL_WSL` 이면 증거에 다음을 박는다.
 
 > `profile=LOCAL_WSL — 이 증거는 하네스 동작 확인용이며 설계 주장의 근거가 아니다.`
 
-**로컬 증거 정규화는 반드시 `--profile LOCAL_WSL` 로 한다.** 새 장치를 만들 필요가 없다.
+**로컬 증거 정규화는 `--profile LOCAL_WSL` 로 해야 하지만 이것만으로 충분하지 않다.** profile은 caller 입력이라
+`CORP_POC`로 다시 붙일 수 있다. M1에서 child가 관측한 source/runtime/profile과 consumer-side 허용 범위를 결속하고,
+불일치·누락·재라벨을 fail-closed로 거부해야 한다.
 
 > 2026-08-27 추가 — profile 값이 하나 늘었다. `SANDBOX_CONTAINER` 는 **Oracle 을 띄울 수 없는
 > 일회성 원격 컨테이너** 회차용이며, 제약이 `LOCAL_WSL` 보다 **강하다**(원천에 붙는 측정이 전부
@@ -108,11 +118,11 @@ standby_db_unique_name=NOT_CHECKED (CE_STANDBY_DSN 미설정 —
 | **S0** | 작업 사본 + 커널 파라미터 | `fs.inotify.max_user_instances` = 8192 (**실측 기본 128** — k3d 대표 실패 지점) | 1h |
 | **S1** | Spark 설치 (Oracle·Docker·k8s 불필요) | `spark-submit --version` 이 판본·Scala 출력. sha 를 `versions.lock` 에 기록 | 1h |
 | **S2** | **★ B1 컴파일** — 최속 신호 | `build.sh` exit 0 + `META-INF/services` 등록 출력 | 0.5h |
-| **S3** | B1 SPI 배선 (여전히 Oracle 없이) | **추적 라인 수로 판정한다** — conf 있으면 ≥1, 없으면 0 (아래 정정) | 1h |
+| **S3** | B1 SPI 배선 (여전히 Oracle 없이) | **추적 라인 수로 판정한다** — conf 있으면 ≥1, 없으면 0 (아래 정정). explicit `connectionProvider=g0b1tracer` 선택과 ServiceLoader 도달을 함께 본다. Basic 전역 disable 은 진단 fallback | 1h |
 | **S4** | Docker + Oracle Free 컨테이너 (**k8s 아직 없음**) | 판본·charset·`memory_target`·`DB_UNIQUE_NAME` 실측 후 `versions.lock` 기록 | 3h |
 | **S4.5** | 실행 전제물 3종 | ojdbc jar / sqlplus 경로 / fixture 테이블 | 2h |
-| **S5** | G0-0A + C00 실행 | 위 네 조건 + C00 세 값 산출 | 2h |
-| **S6** | **★★ B1 본실행** coverage + failclosed | `verdict.coverage == PROVEN` ∧ failclosed 가 `EXPECTED_FAILURE_OBSERVED` | 3h |
+| **S5** | G0-0A + C00 실행 | M0/M1 완료 후 A 네 조건 + C00 external completion contract | 2h |
+| **S6** | **★★ B1 본실행** coverage + failclosed | M2 완료 후 explicit provider·schema/task/metadata 독립 회차와 주입 독립 oracle 통과 | 3h |
 | **S7** | B0 stock smoke (대조군) | S1c·S2·S3 관측치 산출 | 1h |
 | **S8** | **★ CE01~CE09 최초 실행** | 9개 실행 ∧ `injection_observed=true` ∧ `leftover_objects=[]` | 4h |
 
@@ -137,7 +147,8 @@ Kerberos 를 쓰면 후보가 { Oracle, ours } 가 되어 `basic` 을 꺼도 여
 
 ### S2 가 왜 최속인가
 
-`build.sh` 는 `$SPARK_HOME/jars` 외에 아무것도 요구하지 않는다. **저장소 최대 미지수의 절반이 Oracle 서버 없이, Docker 없이, k8s 없이 답해진다.** 실패해도 그것이 첫 측정 결과다.
+`build.sh`는 `$SPARK_HOME/jars` 외에 아무것도 요구하지 않는다. 여기서 답하는 것은
+**compile/API linkage뿐**이며 full runtime·connection-path coverage·fail-closed는 남는다.
 
 ### S6 의 분기 — 반드시 먼저 확인할 것
 
@@ -188,8 +199,8 @@ Oracle 컨테이너 ~4Gi + Spark local[4] ~4Gi + 여유. **S0~S8 은 k8s 가 없
 
 1. **S0** — `~/g0/` 작업 사본, `fs.inotify.max_user_instances=8192`
 2. **S1** — Spark 타르볼 전개, `spark-submit --version` 을 `versions.lock` 에 기록
-3. **S2** — `./build.sh`. **여기서 저장소 최대 미지수의 절반이 답해진다**
-4. **S3** — 도달 불가 URL 로 SPI 배선 확인 (conf 유/무 두 회차)
+3. **S2** — `./build.sh`. compile/API linkage만 확인하며 runtime·coverage·fail-closed는 답하지 않는다
+4. **S3** — 도달 불가 URL로 explicit `connectionProvider=g0b1tracer` 선택과 SPI 도달 확인
 5. `versions.lock` 의 JDK·Spark·Scala 항목을 실측값으로 채우고 sha256 을 기록
 
 **1~4 는 Oracle 서버도 Docker 도 k8s 도 필요 없다.** — 2026-08-27 회차가 이것을 실증했다

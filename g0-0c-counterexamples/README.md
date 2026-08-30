@@ -3,8 +3,10 @@
 `g0-0c-fence-facts.sql`(C00)이 **읽기 전용 fact collector** 라면, 이 패키지는
 **상태를 만들어 반례를 재현하는 harness** 다. 쓰기·동시성·프로세스 강제 종료를 한다.
 
-> **폐기 가능한 쓰기 가능 환경에서만 돌린다.** 운영 원천에서는 한 줄도 실행하지 않는다.
-> runner 가 `environment_guard` 를 통과시키지 못하면 시나리오는 기동조차 하지 않는다.
+> **2026-08-30 실행 NO-GO**: 사내 CMDB·환경 registry 등 **저장소 밖의 신뢰 경계**가
+> `DB_UNIQUE_NAME`과 schema를 폐기 가능한 쓰기 환경으로 allowlist하지 않으면 실행하지 않는다.
+> 운영 원천에서는 한 줄도 실행하지 않는다. runner의 `environment_guard`는 editable `suite.yaml`과
+> 같은 신뢰 경계에 있으므로 외부 승인을 대체하지 못하며, 승인 뒤의 보조 identity 검사일 뿐이다.
 
 ---
 
@@ -13,7 +15,7 @@
 | 규칙 | 강제 지점 |
 |---|---|
 | **신원은 서버에서 읽는다** | `runner.preflight()` 가 `CE_DSN` 으로 1회 접속해 `DB_UNIQUE_NAME`·`CURRENT_SCHEMA`·`DATABASE_ROLE` 을 읽는다. 운영자가 손으로 적는 값은 **교차 확인용**일 뿐 근거가 아니다 |
-| 대상 환경이 아니면 실행하지 않는다 | `runner.enforce_guard()` — 서버가 돌려준 값과 정확 일치, 빈 값 금지, 운영 식별자 패턴 차단. 위반 시 exit 2 |
+| 외부 승인 뒤 identity를 재검사한다 | `runner.enforce_guard()` — 서버가 돌려준 값과 정확 일치, 빈 값 금지, 운영 식별자 패턴 차단. 위반 시 exit 2. **환경의 폐기 가능성 자체는 증명하지 않는다** |
 | 시나리오도 자기 접속 DB 를 재확인한다 | `_ce.Ora.verify_schema()` — `DB_UNIQUE_NAME ≠ 기대값`, `DATABASE_ROLE ≠ PRIMARY`, 금지 패턴 매치면 한 줄도 쓰지 않는다 |
 | 자격증명 실패로 계정이 잠기지 않는다 | preflight 1회 실패 → 즉시 SUITE_ABORT. 시나리오 9개가 각각 로그온을 시도하는 경로가 없다 |
 | 시간 축이 세션 TZ 에 흔들리지 않는다 | 접속 직후 `ALTER SESSION SET TIME_ZONE = DBTIMEZONE`, 시간 비교는 `CAST(SYSTIMESTAMP AS TIMESTAMP)` 로 통일 |
@@ -25,6 +27,9 @@
 | runner 가 자기 출력을 검증한다 | `validate_evidence()` 가 `evidence.schema.json` 으로 검사하고, 위반이 있으면 suite 는 PASS 가 아니다 |
 
 ## 2. 준비
+
+먼저 외부 disposable-environment allowlist 승인 증거와 승인자를 실행 기록에 결속한다.
+그 절차가 없으면 아래 패키지 설치·접속 단계로 진행하지 않는다.
 
 ```bash
 pip install oracledb jsonschema
@@ -48,6 +53,9 @@ pip install oracledb jsonschema
 비워 두면 runner 가 실행을 거부한다.
 
 ## 3. 실행
+
+`--dry-run`은 접속·쓰기를 하지 않고 expected 값으로 계획만 출력하므로 사전 검토에 사용할 수 있다.
+다만 환경의 안전성을 증명하거나 실제 실행을 승인하지는 않는다. dry-run 이후 실제 실행은 외부 allowlist가 필수다.
 
 ```bash
 python3 runner.py --suite suite.yaml --dry-run

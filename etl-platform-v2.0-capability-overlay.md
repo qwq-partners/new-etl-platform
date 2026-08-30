@@ -1,4 +1,8 @@
-# Capability 오버레이 규격 (v2.0 초안)
+# Capability 오버레이 규격 (v2.0 **초안 — 동결 불가**)
+
+> **2026-08-27 7차 교차 리뷰 판정: 이 문서는 동결할 수 없다(NO-GO).**
+> 방향(단일 privilege-zero core + 원천별 overlay)은 GO 이나, §3 의 7축이 **독립인 성질을 합치고**
+> 조합 규칙이 없다. 아래 §3.1 이 그 분해를 기록한다. G0-0 실측 후 이 표를 대체한다.
 
 원천 Oracle 이 버전·옵션·권한 면에서 제각각이라는 전제에서, **하나의 코어 + 원천별 측정 오버레이**로 대응하는 규격이다. 이 문서는 짧게 유지한다 — 길어지면 그 자체가 문제다.
 
@@ -54,7 +58,9 @@ Oracle **11.2 physical standby(ADG)** + ETL 계정에 **대상 테이블 SELECT 
 | `snapshot_read` | `AS_OF_SCN` → `READ_ONLY_TXN` → `NONE` | `as_of_timestamp.target` + SCN 원점(`dbms_flashback.get_scn` \| `view.v_database`), `txn.set_read_only`+`txn.select_inside` | 한 회차의 여러 chunk 가 **같은 시점 이미지**인가 | `snapshot_scope = JOB / CONNECTION / CHUNK` |
 | `row_hash` | `SHA256` → `NONE` | `feat.standard_hash_sha256` | 행 단위 내용 대조 가능 여부 | `reconcile_depth = ROW_HASH / PK_AND_COUNT` |
 | `row_change_scn` | `ROW_LEVEL` → `BLOCK_LEVEL` → `NONE` | `feat.rowdependencies_target`, `feat.ora_rowscn_target` | `ORA_ROWSCN` 기반 변경 탐지 | `change_detection = ROWSCN / WATERMARK_ONLY` |
-| `lag_visibility` | `DG_STATS` → `MAX_DELAY_ONLY` → `NONE` | `view.v_dataguard_stats`, `alter.STANDBY_MAX_DATA_DELAY.D` | freshness 상한의 근거 | `freshness_evidence = MEASURED / ENFORCED / NONE` |
+| `lag_observation` | `DG_STATS` → `NONE` | `view.v_dataguard_stats` | lag 을 **잴 수 있는가** | `freshness_evidence = MEASURED` |
+| `lag_admission` | `ENFORCED` → `ACCEPTED_UNVERIFIED` → `NONE` | `alter.STANDBY_MAX_DATA_DELAY.D` + `max_delay_zero.touch_target`(ORA-03172 양성 대조) | lag 초과를 **막는가** | `freshness_evidence = ENFORCED` |
+| `watermark_commit_bound` | `ENFORCED` → `OBSERVED` → `NONE` | **측정 probe 없음 — 항상 `UNDETERMINED`** | `commit_time − watermark_value` 의 상한 | `upsert_consistency` 등급 |
 | `wm_granularity` | `NS` → `US` → `MS` → `SEC` → `UNDEFINED` | **`wm_column.type_facts`**(결정자) + `feat.interval_ns_successor`·`feat.timestamp9_precision`(구문 지원 확인용) | `typed_successor` 반개구간 fence 성립 여부 | `fence_mode = HALF_OPEN / OVERLAP_ONLY` |
 | `sql_dialect` | `12C_PLUS` → `11G` | `feat.fetch_first` | 생성 SQL 의 구문 집합 | (내부용, 계약 노출 없음) |
 | `charset_class` | `AL32UTF8` → `OTHER` | `nls.characterset`, `nls.comp`, `nls.sort` | **원천 간** 해시 정본화 비교 가능성 | `cross_source_comparable` |
@@ -68,14 +74,32 @@ Oracle **11.2 physical standby(ADG)** + ETL 계정에 **대상 테이블 SELECT 
 
 ---
 
-## 4. `lag_visibility` 는 두 값이 성질이 다르다
+## 3.1 축 분해 — 7차 리뷰 P0-05 반영
 
-혼동하기 쉬워 따로 적는다.
+기존 7축은 다음을 합치고 있었다. **합친 축은 증명하지 않은 능력을 표시한다.**
 
-- `DG_STATS` — `V$DATAGUARD_STATS` 를 읽어 apply lag 를 **측정**한다. 값을 안다.
-- `MAX_DELAY_ONLY` — `ALTER SESSION SET STANDBY_MAX_DATA_DELAY` 는 값을 알려 주지 않는다. 임계를 넘으면 `ORA-03172` 로 **쿼리를 실패시킬 뿐**이다. 즉 **측정이 아니라 강제**다.
+| 잘못 합친 것 | 왜 독립인가 |
+|---|---|
+| `lag_visibility` = 관측 + 강제 | 우열 관계가 아니라 **동시에 존재 가능한 두 성질**이다. 잴 수 있으나 못 막을 수도, 막지만 못 잴 수도 있다 |
+| `bound_kind` → `lag_visibility` 대체 | **가장 큰 오류.** apply lag 과 `commit_time − watermark_value` 는 독립이다. **lag=0 이어도** 오래된 `UPDATE_DT` 를 가진 트랜잭션이 늦게 commit 하면 overlap 밖 누락이 생긴다. A 가 `max_commit_minus_watermark_seconds`(7회 등장)를 따로 둔 이유가 이것이다 |
+| `snapshot_read` | object FLASHBACK 권한 / SCN 원점 / ADG 지원 / **Spark connection 전파** / snapshot scope 를 한 값에 담았다 |
+| `row_hash` | SHA-256 함수 존재 ≠ cross-engine canonical row hash 검증(G0-3) |
+| `charset_class` | 한 DB 의 charset ≠ 두 원천 간 comparable 여부 |
 
-따라서 `MAX_DELAY_ONLY` 에서 "지연이 N초 이하였다"는 **오류가 나지 않았다는 사실**로만 뒷받침된다. 오류 부재는 약한 증거이므로, lag 가 큰 시간대에 `ORA-03172` 를 **최소 1회 확보**해 강제가 실제로 걸린다는 양성 대조를 남겨야 한다(G0-0A §7).
+→ **`bound_kind`/`bound_evidence` 를 되살린다.** `lag_visibility` 로 대체한 것은 철회한다.
+→ 최종 축 목록과 조합 함수(composition)는 G0-0 실측 후 확정한다. 예: `snapshot_scope = JOB` 은
+   공통 anchor + 전 object coverage + 전 data connection 적용이 **모두** 참일 때만 나온다.
+
+---
+
+## 4. `lag_observation` 과 `lag_admission` 은 성질이 다르다
+
+- `lag_observation = DG_STATS` — `V$DATAGUARD_STATS` 에서 lag 을 **측정**한다.
+  단, `COUNT(*)` 가 된다는 것과 **값·`DATUM_TIME` 을 해석할 수 있다는 것은 다르다.
+- `lag_admission = ACCEPTED_UNVERIFIED` — `ALTER SESSION SET STANDBY_MAX_DATA_DELAY` 가 수락됐을 뿐이다.
+  값을 알려 주지 않고, 임계 초과 시 `ORA-03172` 로 **쿼리를 실패시킬 뿐**이다.
+- `lag_admission = ENFORCED` — lag 이 큰 시간대에 **`ORA-03172` 를 최소 1회 확보**했을 때만.
+  오류 부재는 강제가 걸린다는 증거가 아니다.
 
 ---
 

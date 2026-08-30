@@ -353,16 +353,19 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "반례가 재현된 시나리오 — **설계 결함이다**"
         },
         "mitigation_failed": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "완화가 있었으나 막지 못한 시나리오 — **설계 결함이다**"
         },
         "verdict_note": {
-          "type": "string"
+          "type": "string",
+          "description": "execution_complete 와 mitigation_holds 를 섞어 읽지 않게 하는 문구"
         }
       }
     },

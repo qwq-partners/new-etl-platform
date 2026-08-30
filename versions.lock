@@ -14,6 +14,15 @@ schema_version: "1.0.0"
 profile: SANDBOX_CONTAINER   # LOCAL_WSL | CORP_POC | SANDBOX_CONTAINER
                         # 2026-08-27 S1~S3 회차. **로컬 WSL2 회차가 아니다** — Oracle 없는
                         # 일회성 원격 컨테이너다. WSL2 에서 돌릴 때 이 파일을 덮어쓴다.
+                        #
+                        # ⚠ **판본 충돌 기록**(2026-08-30 병합). main 에 2026-08-28 회차가
+                        # profile: LOCAL_WSL 로 기록돼 있었다. 그 회차는 Spark 전체 배포판이
+                        # 아니라 Maven 아티팩트만 받아 **컴파일·SPI 검증까지만** 한 회차이고
+                        # (distribution: MAVEN_ARTIFACTS_PARTIAL), 이 회차는 전체 배포판으로
+                        # spark-submit 까지 돌렸다. 더 넓은 쪽을 활성 lock 으로 둔다.
+                        # 그 회차의 실측값은 아래 prior_measurements 에 그대로 남긴다.
+                        # **LOCAL_WSL 표기가 실제 WSL2 였는지는 이 세션이 확인할 수 없다** —
+                        # 아니었다면 profile 을 정정해야 한다(증거 등급이 달라진다).
 
 runtime:
   jdk:
@@ -63,6 +72,18 @@ platform:                   # 아직 세우지 않았다면 UNSET 그대로 둔�
   polaris: UNSET
   postgres: UNSET
   object_store: UNSET       # 예: MinIO RELEASE.xxxx
+
+# 다른 회차의 실측값. **활성 lock 이 아니다** — 증거를 이 값들에 묶지 마라.
+# 병합으로 덮어써 사라지지 않게 남겨 둔 기록이다(2026-08-30).
+prior_measurements:
+  - run: "2026-08-28 S0~S2 (main, commit c4ef9bf)"
+    profile_as_recorded: LOCAL_WSL   # ⚠ 미확인. 위 profile 주석 참조
+    jdk: "21.0.11 / OpenJDK"
+    spark: "4.2.0 / Scala 2.13.16"
+    distribution: "MAVEN_ARTIFACTS_PARTIAL"   # spark-sql/catalyst/core/common-utils/tags
+                        # + scala-library 만. **컴파일·SPI 검증 전용**이며 spark-submit 불가
+    python: "3.12.3"
+    covered: "S0~S2 (SPI 시그니처·ServiceLoader 발견·canHandle·disabledJdbcConnProviderList 근거)"
 
 # 이 lock 으로 얻은 증거를 어디에 묶는가
 evidence_binding:

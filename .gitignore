@@ -11,6 +11,9 @@ g0-0*-evidence-*
 *.manifest.json
 !evidence.schema.json
 !g0-0-evidence.schema.json
+# 로컬 측정 기록은 산출물이 아니라 **측정 사실**이므로 추적한다
+!evidence/
+!evidence/*.json
 
 # 아카이브(트리가 그대로 있으므로 중복)
 *.tar.gz
@@ -34,3 +37,6 @@ Thumbs.db
 g0-0b1-connection-provider/build/
 *.jar
 g0-0b1-evidence.json
+
+# 배포용 zip — 커밋하지 않는다(내용이 저장소 자신이다)
+new-etl-platform-*.zip

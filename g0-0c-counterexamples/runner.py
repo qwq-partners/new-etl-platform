@@ -336,6 +336,15 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
                 }
         elif payload is not None:
             rec["error"] = f"SCENARIO_RESULT 가 객체가 아니다: {type(payload).__name__}"
+        # **종료 코드도 함께 요구한다**(7차 리뷰). 통과 모양의 SCENARIO_RESULT 를 찍은 뒤
+        # exit 1 로 죽어도 지금까지는 suite PASS 후보가 됐다.
+        if out.returncode != 0:
+            rec["observations"].append({
+                "name": "nonzero_exit",
+                "value": out.returncode,
+                "note": "시나리오가 결과를 보고했더라도 프로세스가 정상 종료하지 않았다. "
+                        "payload 를 신뢰할 수 없다."})
+            rec["error"] = (rec["error"] or "") + f" [exit={out.returncode}]"
     except subprocess.TimeoutExpired:
         rec["error"] = f"scenario_timeout_s({per}s) 초과"
     except Exception as e:  # noqa: BLE001
@@ -424,8 +433,11 @@ def verdict(suite: dict, scen: list[dict], partial: bool, skipped: list[str] | N
     # **pass 하나로 두 가지 다른 것을 말하고 있었다**(7차 교차 리뷰 P2).
     # COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 도 pass=true 에 포함된다. 하네스가
     # 완주했다는 뜻으로는 맞지만 **설계가 통과했다는 뜻으로 오독된다.** 두 축을 나눈다.
-    #   execution_complete — 하네스가 required 를 다 돌리고 증거를 남겼는가
-    #   mitigation_holds   — 그 반례에 대해 **완화가 실제로 버텼는가**
+    #   execution_complete — 하네스가 required 를 다 돌리고 증거를 남겼는가 (불리언)
+    #   mitigation_holds   — 그 반례에 대해 **완화가 실제로 버텼는가** (불리언)
+    # mitigation_holds 는 **불리언이어야 한다.** '버틴 시나리오 목록' 으로 두면 holds 가
+    # 비어 있지 않은 동시에 reproduced 도 비어 있지 않은 상태를 "완화가 성립했다" 로
+    # 읽게 된다. 어느 시나리오가 버텼는지는 scenarios[].outcome 에 이미 있다.
     reproduced = [s["id"] for s in scen if s["outcome"] == "COUNTEREXAMPLE_REPRODUCED"]
     mit_fail = [s["id"] for s in scen if s["outcome"] == "MITIGATION_FAIL"]
     holds = not (reproduced or mit_fail or not_obs or incon or missing) and bool(scen)
@@ -476,6 +488,9 @@ def main() -> int:
     a = ap.parse_args()
 
     root = Path(a.suite).resolve().parent
+    if not (root / "scenarios").is_dir():
+        die(2, f"{root}/scenarios 가 없다. --suite 는 **패키지 안의** suite 파일을 가리켜야 한다 "
+               f"(scenarios/ 와 같은 디렉터리). 지금 값: {a.suite}")
     suite = load_yaml(Path(a.suite))
     if suite.get("schema_version") != SCHEMA_VERSION or suite.get("suite_id") != SUITE_ID:
         die(2, "suite.yaml 의 schema_version/suite_id 가 runner와 맞지 않는다.")
@@ -523,6 +538,9 @@ def main() -> int:
     checks = enforce_guard(suite, observed)
     print(f"[guard] 통과: {', '.join(checks)}")
 
+    # **코드 digest 와 suite 설정 digest 를 따로 기록한다**(7차 리뷰 P1-10).
+    # suite.yaml 을 해시에서 빼면 required_scenarios·budgets·versions·pass_rule 이
+    # 증거에 묶이지 않아, 다른 설정으로 돌린 결과를 같은 것으로 오인할 수 있다.
     h = artifact_hash(root, exclude={Path(a.suite).resolve().name, Path(a.out).name})
     declared = str(suite.get("artifact_sha256") or "")
     if declared and declared != h:

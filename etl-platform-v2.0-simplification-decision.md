@@ -2,6 +2,10 @@
 
 "설계가 너무 장황한 것 아닌가"에 대한 답과, **왜 더 자르지 않았는지**의 기록이다. 후자가 더 중요하다 — 자른 이유는 남지만 안 자른 이유는 잊히기 때문이다.
 
+> **2026-08-30 상태 주석**: 이 문서는 2026-08-27의 감축 결정 이력이다. 이후 로컬에서 B1의
+> partial Maven classpath compile·SPI linkage만 확인했고 사내 원천/full G0-0 sequence는 여전히 미실행이다.
+> 8차 리뷰 결과와 현재 차단점은 `etl-platform-v2.0-codex-eighth-cross-review.md`가 우선한다.
+
 ---
 
 ## 1. 답: 그렇다. 다만 41.3% 중 16.2%만 지금 자른다
@@ -37,7 +41,7 @@
 
 ## 3. 지금 자르지 않는 것과 그 이유
 
-### 3.1 순서 위반 — **G0-0 은 한 번도 실행되지 않았다**
+### 3.1 순서 위반 — **사내 원천/full G0-0 sequence는 한 번도 실행되지 않았다**
 
 확인: `evidence.json` 없음, `suite.yaml` 의 `expected_primary_db_unique_name` · `allowed_schema` 가 여전히 빈 값, G0-0A/B 증거 파일 없음.
 
@@ -58,7 +62,7 @@
 | 변경 이력 6개 절 → `CHANGELOG.md` (−211줄, −16.2%) | 규범이 아니다. G0-0 결과와 무관하게 안전 |
 | `evidence.schema.json` 의 `^CE0[1-9]$` → `^CE[0-9]{2,3}$` | harness 를 9종으로 **하드캡**하고 있었다. CE10 이상을 스키마가 거부해 시나리오 추가가 막혀 있었다 |
 | `scenarios.minItems` 9 → 1 | 실행 완결성은 runner 의 verdict 가 판정한다. 스키마가 개수를 이중으로 강제할 이유가 없다 |
-| G0-0A `c_expected` 56 → **86** | 실제 호출 수와 어긋나 있어 **첫 실행이 `manifest_ok=false` 로 결과 전체 폐기**가 될 상태였다. **2026-08-27 1차 정정에서 78 로 고친 것도 틀렸다** — `p_stmt  (` 처럼 공백이 낀 호출 8건을 세지 못하는 grep 을 썼다. 실측 86건으로 재정정하고, 공백에 무관한 확인 명령을 주석에 넣었다 |
+| G0-0A `c_expected` 56 → 78 → 86 → **87** | 86은 당시 호출 수였고 이후 `target.identity` probe 1건이 추가됐다. 현재 실행 파일의 정적 호출 수와 `c_expected`는 87로 일치한다. 실제 Oracle 완주는 아직 없어 경험적 확정으로 부르지 않는다 |
 | G0-0A §8 이식성 프로브 21건 신설 | 원천 버전 이질성. 버전으로 추정하지 않고 기능을 직접 실행해 판정한다 |
 | **정정 기록** | 이 표의 앞 판본은 실측하지 않은 숫자(57·78)를 실측처럼 적었다. 이 문서의 규율상 그것 자체가 결함이므로 위와 같이 고쳐 남긴다 |
 
@@ -80,6 +84,6 @@
 - **fence 의 전달 가능성이 소멸했다.** SCN 은 DB 단위 전역이라 모니터 세션 1개가 읽은 값을 뒤에 열리는 executor 세션들이 공유할 수 있었다. Profile U 에는 그 전역 원점이 없다 — Guard 1회 fence 로 N 개 세션을 묶던 근거가 사라졌다.
 - **`STANDBY_MAX_DATA_DELAY` 의 `D` 는 세션 속성인데 모니터 세션은 Source 당 1개다.** freshness SLO 가 다른 Job 이 한 세션을 공유할 수 없다.
 - **`safety_lag` · `clock_skew_max` · `overlap` 최소치의 유도 경로가 없다.** primary↔standby skew 를 무권한으로 관측할 수 없어 "근거 없는 보수 상수" 로 남아 있다.
-- **`sessionInitStatement` 로 모든 물리 connection 을 덮는다는 전제가 미검증이다.** Spark 의 schema/metadata connection 은 이것을 실행하지 않는다(NEW-04). G0-0B1 tracer 를 만들었으나(2026-08-27) **실제 Spark 에 대고 빌드·실행하지 않았으므로 여전히 미확정이다.**
+- **`sessionInitStatement` 로 모든 물리 connection 을 덮는다는 전제가 미검증이다.** Spark 의 schema/metadata connection 은 이것을 실행하지 않는다(NEW-04). G0-0B1 tracer는 partial Maven classpath에서 compile·SPI linkage만 확인했다. full Spark distribution·Oracle runtime의 schema/task/metadata coverage와 fail-closed는 미실행이다.
 - **`ORA-03172` 자기증폭 루프 대책이 규범에 없다.** `apply lag ↑ → 세션 사망 → 재시도 → 재독 → lag ↑` 이고, 정시 burst 500건이 같은 `next_eligible_at` 값을 받으면 동기화된 재제출이 반복된다. A v1.2.3.1·P v1 어디에도 `jitter`·`spark.task.maxFailures`·breaker 규정이 **0건**이다. → **A v2.0 §10.2 backoff 에 무작위 항**(`now() + backoff × U(0.5, 1.5)`)**과 source 추출 전용 재시도 상한을 넣어야 한다.** 근거: `etl-platform-v2.0-grant-request-verdict.md` §4.
 - **`safety_lag`·`clock_skew` 의 조달 경로가 사라졌다.** PoC 기준서는 이 값들의 출처를 "DBA 승인값"으로 규정하는데, 권한 확보 불가 + 권한 요청 보류로 그 경로가 없다. G0-0 산출물 중 이 값을 재는 probe 도 없다(클라이언트↔DB 시각 비교 probe 부재, primary↔standby skew 관측 수단 부재). → **누가 이 값을 어떻게 정할지 A v2.0 에서 명시해야 한다.**
