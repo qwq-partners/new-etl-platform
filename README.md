@@ -79,8 +79,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **`g0-0-s1-s3-results.md`** | **첫 실측 회차 기록**(S1·S2·S3). B1 컴파일·SPI 배선 확인, 판정기·증거 계약 첫 검증, 계획서 정정 2건, S4 이후가 막힌 이유 |
 | **`g0-child-contract.md`** | **child 산출물 계약.** manifest 사이드카 형식, 집계기 강제표, exit 0/3/4, RECON 회차와 증거 회차의 분리 |
 | **`etl-platform-transfer-guide.md`** | **사내 반입 안내** — `git bundle` 오프라인 반입, 폐쇄망 의존물, 결과 반출, 변경관리 문답 |
-| **`etl-platform-ui-information-architecture-v0.5.md`** | **Control Plane UI 정보구조 — 현행.** 화면 8개, Phase 0 표시 규칙, 두 UI 접합면, **§10 Advisor UX · §11 시각 표시 · §12 운영자 조회 · §13 목록 규모 · §14 인증·감사(계정 ID = 사번)**. 미결 7건 중 **5건 해소**(남은 것: capability 표시·다국어), **A 공백 16건**(§9.1)을 A 개정 대상으로 분리 |
-| `…-v0.4.md` · `-v0.3.md` · `-v0.2.md` · `-v0.1.md` | 이전 판. 이력으로 남긴다 |
+| **`etl-platform-ui-information-architecture-v0.6.md`** | **Control Plane UI 정보구조 — 현행.** 화면 8개, Phase 0 표시 규칙, 두 UI 접합면, **§10 Advisor UX · §11 시각 표시 · §12 운영자 조회 · §13 목록 규모 · §14 인증·감사(계정 ID = 사번)**. **미결 7건 중 6건 해소 — 남은 것은 capability 표시 하나이고 G0-0 실측이 답한다.** **A 공백 17건**(§9.1)을 A 개정 대상으로 분리 |
+| `…-v0.5.md` … `-v0.1.md` | 이전 판. 이력으로 남긴다 |
 | `CHANGELOG.md` | 아키텍처 변경 이력(규범 아님). 본문에서 분리 |
 
 ---
