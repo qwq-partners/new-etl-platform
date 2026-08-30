@@ -19,9 +19,10 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 | 목표 아키텍처 v1 → v1.2.3.1 | 완료. **단, DBA 협조를 전제하므로 Profile O 참고판으로 보존** |
 | PoC 시험·합격 기준서 8차 | 완료(649줄) |
 | Profile U(무권한) 재설계 범위 | 제안 완료 · **규격 동결은 NO-GO** |
-| **G0-0 실측** | **원천에 대해 한 번도 실행되지 않았다** ← 여기가 병목 |
-| G0-0B1 로컬 부분 실측 | Spark 4.2.0 에 대고 빌드·SPI 확인까지 완료(2026-08-28) |
-| A v2.0 / P v2.0 | G0-0 결과 확정 후 착수 |
+| **8차 Codex 교차 리뷰** | 완료(2026-08-30) — 7차 P0 재판정 **CLOSED 0 / PARTIAL 2 / OPEN 4** |
+| **G0-0 실측** | 원천 미실행. **M0 실행 안전성 + M1 child evidence contract 수정 전 사내 원천 실행 NO-GO** ← 여기가 병목 |
+| G0-0B1 로컬 부분 실측 | partial Maven classpath compile·SPI linkage만 확인. full Spark/Oracle runtime·fail-closed는 미실행 |
+| A v2.0 / P v2.0 | M0/M1 → raw G0-0 → 축/composition 확정 후 착수 |
 
 **가장 중요한 사실 하나**: **저장소에 플랫폼 코드가 0줄이다.** Java 소스는 G0-0B1 tracer 3파일뿐이다. Control Plane·Guard·lease·Commit Adjudication·FI-01~66 은 설계 문서로만 존재하며 아직 시험 대상이 아니다.
 
@@ -68,7 +69,7 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 
 | 결정 | 이유 |
 |---|---|
-| **`FLASHBACK` 권한 요청 보류** | 받아도 순이익이 아니다. `FLASHBACK` 만으로는 SCN 원점이 없어 `AS OF TIMESTAMP`(±3초 근삿값)뿐이고, `ORA-01466`·`ORA-08181` 새 실패 모드가 생기며, undo 부족의 Oracle 권고 대책이 **primary 의 `UNDO_RETENTION` 상향** 이라 생산 primary 로 부하가 도달하는 채널이 열린다 |
+| **`FLASHBACK` 권한 요청 보류 유지** | 승인 판정 후보가 0건이고 28건이 미검증이므로 지금 요청하지 않는다. 단, 8차 리뷰에서 **passive grant와 runtime 활성화 비용을 분리**하고, 동일 AS OF TIMESTAMP literal의 cross-connection common snapshot 이득을 다시 평가하라고 판정했다. timestamp mapping은 ±3초가 아니라 **최대 3초 이전**이다 |
 | **`ZERO_GAP` 계열 24.6% 를 지금 안 자름** | 도달 불가로 보이지만 **아직 측정하지 않았다.** 지우면 되살릴 때 잃는다 |
 | **감축안 중 가장 공격적인 것(58%)을 채택 안 함** | 3명이 독립 심사해 **전원 최하위**를 줬다. `ORA-01555` 분기를 `AS OF SCN` 계열로 묶어 삭제하려 했는데, **`AS OF SCN` 이 사라져도 `ORA-01555` 는 사라지지 않는다** |
 | **overlay 9축 재설계를 미룸** | 지금 확정하면 또 측정 없이 규격을 짜는 것이다 |
@@ -84,6 +85,7 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 |---|---|
 | 전체 현황·문서 목록 | `README.md` |
 | **규율 위반 사례와 처리** | `etl-platform-v2.0-codex-seventh-review-assessment.md` |
+| **현재 차단점·8차 재판정** | `etl-platform-v2.0-codex-eighth-cross-review.md` (**우선 읽을 것**) |
 | 무엇을 왜 안 잘랐나 | `etl-platform-v2.0-simplification-decision.md` (§6 에 미해결 공백) |
 | 권한 요청을 왜 접었나 | `etl-platform-v2.0-grant-request-verdict.md` + 원자료 `…-candidates.md`(37건) |
 | 이기종 원천 대응 | `etl-platform-v2.0-capability-overlay.md` (**동결 불가**) |
@@ -95,14 +97,14 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 | 증거 계약 | `g0-0-evidence.schema.json` + `g0-normalize.py` |
 | 판본 고정 | `versions.lock` (**`UNSET` 17건 — 채우기 전엔 그 항목 의존 측정이 미확정**) |
 
-**G0-0 산출물 실행 순서**: A → B0 → **B1** → C00 → C01~C09 → `g0-normalize.py`
+**G0-0 산출물 실행 순서(현재 실행 금지)**: M0/M1 수정·회귀 검증 후 A → B0 → **B1** → C00 → C01~C09 → `g0-normalize.py`
 
 ---
 
 ## 6. 하지 말 것
 
-1. **G0-0 실측 전에 A/P 규범을 대규모로 고치지 마라.** 실측 하나가 여러 절의 상태·enum 을 뒤집는다. 교차 리뷰가 두 번 명시한 순서다.
-2. **`environment_guard` 를 끄지 마라.** 로컬이든 사내든. 그 가드는 운영 사고를 막으려고 있다.
+1. **G0-0 실측 전에 A/P 규범을 대규모로 고치지 마라.** 단, 측정기의 M0 실행 안전성과 M1 증거 결속은 실측 전에 반드시 고친다.
+2. **C01~C09를 저장소 내부 `environment_guard`만 믿고 실행하지 마라.** guard를 유지하는 것과 별개로 외부 disposable-environment allowlist가 필요하다.
 3. **로컬 결과를 사내 설계 근거로 쓰지 마라.** `g0-normalize.py --profile LOCAL_WSL` 은 증거에 "설계 근거가 아니다"를 박는다. **`--profile CORP_POC` 로 바꿔 우회하지 마라.**
 4. **틀린 비밀번호를 시도하지 마라.** 계정 잠금은 전체 파이프라인 정지다. 반입 직후 손으로 접속을 시험할 때가 가장 위험하다.
 5. **`ACK_FULL_SCAN=Y` 를 승인 없이 켜지 마라.** C00 의 기본값은 대상 테이블 질의 0건이다.
@@ -124,21 +126,32 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 
 ### 7차 리뷰 미반영 3건
 
-P1-07(LOB RETENTION 분리) · P1-09 일부(C00 end sentinel·manifest) · P1-03(전체 SQLCODE taxonomy 표)
+P1-07(LOB RETENTION 분리) · P1-09 일부(C00 end sentinel·manifest) · P1-03(전체 SQLCODE taxonomy 표).
+8차 판정은 P1-03·07은 raw 수집까지 제한적으로 미룰 수 있으나 semantic normalization/publish 전에는 필수,
+P1-09 child contract는 normalizer 수용 전에 필수라고 구분했다.
 
-### 8차 리뷰 대기
+### 8차 리뷰 완료 — 현재 P0
 
-`codex-cross-review-prompt-8th.md` 를 작성해 뒀다. 특히 **경로별 주입이 `Trace.classify()` 의 스택 추정에 의존**하는데 추정으로 주입 대상을 정하는 게 타당한지 물어 뒀다 — 우리 수정 자체의 약점이다.
+상세는 `etl-platform-v2.0-codex-eighth-cross-review.md`를 본다. 핵심은 다음이다.
+
+- B1 `failclosed_task`가 argparse choice에 없어 Spark 시작 전에 종료
+- 같은 `Trace.classify()` 추정이 injection actuator와 proof 양쪽을 제어하는 순환 판정
+- B0 안전 상한 위반이 오류를 출력하면서 process exit 0
+- README의 `producer | tee`가 producer exit를 잃음
+- 얕은 synthetic child payload로 A/B0/B1/C00/CE 모두 `MEASURED` 가능
+- child run/source/profile/runtime/lock binding과 stale/effective floor 미구현
+- A의 identity mismatch가 target 접촉 전 hard stop이 아니며 `ROWNUM`은 I/O 하드 상한이 아님
 
 ---
 
 ## 8. 다음에 할 일
 
-1. **G0-0A 실행** — 넷 다 확인해야 유효: `exit 0` ∧ `probe_run_end` sentinel ∧ `manifest_ok=true` ∧ `emitted=87`
-2. **G0-0B1 빌드·실행** — 로컬에서 빌드·SPI 는 확인됐다. 남은 것은 **실제 Oracle 에 대고 SCHEMA·TASK 경로 커버리지와 fail-closed**
-3. **C01~C09** — 폐기 가능한 쓰기 가능 환경 확보 후. `CE_DOC_PATH` 필수
-4. `g0-normalize.py --profile CORP_POC` 로 `g0_0_evidence` 생성
-5. 그 결과로 **A v2.0 / P v2.0** 착수
+1. **M0 실행 안전성** — wrapper `pipefail`/producer exit, B0 `sys.exit(main())`, partition/session cap, target 접촉 전 identity hard preflight, C01~09 외부 allowlist
+2. **M1 child evidence contract** — A/B0/B1/C00별 run ID·source/profile·runtime/lock/harness digest·start/end·exit·exact manifest
+3. **B1 재작성** — explicit `connectionProvider`; schema/task/metadata scenario 분리; stack guess는 진단만 하고 injection/PASS를 제어하지 않음
+4. synthetic negative suite에서 incomplete·mixed·stale·relabel evidence가 전부 fail-closed인지 확인
+5. 그 뒤 pinned 사내 환경에서 raw G0-0 수집. C00은 scan 승인, C01~09는 외부 allowlist 폐기 환경만
+6. 측정 분포로 capability 축/composition을 확정하고 **A v2.0 / P v2.0** 착수
 
 ---
 

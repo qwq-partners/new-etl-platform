@@ -3,7 +3,7 @@
 > **처음 이어받는 사람은 [`HANDOFF.md`](HANDOFF.md) 를 먼저 읽어라.** 이 문서는 무엇이 어디 있는지의
 > 지도이고, `HANDOFF.md` 는 **왜 그렇게 돼 있는지**와 **무엇을 하면 안 되는지**를 담는다.
 
-Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼의 설계 문서와, 그 설계를 여섯 차례 교차 리뷰로 검증한 기록이다.
+Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼의 설계 문서와 누적 교차 리뷰 기록이다.
 
 - **규모**: Job 약 10,000개 · Run 약 40,000건/일 · 정시 burst 약 500건
 - **적재 경로**: Oracle physical standby(ADG) → Spark → Iceberg / Polaris
@@ -18,15 +18,16 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 목표 아키텍처 v1 → v1.2.3.1 | **완료**(다섯 차례 교차 리뷰 반영) |
 | **제약 변경**(2026-08-24) | **정합성을 DBA 협조에 걸 수 없다.** critical 하지 않은 권한은 ETL 계정에 요청 가능하나 그 요청은 **현재 보류**이며 어떤 설계도 그것을 가정하지 않는다 |
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
-| **G0-0 실측** | 산출물 준비 완료 · **한 번도 실행되지 않음** ← 지금 여기 |
+| **G0-0 실측** | 원천에 대해 한 번도 실행되지 않음. **8차 리뷰의 M0 실행 안전성 차단점 수정 전 사내 원천 실행 NO-GO** ← 지금 여기 |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
-| DBA 권한 요청 방향 | **보류**(2026-08-27) — 받아도 순이익이 아니거나 요청서가 틀렸다 |
+| DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. `FLASHBACK`의 순이익 부재라는 강한 결론은 8차 리뷰에서 재검토 대상으로 환원 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
-| 7차 교차 리뷰 반영 | **완료**(2026-08-27) — P0 6건 확정·수정. 증거 계약을 `g0_0_evidence` 로 분리 |
-| **S0~S2 실행 완료**(2026-08-28) | **B1 tracer 가 실제 Spark 4.2.0 에 대고 빌드된다 — SPI 시그니처 일치 확인.** 저장소 최대 미지수의 절반이 닫혔다 |
-| A v2.0 / P v2.0 규범 개정 | G0-0 결과 확정 후 착수 |
+| 7차 교차 리뷰 반영 | `g0_0_evidence` 분리 등 유효한 진전. **8차 재검증 결과 P0 6건은 CLOSED 0 / PARTIAL 2 / OPEN 4** |
+| **B1 로컬 부분 검증**(2026-08-28) | partial Maven classpath에서 compile·SPI linkage 확인. **full Spark distribution runtime·Oracle 경로·fail-closed는 미실행** |
+| **8차 교차 리뷰**(2026-08-30) | 완료 — 현 normalizer 결과 수용·B1 `PROVEN`·G0 PASS·v2.0 동결은 NO-GO. 먼저 M0 실행 안전성 + M1 child evidence contract 수정 |
+| A v2.0 / P v2.0 규범 개정 | M0/M1 수정 → raw G0-0 수집 → 축/composition 확정 후 착수 |
 
-**핵심 원칙**: 실측(G0-0) 전에는 규범 문서를 대규모로 고치지 않는다. 실측 하나가 여러 절의 상태·enum을 뒤집기 때문이다.
+**핵심 원칙**: 실측 전 규범 문서를 대규모로 고치지는 않는다. 다만 **실측을 신뢰할 수 있게 만드는 실행 안전성과 증거 결속은 실측보다 먼저 고친다.**
 
 ---
 
@@ -57,11 +58,11 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 2차 | `etl-platform-v1.2.1-codex-second-cross-review.md` | `…-second-review-assessment.md` |
 | 3차 | `etl-platform-v1.2.2-codex-third-cross-review.md` | `…-third-review-assessment.md`(v3.1 — 4차 확인 반영) |
 | 5차 | `etl-platform-v2.0-codex-cross-review.md` | `etl-platform-v2.0-codex-review-assessment.md` |
-| 7차 | `etl-platform-v2.0-codex-seventh-cross-review.md` | `etl-platform-v2.0-codex-seventh-review-assessment.md` — **P0 6건 전부 확정**, P1/P2 12건 수정 |
-| 8차 | *(요청서 작성 완료 — `codex-cross-review-prompt-8th.md`)* | — |
 | 6차 | `etl-platform-v2.0-codex-review-assessment-recheck.md`(재검증) | — |
+| 7차 | `etl-platform-v2.0-codex-seventh-cross-review.md` | `etl-platform-v2.0-codex-seventh-review-assessment.md` — 당시 수정 판정, **8차에서 종결 여부 재기각** |
+| **8차** | **`etl-platform-v2.0-codex-eighth-cross-review.md`** | 후속 검토서 대기 — **CLOSED 0 / PARTIAL 2 / OPEN 4** |
 
-리뷰 요청서: `codex-cross-review-prompt.md`(1차) · `codex-cross-review-prompt-v2.0.md`(v2.0) · **`codex-cross-review-prompt-8th.md`(8차 — 현재)**
+리뷰 요청서: `codex-cross-review-prompt.md`(1차) · `codex-cross-review-prompt-v2.0.md`(v2.0) · `codex-cross-review-prompt-8th.md`(8차)
 
 ### 2.4 Profile U 재설계
 
@@ -70,8 +71,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **`etl-platform-v2.0-unprivileged-redesign-scope.md`** | DBA 없는 세계의 재설계 범위 제안. 죽는 것 / 살아남는 무권한 수단 / 보증 축 재정의 / 결정 4건 |
 | **`etl-platform-v2.0-capability-overlay.md`** | 이기종 원천 대응. 코어는 권한 0·최저 버전에서 성립하고 capability 는 원천별 측정 오버레이로 붙는다 |
 | **`etl-platform-v2.0-simplification-decision.md`** | 감축 결정 기록. 무엇을 잘랐고 **무엇을 왜 안 잘랐는지** |
-| **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 판정 — **보류**. 후보 37건 중 검증 9건이 전부 기각된 이유 |
-| `etl-platform-v2.0-grant-request-candidates.md` | 그 판정의 **원자료** — 후보 37건 전체 + 기각 사유 전문. 28건은 미검증으로 표시 |
+| **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 — **보류 유지**. 8차 리뷰에서 일부 사실·실체 판정 재검토 요구 |
+| `etl-platform-v2.0-grant-request-candidates.md` | 후보 37건 working reconstruction. 9건 검토·28건 미검증이며 journal/source 결속은 미완료 |
 | **`etl-platform-local-poc-plan.md`** | 로컬 WSL2 에서 G0-0 를 처음 돌리기 위한 실행 계획. **로컬이 증명하는 것/못하는 것 경계**가 핵심 |
 | **`etl-platform-transfer-guide.md`** | **사내 반입 안내** — `git bundle` 오프라인 반입, 폐쇄망 의존물, 결과 반출, 변경관리 문답 |
 | `CHANGELOG.md` | 아키텍처 변경 이력(규범 아님). 본문에서 분리 |
@@ -80,18 +81,19 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 3. G0-0 실측 산출물
 
-**실행 순서: A → B0 → B1 → C00 → C01~C09.** G0-0 결과가 A v2.0 / P v2.0의 여러 분기를 결정한다.
+**현재는 아래 순서로 실행하지 않는다.** 8차 리뷰의 M0/M1을 먼저 닫은 뒤 A → B0 → B1 → C00 → C01~C09 순으로 raw evidence를 수집한다.
 
 | 게이트 | 파일 | 대상 | 안전 등급 |
 |---|---|---|---|
-| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·**원천 이식성** 실측(86 probe) | 운영계 가능(대상 테이블 접촉 `ROWNUM=1` 3건) |
-| **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | 운영계 제한적(ROWNUM 제한) |
-| **G0-0B1** | `g0-0b1-connection-provider/` | 커스텀 `JdbcConnectionProvider`가 schema·task 경로를 덮는지 + fail-closed 성립 여부 | 운영계 제한적(`ROWNUM` 제한, 읽기 전용) |
-| **G0-0C00** | `g0-0c-fence-facts.sql` | fence 반례 fact collector | 운영계 제한적(`ACK_FULL_SCAN` 게이트) |
-| **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness (9종 구현 완료) | **폐기용 쓰기 가능 환경 전용** |
+| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·원천 이식성 raw fact(87 probe) | **현재 사내 원천 NO-GO** — identity 선차단·producer exit wrapper·I/O budget 필요 |
+| **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | **현재 사내 원천 NO-GO** — exit 0 결함·partition/session 하드 상한 부재 |
+| **G0-0B1** | `g0-0b1-connection-provider/` | provider의 schema·task 경로 + fail-closed | **현재 NO-GO** — `failclosed_task` 실행 불가·stack 추정 순환 판정 |
+| **G0-0C00** | `g0-0c-fence-facts.sql` | fence fact collector | external completion wrapper + scan 승인 후 조건부 |
+| **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness | **외부 allowlist로 확인한 폐기용 쓰기 가능 환경 전용** |
 
-**증거 계약**: `g0-0-evidence.schema.json` + `g0-normalize.py` — 각 단계의 산출물을 하나의
-`g0_evidence` 레코드로 정규화한다. capability 축을 probe 결과에서 파생하고 근거를 함께 남긴다.
+**부분 증거 계약**: `g0-0-evidence.schema.json` + `g0-normalize.py` — 각 단계의 산출물을
+`g0_0_evidence` 레코드로 정규화한다. 이것은 `gate_eligible=false`인 capability inventory이며 final `g0_evidence`가 아니다.
+현 normalizer는 child 완결성·run/source/runtime 결속과 `effective_value` floor를 보장하지 못하므로 **판정 입력으로 수용하지 않는다.**
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
 
@@ -100,22 +102,22 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ### 3.1 안전 규칙 (요약)
 
-1. 읽기 전용 프로브는 DDL·DML·job 생성이 **한 줄도 없다**.
+1. A·B0·B1·C00은 원천 객체 DDL/DML·job 생성을 의도하지 않는다. A의 `ALTER SESSION`은 자기 세션에만 적용된다. **다만 read-only가 source-safe를 뜻하지는 않는다.**
 2. **잘못된 비밀번호를 절대 시도하지 않는다** — 계정 잠금은 전체 파이프라인 정지다.
 3. 비밀번호를 **명령줄 인자에 넣지 않는다**(`/nolog` + stdin, 또는 환경변수).
-4. 모든 판정은 실제 `SQLCODE`에서 나온다. 성공을 가정한 리터럴 출력이 없다.
-5. C01~C09는 `environment_guard`가 통과하지 않으면 **한 줄도 실행하지 않는다**.
+4. SQL capability probe는 실제 `SQLCODE`를 기록한다. B1·CE·normalizer 판정은 별도의 runtime·manifest·child binding이 필요하며 현재 그 계약이 미완료다.
+5. C01~C09는 저장소 내부 `environment_guard`만 믿지 않는다. 사내 CMDB/환경 registry 등 **외부 disposable allowlist**가 승인한 환경에서만 실행한다.
 
 ---
 
 ## 4. 이 저장소의 이력이 말해 주는 것
 
-여섯 차례 교차 리뷰에서 반복해 잡힌 결함 유형은 하나다 — **문서로 확인되지 않은 것을 확인된 것처럼 쓴 문장**. 대표적인 예:
+누적 교차 리뷰에서 반복해 잡힌 결함 유형은 하나다 — **문서로 확인되지 않은 것을 확인된 것처럼 쓴 문장**. 대표적인 예:
 
 - `SYS_CONTEXT('USERENV','CON_DBID')` — 19c USERENV에 없는 속성(ORA-02003)
 - `executionMetadata.runId` — Dagster GraphQL 스키마에 없는 입력 필드
 - `sessionInitStatement` — Spark의 schema/metadata connection은 이것을 실행하지 않는다
-- `AS OF SCN` — `SELECT`만으로는 불가(객체별 `FLASHBACK` 권한 필요)
+- Flashback Query — 대상 `SELECT`/`READ`와 object `FLASHBACK` 또는 system `FLASHBACK ANY TABLE`이 필요. 최소권한 정책에서는 object grant를 검토
 - `MAX(watermark)` fence — 반개구간과 결합하면 tail 행이 지연·누락된다
 
 그래서 이 저장소의 규칙은 다음과 같다.
@@ -126,7 +128,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 5. 다음 작업
 
-1. **G0-0A 실행** — 분기점 두 줄: 대상 테이블의 `FLASHBACK` 객체 권한, `versions.lock`의 Spark 버전
-2. **G0-0B1 빌드·실행** — `cd g0-0b1-connection-provider && ./build.sh` 가 첫 단계다. 실제 Spark jar에 대고 빌드한 적이 없으므로, 거기서 실패하면 그것이 첫 측정 결과다(SPI 시그니처가 그 판본과 다름)
-3. **C01~C09 실행** — 폐기용 환경 확보 후
-4. capability 확정 → **A v2.0 / P v2.0**(단일 core + ConnectionRevision capability overlay, v1.2.3.1은 archive)
+1. **M0 실행 안전성** — wrapper `pipefail`/producer exit, B0 `sys.exit(main())`, partition/session cap, target 접촉 전 identity hard preflight, CE 외부 allowlist
+2. **M1 child evidence contract** — A/B0/B1/C00별 run ID·source/profile·runtime/lock digest·start/end·exit·exact manifest
+3. **B1 재설계** — explicit `connectionProvider`, 실제 task-only scenario, stack guess와 injection/PASS 분리
+4. synthetic negative suite에서 incomplete·mixed·stale evidence가 전부 fail-closed인지 확인
+5. 그 뒤 pinned 사내 환경에서 raw G0-0 수집 → capability composition 확정 → **A v2.0 / P v2.0**

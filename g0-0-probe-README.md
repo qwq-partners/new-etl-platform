@@ -1,15 +1,21 @@
 # G0-0 Executable Probe — 실행 안내와 결과 해석
 
 - 작성일: 2026-08-25
-- 근거: `etl-platform-v2.0-codex-cross-review.md` §7.1(“**G0-0을 먼저 실행한다. 문서 개정과 병행하지 않는다**”)·§7.2 결과 분기표·§7.4
-- 산출물(2026-08-25 재검증 2차 반영) — **실행 순서 A → B0 → (B1) → C00 → C01~C09**
-  - **G0-0A** `g0-0a-capability-inventory.sql` — 운영계에서 제한적으로 가능한 read-only capability inventory(대상 테이블 스캔 없음)
+- 현재 판정: **2026-08-30 실행 NO-GO**. M0 실행 안전성·M1 child evidence contract·M2 B1 경로 검증을 먼저 닫는다.
+- 현재 근거: `etl-platform-v2.0-codex-eighth-cross-review.md` §3·§11(M0~M2 선행). 과거 v2.0 리뷰 §7의 “G0-0 먼저” 순서는 실행 안전성과 증거 결속을 고친 뒤에만 적용한다.
+- 산출물(2026-08-25 재검증 2차 반영) — **수정 후 목표 순서 A → B0 → (B1) → C00 → C01~C09**
+  - **G0-0A** `g0-0a-capability-inventory.sql` — read-only capability inventory. 현재 identity 선차단과 Oracle I/O 하드 상한이 없어 사내 원천 실행 미승인
   - **G0-0B0** `g0-0b0-spark-smoke.py` — stock Spark smoke probe. **provider tracer가 아니다**
   - **G0-0B1** `g0-0b1-connection-provider/` — 커스텀 `JdbcConnectionProvider`가 schema·task 경로를 실제로 덮는지, 프리앰블 실패 시 job이 정말 죽는지(fail-closed) 증명하는 tracer. **이것이 Profile U 세션 단언 모델의 성립 조건이다.** 빌드·실행법은 그 디렉터리의 README 참조
   - **G0-0C00** `g0-0c-fence-facts.sql` — 운영계 read-only fact collector
   - **G0-0C01~C09** `g0-0c-counterexamples/` — **stateful counterexample harness**(쓰기 fixture·다중 connection·crash 주입이 필요하므로 폐기용 환경 전용). 운영 규칙·환경변수·시나리오별 증거 형태는 `g0-0c-counterexamples/README.md` 에 있다
 - **폐기**: 이전 `g0-0-probe.sql`은 실행 차단 결함 5건(잘못된 SHA-256 기대값 · 미정의 `&LIMIT_ROWS` · 대상 테이블 전체 scan · 비밀번호 argv 노출 · **하드코딩된 `"query_ok":true`로 인한 apparent success**)으로 삭제했다. 실행하지 마라.
-- 이 두 스크립트의 출력이 A v2.0 / P v2.0의 **여러 분기를 결정한다.** 실측 전에 규범 문서를 대규모로 고치면 재작업이 크다.
+- 이 산출물의 raw fact가 A v2.0 / P v2.0의 **여러 분기 입력 후보**다. 현 normalizer의 판정을 그대로 수용하지 않는다.
+
+> **STOP**: 아래 명령은 목표 절차를 보존한 것이며 현재판의 실행 승인서가 아니다.
+> `producer | tee` exit 유실, B0 exit 0·partition/session 무상한, A identity 선차단 부재,
+> B1 `failclosed_task` 실행 불가, child evidence binding 부재를 고치고 회귀 검증하기 전에는 실행하지 않는다.
+> C01~C09는 수정 후에도 저장소 내부 guard가 아닌 외부 disposable-environment allowlist가 필요하다.
 
 ---
 
@@ -17,17 +23,21 @@
 
 | # | 규칙 | 이유 |
 |---|---|---|
-| 1 | **읽기 전용이다.** DDL·DML·job 생성이 한 줄도 없다 | 운영 원천을 건드리지 않는다 |
+| 1 | A·B0·B1·C00은 원천 객체 DDL/DML·job 생성을 의도하지 않는다. A의 `ALTER SESSION`은 자기 세션에만 적용된다. **read-only가 곧 source-safe라는 뜻은 아니다** | `ROWNUM`은 결과 행 상한이지 I/O 상한이 아니며 Spark partition 수는 세션 수를 늘린다 |
 | 2 | **잘못된 비밀번호를 절대 시도하지 않는다** | `FAILED_LOGIN_ATTEMPTS` 소진 = 계정 잠금 = 전체 파이프라인 정지 |
-| 3 | `ALTER SESSION`만 쓰고 `ALTER SYSTEM`은 없다 | 자기 세션에만 영향 |
+| 3 | A·B0·B1·C00의 session-control은 `ALTER SESSION`뿐이고 `ALTER SYSTEM`은 없다. C01~C09의 fixture 쓰기는 별도 폐기 환경으로 격리한다 | 원천 세션과 쓰기 반례의 안전 경계를 분리한다 |
 | 4 | 비밀번호는 **환경변수로만** 전달한다(`--password-env`) | 프로세스 목록·로그 노출 방지 |
 | 5 | Spark probe는 **운영에서 쓸 pinned Spark·Oracle JDBC 버전**으로 실행한다 | 버전이 다르면 결과가 규범 근거가 되지 못한다 |
 | 6 | 데이터 사실 측정은 **G0-0C로 분리**했고 기본이 `EXACT_MODE = N`(표본)이다 | G0-0A의 `wm_column.leading_valid_visible`를 확인하기 전에 전수 모드로 돌리지 않는다 |
-| 7 | 모든 판정은 **실제 `SQLCODE`**에서 나온다. 성공을 가정한 리터럴 출력이 없다 | 이전 판의 apparent-success 결함 재발 방지 |
+| 7 | SQL capability probe는 실제 `SQLCODE`를 기록한다. B1·CE·normalizer는 별도의 runtime·manifest·child binding으로 판정해야 한다 | 현재 그 계약이 미완료이므로 apparent-success를 배제했다고 주장할 수 없다 |
 
 ---
 
 ## 2. 실행
+
+**현재 실행하지 않는다.** 아래 예시는 M0/M1/M2 완료 후 wrapper가 producer exit·sentinel·manifest·identity를
+외부에서 검증하도록 개정할 때의 입력값과 목표 순서를 설명한다. 특히 현재의 `| tee` 예시는 producer exit를
+잃으므로 그대로 자동화하지 않는다.
 
 ```bash
 # (0-a) 이 블록에서 쓰는 변수를 먼저 정의한다. 정의 없이 쓰면 빈 문자열로 접속을 시도한다.
@@ -45,14 +55,14 @@ export CE_DOC_PATH="$PWD/etl-platform-target-architecture-v1.2.3.1.md"   # CE09 
 # (0) 비밀번호를 명령줄 인자로 절대 넘기지 않는다. /nolog + stdin CONNECT를 쓴다.
 read -rs -p "ETL password: " ORA_PW; export ORA_PW
 
-# (1) G0-0A — 안전한 capability inventory (대상 테이블 스캔 없음)
+# (1) G0-0A — M0 수정 전 실행 금지
 sqlplus -S /nolog <<EOF | tee g0-0a-evidence-$(date +%Y%m%d).log
 CONNECT $ORA_USER/$ORA_PW@//host:1521/service
 @g0-0a-capability-inventory.sql
 EXIT
 EOF
 
-# (2) G0-0B0 — stock Spark smoke. 운영과 같은 pinned Spark·ojdbc 버전으로.
+# (2) G0-0B0 — M0 수정 전 실행 금지. 운영과 같은 pinned Spark·ojdbc 버전으로.
 spark-submit --jars /path/ojdbc11.jar g0-0b0-spark-smoke.py \
   --url "jdbc:oracle:thin:@//host:1521/service" \
   --user "$ORA_USER" --password-env ORA_PW \
@@ -78,7 +88,7 @@ export SPARK_HOME=/opt/spark OJDBC_JAR=/path/ojdbc11.jar
 # role 은 공백 없이 '_' 로 넘긴다(JVM 인자에서 공백이 잘린다).
 cd ..
 
-# (4) G0-0C01~C09 — **폐기용 쓰기 가능 환경에서만**. 운영계에서 실행 금지.
+# (4) G0-0C01~C09 — **외부 allowlist가 확인한 폐기용 쓰기 가능 환경에서만**. 운영계에서 실행 금지.
 #     runner 가 CE_DSN 으로 직접 접속해 DB_UNIQUE_NAME 을 확인한다(운영자 자기신고 아님).
 #     접속 정보는 환경변수로만 넘긴다(argv 금지). 자세한 것은 패키지 README 참조.
 cd g0-0c-counterexamples
@@ -100,10 +110,13 @@ unset CE_PASSWORD
 unset ORA_PW
 ```
 
-로그에서 `{"probe":...}` / `PROBE {...}` 라인만 뽑아 `g0_evidence.account_privs`로 등록한다.
+M1 수정 뒤 로그에서 `{"probe":...}` / `PROBE {...}`와 child completion 계약을 함께 검증해
+`g0_0_evidence`의 raw capability inventory로 등록한다. 최종 `g0_evidence`나 G0 PASS가 아니다.
 **G0-0A는 exit code 0과 `{"probe_run_end":"G0-0A"}` sentinel, 그리고 `probe_summary.manifest_ok = true`를 셋 다 확인해야 유효하다** — 하나라도 없으면 결과 전체를 폐기한다.
 
-**여러 번 실행할 것**: 부하가 다른 시간대(정각 burst 중/한산할 때)에 최소 2회. `S5`/§9의 ORA-03172는 lag가 있을 때만 나오므로 **양성 증거를 얻으려면 lag가 큰 시간대**가 필요하다.
+**반복 실행은 별도 승인 뒤에만 한다**: 생산라인 연계 원천에서 정각 burst를 의도적으로 겨냥하지 않는다.
+우선 non-production 또는 자연 발생 lag를 관측하고, source owner가 승인한 작은 partition/session·scan budget과
+즉시 중단 조건 안에서만 다른 시간대 회차를 추가한다. `ORA-03172` 양성 증거를 만들기 위해 원천 부하를 높이지 않는다.
 
 ---
 
@@ -173,7 +186,7 @@ unset ORA_PW
 
 ## 7. 실행 후 할 일
 
-1. 산출물을 `g0_evidence` 레코드로 정규화한다. **도구가 있다** — 손으로 하지 마라.
+1. M1/M3 수정과 synthetic negative suite 통과 뒤 산출물을 `g0_0_evidence` 레코드로 정규화한다. 현재 normalizer 결과는 판정 증거로 수용하지 않는다.
 
 ```bash
 python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile CORP_POC \
@@ -191,6 +204,6 @@ python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile 
   · capability 축을 **실제 probe id 에서 파생**하고 `derived_from` 에 근거를 남긴다(사람이 재판정 가능)
   · G0-0 이 덮지 못하는 G0 항목을 `not_covered` 에 명시한다 — G0-0 은 G0 전체가 아니다
   · `profile=LOCAL_WSL` 이면 "하네스 동작 확인용이며 설계 근거가 아니다" 를 경고에 박는다
-2. §4 분기표대로 **capability 목록을 확정**한다 — 이것이 A v2.0의 `ConnectionRevision capability overlay` 초기값이 된다.
+2. §4 분기표와 G0-1~G0-5 composition을 거쳐 capability를 확정한다. G0-0 단독 레코드는 `gate_eligible=false`다.
 3. 그 다음에야 A v2.0 / P v2.0 규범 개정을 시작한다.
 4. 남은 세 산출물(리뷰 §7.4): exact preamble spike · ~~Spark connection-path tracer~~ (**철회** — B0 의 S1c·S2·S3 는 stock 경로 관측일 뿐 provider 가 3경로를 덮는지는 증명하지 못한다. G0-0B1 이 그 역할이다) 구 서술: Spark connection-path tracer · fence 반례 harness. 앞의 둘은 이 probe의 `S1c`·`S2`·`S3`가 이미 상당 부분 덮는다.

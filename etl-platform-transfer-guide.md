@@ -1,6 +1,12 @@
 # 사내 반입 안내
 
-이 저장소를 사내 환경으로 가져가 G0-0 를 실행하기 위한 절차다.
+이 저장소를 사내 환경으로 가져가기 위한 절차다. G0-0 실행 절차는 포함하지만,
+**현재 커밋은 사내 원천 실행 준비 완료판이 아니다.**
+
+> **2026-08-30 실행 차단**: 8차 교차 리뷰에서 M0 실행 안전성과 M1 child evidence contract가
+> 닫히기 전에는 현재 A/B0/B1을 사내 원천에 실행하지 않는다고 판정했다.
+> §2~§3의 저장소·의존물 반입은 진행할 수 있지만, §4~§5는 M0/M1 수정과 회귀 검증을 마친 뒤의
+> 목표 절차다. 상세 근거는 `etl-platform-v2.0-codex-eighth-cross-review.md`를 본다.
 
 > **핵심**: 저장소만 가져가면 **아무것도 실행되지 않는다.** 산출물은 전부 Oracle 클라이언트·Spark·python 패키지에 의존하고, 폐쇄망이면 그것들이 `pip`/Maven 으로 들어오지 않는다. §3 의 의존물을 함께 반입해야 한다.
 
@@ -58,7 +64,8 @@ git bundle verify new-etl-platform.bundle
 sha256sum new-etl-platform.bundle
 ```
 
-실측: **약 0.9 MB** (커밋 18개 / 파일 72개 전부 포함).
+2026-08-30 확인값: **약 1.0 MB** (기준 HEAD `7e0872b`, 커밋 21개 / 추적 파일 74개 포함).
+이 수치는 문서 추가에 따라 달라질 수 있으므로 반입 시 생성한 bundle의 sha256과 `git bundle verify` 결과를 기준으로 삼는다.
 
 안에서:
 
@@ -69,7 +76,8 @@ git clone new-etl-platform.bundle new-etl-platform
 cd new-etl-platform && git log --oneline | head -3
 ```
 
-> **검증됨**: 이 절차로 빈 디렉터리에 clone 해 커밋 18개·파일 72개가 원본과 같은 HEAD 로 복원되는 것을 확인했다.
+> **절차 검증 범위**: 과거 dry-run에서 빈 디렉터리 clone과 HEAD 일치를 확인했다.
+> 현재 반입본은 반드시 반입 시점의 commit ID·`git bundle verify`·sha256으로 다시 확인한다.
 
 #### 이후 갱신은 증분으로
 
@@ -123,7 +131,8 @@ pip install --no-index --find-links ./wheels oracledb jsonschema
 ### 3.3 반입 전 점검
 
 ```bash
-# 사내에서 이것들이 다 되면 실행 준비가 된 것이다
+# 사내에서 이것들이 다 되면 의존물 반입이 끝난 것이다.
+# 이것만으로 G0-0 실행 승인이 되지는 않는다.
 java -version && javac -version
 python3 -V && python3 -c "import oracledb, jsonschema; print('ok')"
 $SPARK_HOME/bin/spark-submit --version
@@ -136,6 +145,10 @@ which sqlplus
 ## 4. 결과를 밖으로 가져오기
 
 G0-0 산출물에는 **원천 식별자가 들어간다**(`DB_UNIQUE_NAME`·`INSTANCE_NAME`·스키마·테이블·SID). 반출 전에 확인한다.
+
+> **현재 normalizer 결과는 판정 증거로 수용하지 않는다.** child별 run/source/profile/runtime/lock 결속,
+> exact manifest, completion/exit 상태와 stale/effective floor를 M1/M3에서 보강하기 전에는 raw 산출물을
+> 변경하지 않고 보관한다. 아래 정규화 명령은 그 보강이 완료된 뒤의 목표 사용법이다.
 
 ```bash
 python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile CORP_POC \
@@ -164,23 +177,27 @@ git bundle verify result.bundle && git pull result.bundle main
 
 ---
 
-## 5. 반입 후 첫 실행 순서
+## 5. M0/M1 수정 후 첫 실행 순서
 
 `g0-0-probe-README.md` 와 `etl-platform-local-poc-plan.md` 가 상세를 갖고 있다. 요약하면:
 
+**STOP 조건**: producer exit를 보존하는 외부 wrapper, target 접촉 전 identity hard preflight,
+B0 partition/session 하드 상한, B1 explicit provider·경로별 독립 검증, child evidence binding,
+C01~C09 외부 disposable-environment allowlist 중 하나라도 없으면 실행하지 않는다.
+
 ```
-(0) 변수 정의 · 대상 스키마/테이블을 각 SQL 상단 DEFINE 에 기입
+(0) M0/M1 회귀 검증 통과 · 변수 정의 · 외부 실행 wrapper와 승인 범위 고정
 (1) G0-0A   sqlplus  — exit 0 ∧ probe_run_end sentinel ∧ manifest_ok=true ∧ emitted=87, 넷 다
-(2) G0-0B0  stock Spark 경로 관측
-(2.5) G0-0B1  ./build.sh  → ./run.sh   ← **여기가 최대 미지수**
+(2) G0-0B0  stock Spark 경로 관측 — partition/session cap과 process exit 확인
+(2.5) G0-0B1  explicit connectionProvider로 schema/task/metadata 경로를 각각 실행
 (3) G0-0C00 ACK_FULL_SCAN 승인 후에만 (기본값이면 대상 테이블 질의 0건)
-(4) G0-0C01~C09  **폐기 가능한 환경에서만.** CE_DOC_PATH 필수
-(5) g0-normalize.py 로 g0_0_evidence 레코드 생성
+(4) G0-0C01~C09  **외부 allowlist가 확인한 폐기 가능한 환경에서만.** CE_DOC_PATH 필수
+(5) child contract 검증 후 g0-normalize.py 로 gate_eligible=false인 g0_0_evidence 생성
 ```
 
 주의할 것 둘.
 
-- **`--profile CORP_POC` 로 정규화한다.** `LOCAL_WSL` 로 하면 "하네스 동작 확인용이며 설계 근거가 아니다"가 증거에 박힌다.
+- 실행자가 넘긴 **`--profile CORP_POC` 문자열만으로 사내 증거가 되지 않는다.** M1의 child binding과 runtime/source 확인을 통과해야 한다. `LOCAL_WSL` 결과는 하네스 회귀 검증용일 뿐 설계 근거가 아니다.
 - **잘못된 비밀번호를 시도하지 않는다.** 계정 잠금은 전체 파이프라인 정지다. 하네스는 접속 1회 실패 시 중단하도록 돼 있지만, 반입 직후 접속 정보를 손으로 시험할 때가 가장 위험하다.
 
 ---
@@ -191,8 +208,8 @@ git bundle verify result.bundle && git pull result.bundle main
 
 | 질문 | 답 |
 |---|---|
-| 원천에 쓰기를 하는가 | G0-0A·B0·B1·C00 은 **읽기 전용, DDL·DML 0줄**. C01~C09 만 쓰기이며 **폐기 가능한 별도 환경 전용**이고 가드가 통과하지 못하면 한 줄도 실행되지 않는다 |
-| 대상 테이블을 얼마나 읽는가 | A 는 `ROWNUM=1` 몇 건. B0·B1 은 `--limit`/`--probe-rows` 상한(하드 최대 100,000). C00 은 `ACK_FULL_SCAN=Y` 로 **명시 승인**하기 전에는 대상 테이블 질의가 0건 |
+| 원천에 쓰기를 하는가 | A·B0·B1·C00의 의도는 읽기 전용이지만 **현재 실행 안전성은 미승인**이다. C01~C09는 쓰기이며 저장소 내부 guard가 아니라 **외부 allowlist가 확인한 폐기 환경**에서만 허용한다 |
+| 대상 테이블을 얼마나 읽는가 | 현재 `ROWNUM`·row count는 결과 행 상한이지 Oracle I/O 하드 상한이 아니다. B0는 partition/session 하드 상한도 없다. 실행 전 SQL plan·partition 수·동시 세션·scan budget을 별도로 승인해야 한다 |
 | 비밀번호는 어떻게 다루는가 | 환경변수 또는 stdin 만. **argv·URL·로그·추적 파일에 넣지 않는다** |
-| 실패하면 어떻게 되는가 | 신원이 기대와 다르면 읽지 않고 예외를 던진다(fail-closed). 자격증명 오류를 만나면 남은 단계를 실행하지 않는다 |
-| 어떤 권한이 필요한가 | 대상 테이블 `SELECT` 만. 추가 권한 요청은 **현재 보류**이며 어떤 설계도 그것을 가정하지 않는다 |
+| 실패하면 어떻게 되는가 | **현재는 fail-closed를 보장하지 않는다.** A는 target 접촉 전 identity 선차단이 없고, B0는 오류 출력 뒤 exit 0이 가능하며, `producer \| tee`는 producer exit를 잃을 수 있다. M0 wrapper와 hard preflight 수정 후 재검증한다 |
+| 어떤 권한이 필요한가 | 대상 객체 조회의 최소 전제는 `SELECT`/`READ`다. 나머지 probe는 계정에 이미 있는 capability를 측정하며 실패할 수 있다. 추가 권한 요청은 **현재 보류**이고 어떤 설계도 이를 가정하지 않는다 |

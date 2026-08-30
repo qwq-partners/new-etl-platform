@@ -1,9 +1,10 @@
 # 8차 교차 리뷰 요청
 
 - 요청일: 2026-08-28
-- 기준 커밋: `65846ec` (`main`)
+- 기준 커밋: `9cba9209409d67df13405593e970fe76c2987366` (`main`)
 - 저장소: `git@github.com:qwq-partners/new-etl-platform.git` (private)
 - 로컬: `/mnt/c/Users/user/Documents/Codex/2026-08-22/new-chat/outputs`
+- 리뷰 결과: `etl-platform-v2.0-codex-eighth-cross-review.md`
 
 ---
 
