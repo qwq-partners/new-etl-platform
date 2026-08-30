@@ -79,8 +79,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **`g0-0-s1-s3-results.md`** | **첫 실측 회차 기록**(S1·S2·S3). B1 컴파일·SPI 배선 확인, 판정기·증거 계약 첫 검증, 계획서 정정 2건, S4 이후가 막힌 이유 |
 | **`g0-child-contract.md`** | **child 산출물 계약.** manifest 사이드카 형식, 집계기 강제표, exit 0/3/4, RECON 회차와 증거 회차의 분리 |
 | **`etl-platform-transfer-guide.md`** | **사내 반입 안내** — `git bundle` 오프라인 반입, 폐쇄망 의존물, 결과 반출, 변경관리 문답 |
-| **`etl-platform-ui-information-architecture-v0.2.md`** | **Control Plane UI 정보구조 — 현행.** 화면 8개, Phase 0 표시 규칙, 두 UI 접합면, **§10 Advisor UX**, **§11 시각 표시**, 미결 7건 + **A 공백 8건**(§9.1) |
-| `etl-platform-ui-information-architecture-v0.1.md` | 위의 이전 판. 이력으로 남긴다 |
+| **`etl-platform-ui-information-architecture-v0.3.md`** | **Control Plane UI 정보구조 — 현행.** 화면 8개, Phase 0 표시 규칙, 두 UI 접합면, **§10 Advisor UX · §11 시각 표시 · §12 운영자 조회 · §13 목록 규모**. 미결 7건 중 4건 해소, **A 공백 13건**(§9.1)을 A 개정 대상으로 분리 |
+| `etl-platform-ui-information-architecture-v0.2.md` · `-v0.1.md` | 이전 판. 이력으로 남긴다 |
 | `CHANGELOG.md` | 아키텍처 변경 이력(규범 아님). 본문에서 분리 |
 
 ---
@@ -117,6 +117,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 > child 완결성·run/source/runtime 결속·`effective_value` floor 미보장을 지적했다.
 > 위 재설계가 그 지적의 상당 부분을 앞서 다루지만, **닫혔다는 판정은 8차 반례를 이 구현에
 > 직접 돌려 본 뒤에만 쓴다.** 그 전까지 현 normalizer 결과는 **판정 입력으로 수용하지 않는다.**
+
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.
 
