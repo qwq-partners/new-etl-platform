@@ -32,6 +32,22 @@ Control Plane UI 정보구조를 쓰며 A 를 정독해 발견한 규정 공백 
 갖고 있다. 요청서가 18장(Iceberg)만 보고 22장을 확인하지 않았다. v1.2.4 는 그 항목에
 소비처(운영자 UI 실행 이력 화면이 덮는 구간)를 한 줄 덧붙였을 뿐이다.
 
+## v1.2.4 정정 (2026-08-30) — 8차 교차 리뷰 M4
+
+근거: `etl-platform-v2.0-codex-eighth-cross-review.md` §4.1(ORA-08180/08181) · §11 M4.
+**규범 변경 0건.** 오류 코드의 **뜻**에 대한 설명이 틀려 있어 그것만 고쳤다.
+
+| 절 | 변경 요지 | 근거 |
+|---|---|---|
+| 11.4 | `ORA-08181` 의 뜻을 정정 — '유효하지 않거나 **너무 오래된** SCN'이 아니라 **공급된 SCN이 유효 SCN 범위 밖**이다("The supplied SCN was beyond the bounds of a valid SCN"). '너무 오래되어 image가 덮인' 경우는 `ORA-01555`이며 같은 목록에 이미 있다. 08181의 대표 사례는 **다른 DB의 SCN**이고 그것은 같은 절의 `db_identity` 대조가 막는다 | 8차 §4.1 |
+| 11.4 | `AS OF TIMESTAMP` 경로를 채택하면 `ORA-08180`("no snapshot found based on specified time")이 그 목록에 더해져야 한다고 명시. **다만 지금 넣지는 않는다** — 채택하지 않은 경로의 오류 코드를 규범에 미리 박으면 채택한 것처럼 읽힌다 | 8차 §4.1 |
+
+**P1-12 규칙 자체는 그대로다.** `ORA-01555/01466/08181 → SPARK_FAILED + 같은 계약 RETRY 금지`는
+세 코드 전부에 대해 맞는 처리다(어느 것이든 그 anchor로는 다시 못 읽는다). 고친 것은 규칙이
+아니라 **어느 코드가 어느 원인인지에 대한 설명**이다.
+
+---
+
 ## v1 → v1.1 변경 이력
 
 개정 원칙: 리뷰(`etl-platform-target-architecture-v1-review.md` v1.1)의 P0 2건과 §1.4 “① v1.1 선반영” 항목이 지적한 **의미론 결함만** 고친다. PoC에서 판정할 가설(500 RunRequest batch의 성능, WAP 적용 범위, compaction 동시성, snapshot 보존 용량, Run Pod 자원 등)은 본문에 결정으로 쓰지 않고 “PoC 시험·합격 기준서(별도 문서)”로 보낸다. 아래 표에 없는 절은 v1 그대로다. v1.1 초안에 대한 4관점 검증(커버리지·내부 정합·기술 정확성·구현 충분성, 86건)과 재빌드본에 대한 2차 검증(86건 회귀·정합성·8개 시나리오 구현 추적, 51건)을 반영해 실행 모델을 확정했다. 2차 검증에서 확정한 결정: source token은 SparkApplication 종료 확인(`finalize`)에서만 반환, 자동 재시도 사유는 `RUN_WORKER_LOST`뿐이며 그 외 새 attempt는 RETRY API가 발급한 `retry_authorization`을 Guard가 소비, Full 0건은 driver가 쓰지 않고 receipt만 보고, `DQ_FAILED`/`RECONCILIATION_REQUIRED`는 repair REPLAY가 window·lease를 인수해 `RESOLVED`로 닫음, `ADJUDICATION_PENDING`은 `expires_at`에 만료(부분 commit 보존), Run Pod 사망 시 SparkApplication이 살아 있으면 `reattach_grace_seconds` 동안 fencing 보류.

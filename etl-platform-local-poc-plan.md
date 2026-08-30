@@ -21,7 +21,17 @@
 |---|---|---|
 | **H** | 하네스가 돈다 / 이 결함이 코드 안에 있다 | 하네스에 대한 사실로만. **설계에 대해 아무 말도 하지 않는다** |
 | **D** | Spark 판본 내부 사실 또는 SQL 의미론의 **존재 증명** | **조건부**. 조건 불충족 시 H 로 강등 |
-| **X** | 현재 로컬 계획 범위 밖 | 이전 없음. `REQUIRES_CORP_ENV`·`NOT_INDUCED`·`NO_TEST_ARTIFACT`·`G1_SCOPE`를 구분하며, 원리적 측정 불가라는 뜻이 아니다 |
+| **X** | 현재 로컬 계획 범위 밖 | 이전 없음. `REQUIRES_CORP_ENV`·`NOT_INDUCED`·`NO_TEST_ARTIFACT`·`G1_SCOPE`·`LOCAL_DEFERRED`를 구분하며, **원리적 측정 불가라는 뜻이 아니다** |
+
+> **2026-08-30(8차 M4-5) — X 의 사유를 왜 나누는가.** 이전 판의 X 정의는 "원리적으로 측정
+> 불가"였고 8차 리뷰가 그것을 틀렸다고 판정했다. METADATA 경로는 다른 DSv2 시나리오로,
+> F-13 은 반복·대기 실행으로, 규모는 적절한 인프라에서, 플랫폼 거동은 코드가 생기면,
+> ADG·라이선스 거동은 사내 환경에서 **전부 측정 가능**하다. "지금 여기서 못 잰다"와
+> "잴 수 없다"를 같은 칸에 넣으면 **후속 측정 계획이 서지 않는다** — 무엇이 갖춰지면 잴 수
+> 있는지가 사유 이름 자체에 들어 있어야 한다.
+>
+> `UNMEASURABLE` 이라는 값은 **쓰지 않는다.** 정말로 operationalize 할 수 없는 주장이 나오면
+> 그때 도입하고, 그때도 "무엇을 관측하면 반증되는가"를 못 적으면 그것은 주장이 아니라 신념이다.
 
 ### H — 로컬의 주된 산출
 
@@ -33,8 +43,25 @@
 
 ### D — 조건부 이전
 
-같은 Spark 버전만으로는 부족하다. full distribution/classpath·JDK·OJDBC·provider 설정·datasource 경로·실행 방식까지
-evidence에 결속되고 동일해야 이전 후보가 된다.
+같은 Spark 버전만으로는 부족하다. **2026-08-30(8차 M4-5) — 그 "조건"을 산문이 아니라 술어로
+고정한다.** 아래가 **전부** 같아야 D 항목이 이전 후보가 되고, 하나라도 다르거나 증거에
+결속돼 있지 않으면 그 항목은 **H 로 강등**된다.
+
+```text
+exact Spark distribution/build + full classpath   (partial Maven classpath 는 이 조건을 만족하지 않는다)
+Scala / JDK bytecode level
+OJDBC jar digest
+provider jar / source / config digest
+deployment mode(driver·executor topology)
+datasource 경로(DSv1 / DSv2)와 query·options
+profile / source identity
+```
+
+> **오늘 이 술어를 만족하는 것은 무엇인가.** 로컬 회차는 **partial Maven classpath 에서의
+> compile 과 ServiceLoader 도달** 두 가지뿐이다. 아래 목록의 나머지는 **D 로 분류돼 있으나
+> 현재 조건을 만족하지 못하므로 지금은 이전할 수 없다** — 목록에 있다는 것은 "조건이 갖춰지면
+> 이전 후보"라는 뜻이지 "지금 이전 가능"이 아니다. 특히 **SCHEMA·TASK 커버리지 · fail-closed ·
+> connection peak 는 full distribution 회차 전에는 인용 금지**다.
 
 - **SCHEMA·TASK 2경로 커버리지** / **fail-closed 성립 여부**(어느 경로가 예외를 삼키는가)
 - 한 회차의 물리 connection 개수·open/close 패턴(NEW-05/13/18)
@@ -64,6 +91,23 @@ evidence에 결속되고 동일해야 이전 후보가 된다.
 **로컬 증거 정규화는 `--profile LOCAL_WSL` 로 해야 하지만 이것만으로 충분하지 않다.** profile은 caller 입력이라
 `CORP_POC`로 다시 붙일 수 있다. M1에서 child가 관측한 source/runtime/profile과 consumer-side 허용 범위를 결속하고,
 불일치·누락·재라벨을 fail-closed로 거부해야 한다.
+
+> **2026-08-30 — 8차 §8.4 누수 경로 4건의 현재 상태.**
+>
+> | 누수 경로 | 상태 |
+> |---|---|
+> | normalizer 가 caller 의 `--profile` 을 믿는다 | **닫힘(M1).** child manifest 의 `profile` 과 대조하고 다르면 exit 4 다. **재라벨은 child 를 다시 만들지 않으면 불가능하다** |
+> | child evidence 에 profile/run/source/lock digest 가 없다 | **닫힘(M1-2).** `source_id`·`harness_digest`·`started_at`/`ended_at` 까지 manifest 에 박힌다 |
+> | normalization 당시 lock 을 사후 hash 한다 | **닫힘(M1).** child 가 **실행 시점** digest 를 적고 집계기가 그것과 대조한다 |
+> | local B1 evidence 에 raw `javap`/ServiceLoader 출력과 artifact hash 가 없다 | **열려 있다.** `g0-0-s1-s3-results.md` 에 산문으로 있고 기계 판독 산출물이 아니다 — S2·S3 회차를 `g0-run-child.sh` 로 감싸야 닫힌다 |
+>
+> 그리고 M3-3 이 하나를 더 닫았다. **`--profile LOCAL_WSL`·`SANDBOX_CONTAINER` 회차는 모든 축의
+> `effective_value` 가 floor 로 내려간다**(`PROFILE_NOT_AUTHORITATIVE`). 그 전에는 레코드가
+> "설계 주장의 근거가 아니다"라고 경고하면서 동시에 확정 capability 값을 싣고 있었다 —
+> 소비자가 그 값을 읽으면 경고는 아무것도 막지 못한다. 이제 읽히는 값 자체가 floor 다.
+>
+> **남은 것은 소비자 쪽이다.** `gate_eligible=false` 와 floor 는 기계 소비를 막지만
+> **사람이 문서에 옮겨 적는 것**은 막지 못한다. 그 경로는 이 표(§1)가 유일한 방어다.
 
 > 2026-08-27 추가 — profile 값이 하나 늘었다. `SANDBOX_CONTAINER` 는 **Oracle 을 띄울 수 없는
 > 일회성 원격 컨테이너** 회차용이며, 제약이 `LOCAL_WSL` 보다 **강하다**(원천에 붙는 측정이 전부

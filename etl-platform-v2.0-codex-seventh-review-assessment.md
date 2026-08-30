@@ -391,11 +391,37 @@ G0-0 completed  != G0 PASS
 | 2 ✅ | P0-02~04 — evidence envelope · child manifest · binding 을 fail-closed 로 | **완료**(2026-08-27). `g0-0-evidence.schema.json` 신설·구 스키마 삭제, `g0-child-contract.md` + `g0-run-child.sh`, strict aggregator 재작성, exit 0/3/4 분리, CE returncode·config digest. 회귀 시험 `g0-normalize-tests.py` 40건 통과 |
 | 3 ✅ | P0-01·05 — 축 모델을 표 기반 pure function 으로 재작성 + §5.1 반례 자동화 | **완료**(2026-08-27). `g0_axes.py` 신설 — 7축 → **13축**. `watermark_commit_bound` 복원, 접근 가능성/값 probe 분리, 양성 대조 요구, 실패 taxonomy(transient≠NONE), binding 없으면 테이블 축 UNDETERMINED, 합성 축 분리. overlay §3 표는 폐기하고 부록 A 로 대체. 반례 시험 79건 통과 |
 | 4 ✅ | P0-06(a) — analyzer 의 fail-closed·`MIXED` 판정 수정 | **완료**(2026-08-27). `MIXED`·`UNKNOWN` 은 어느 경로에도 계상하지 않는다. `fail=all` 주입이 닿지 않은 경로는 `NOT_OBSERVED`(통과 아님). verdict 를 5개로 분리하고 `read_only_transaction`·`common_snapshot` 을 `NOT_IMPLEMENTED` 로 명시. 반례 시험 30건 통과. **(b)는 여전히 S6 에서 잰다** |
-| 5 ✅(코드) | B1 을 path-specific fail injection 하네스로 확장 후 pinned Spark 에서 실행 | **하네스 확장 완료**(2026-08-27). `g0b1.fail=none\|all\|schema\|task\|metadata\|조합`, 주입 사실을 추적에 기록(`injection_target`/`injection_applied`), `run.sh` 가 세 회차(coverage·failclosed_schema·failclosed_task)를 돌린다. Java 매트릭스 26건 + analyzer 40건 통과. **남은 것은 Oracle 이 있는 환경에서의 실행뿐이다** |
+| 5 ❌(**철회**) | B1 을 path-specific fail injection 하네스로 확장 후 pinned Spark 에서 실행 | ~~**하네스 확장 완료**(2026-08-27). `g0b1.fail=none\|all\|schema\|task\|metadata\|조합`, 주입 사실을 추적에 기록, `run.sh` 가 세 회차(coverage·failclosed_schema·failclosed_task)를 돌린다. Java 매트릭스 26건 + analyzer 40건 통과. **남은 것은 Oracle 이 있는 환경에서의 실행뿐이다**~~ → **2026-08-30 철회**. 아래 정정 참조 |
 | 6 | 가장 덜 민감한 사내 DR source 에서 A → B0 → B1 | 그대로. C00 full-scan 계열은 별도 승인 전 미실행 |
 | 7 | C01~C09 는 폐기 가능한 writable Oracle 에서만 | 그대로. child returncode·suite config digest 수정 후 |
 | 8 | overlay distribution 확인 후 A/P v2.0 개정 | 그대로 |
 | 9 | 37행 matrix 완성 후 object-set 별 optional FLASHBACK ROI 재판정 | 그대로 |
+
+> ### 2026-08-30 — 조치 5 의 "완료" 는 철회한다 (8차 교차 리뷰 §10-4 · M4)
+>
+> **이 문서는 스스로와 어긋나 있었다.** §7-(a)(위 241·243행)에서 "failclosed 회차의 `TASK`
+> trace 가 0건이어도 통과한다 — **task 경로가 fail-closed 인지 확인하지 않고 fail-closed 를
+> 통과시킨다. 확정이다**", "`fail=all` 이 실제로 task 경로에 도달하지 못한다 — 논리는 타당하나
+> **미실측**"이라고 적어 놓고, 같은 문서의 조치표에서는 조치 5 를 **완료**로 적었다.
+> 같은 문서가 한쪽에서 미구현이라 하고 다른 쪽에서 구현 완료라 했다.
+>
+> 8차 리뷰가 실물을 보고 확정했다 — **`failclosed_task` 모드는 애초에 실행조차 되지 않았다.**
+> `--mode` 의 argparse choices 에 그 값이 없어 Spark 가 시작되기 전에 종료했다. 즉
+> "`run.sh` 가 세 회차를 돌린다"는 문장은 **관측이 아니라 의도**였고, 그것을 실행 결과처럼 적었다.
+>
+> 더 근본적인 결함도 함께 드러났다 — 같은 `Trace.classify()` 스택 추정이 **주입 actuator 와
+> 판정 양쪽**을 구동했다. 분류기가 틀리면 잘못된 곳에 주입되고, 그 결과로 분류기를 검증할 수도
+> 없다(순환). 그 상태에서 "매트릭스 26건 통과"는 **분류기가 자기 자신에 대해 일관되다**는 뜻일
+> 뿐이었다.
+>
+> 실제 조치는 **8차 M2**(2026-08-30)에서 이뤄졌다 — 명시 `connectionProvider`, driver 가
+> 선언한 phase 로 주입(스택 추정은 진단 라벨로만 남고 어떤 판정 술어에도 들어가지 않는다),
+> schema/task/metadata 독립 시나리오, terminal token · business SQL 0 · trace 완결성 판정.
+>
+> **교훈은 숫자가 아니라 문장에 있다.** "매트릭스 26건 통과"는 사실이었지만 그 26건이 무엇을
+> 시험했는지가 문제였고, "남은 것은 실행뿐"이라는 문장이 **실행 불가능한 코드**를 덮었다.
+> 이 저장소의 규칙 — *"'고쳤다'고 쓰기 전에 실제로 바뀌었는지 확인하라"* — 이 정확히 이
+> 종류를 겨냥한다. 조치표에 ✅ 를 찍기 전에 **그 경로를 한 번이라도 실행했는가**를 묻는다.
 
 리뷰 §9 가 지목한 "다음 산출물 네 개"에 동의한다. 다만 **0번(2문자 수정)이 그 앞에 있다.**
 

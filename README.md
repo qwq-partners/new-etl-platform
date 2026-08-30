@@ -18,20 +18,21 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 목표 아키텍처 v1 → v1.2.4 | **완료**(다섯 차례 교차 리뷰 + UI 도출 개정 요청 13건 반영) |
 | **제약 변경**(2026-08-24, 표현 통일 2026-08-27) | **정합성을 DBA 협조에 걸 수 없다.** 비critical 권한 요청은 가능하나 **현재 보류이며 절대 가정하지 않는다.** v1.2.3.1이 전제하던 DBA 의존이 무효화됨 |
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
-| **G0-0 실측** | **원천에 대해서는 한 번도 실행되지 않았다.** Oracle 없는 회차로 S1~S3(하네스 빌드·SPI 배선)만 돌았다. M0·M1·M2 는 닫혔고 **M3(normalizer)·M4(문서 정정)가 남아 사내 원천 실행은 여전히 NO-GO** |
+| **G0-0 실측** | **사내 원천에 대해서는, 그리고 full G0-0 sequence 로는 한 번도 실행되지 않았다.** 돈 것은 Oracle 없는 회차의 S1~S3(하네스 빌드·SPI 배선)뿐이다 — 그 회차도 **실행이긴 했다**(§10-6 한정: '한 번도 미실행'은 원천·full sequence 에 대한 말이고, 하네스 빌드·SPI 배선 기록까지 부정하는 말이 아니다). M0~M4 는 닫혔고 남은 것은 **M5(사내 원천 실행)** 다 |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
-| DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. `FLASHBACK`의 순이익 부재라는 강한 결론은 8차 리뷰에서 재검토 대상으로 환원 |
+| DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. **근거는 정정됐다**(2026-08-30, M4-4): '받아도 순이익이 아니다'가 아니라 **'G0·object 수·DDL·LOB·retention·Spark 전파를 실증하기 전에는 활성화·요청하지 않는다'**. 이전 판이 세지 않은 이득이 하나 있다 — 같은 timestamp 리터럴에 의한 cross-connection 공통 anchor |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
-| **S1~S3 실행 결과** | `g0-0-s1-s3-results.md` — B1 이 실제 Spark jar 3판본(전체 배포판)에 대고 빌드·배선됐다. 정정 2건 · profile `SANDBOX_CONTAINER` |
-| **B1 로컬 부분 검증**(2026-08-28) | 병행 회차. partial Maven classpath 에서 compile·SPI linkage 확인. **full distribution runtime·Oracle 경로·fail-closed 는 미실행** |
+| **S1~S3 실행 결과**(2026-08-27, `SANDBOX_CONTAINER`) | `g0-0-s1-s3-results.md` — **전체 배포판 3판본**(spark-4.2.0/3.5.9×2, `*-bin-hadoop3`)에서 B1 을 컴파일하고 `spark-submit` 으로 SPI 배선까지 **실행**했다. Oracle 이 없어 URL 은 도달 불가였다 — 즉 **provider 선택·ServiceLoader 도달까지가 관측 범위**이고 프리앰블·fail-closed·business SQL 은 그 회차에도 미실행이다. 정정 2건 |
+| **B1 부분 검증**(2026-08-28) | **다른 회차다.** partial Maven classpath 에서 compile·SPI linkage 만 확인했다(spark-submit 없음). **이 회차에 한해** full distribution runtime 미실행이며, 앞 행의 2026-08-27 회차를 무효화하지 않는다 — 두 줄이 서로를 부정하는 것처럼 읽히던 것이 8차 §10-2 였다 |
 | **7차 교차 리뷰 판정·조치** | 판정 `…-seventh-review-assessment.md`(기각 0건) · 조치 `…-seventh-review-fixes.md`. 회귀 시험 **204건**. **8차 재검증 결과 P0 6건은 CLOSED 0 / PARTIAL 2 / OPEN 4** |
 | **8차 교차 리뷰**(2026-08-30) | 완료 — 현 normalizer 결과 수용·B1 `PROVEN`·G0 PASS·v2.0 동결은 **NO-GO** |
 | **8차 M0(실행 안전성)** | **완료**(2026-08-30) — 6건 처리, 회귀 41건 신설(`g0-m0-safety-tests.py`). 상세는 §3 |
 | **8차 M1(child 증거 계약)** | **완료**(2026-08-30) — 4건 처리. 회귀 283건 |
 | **8차 M2(B1 재작성)** | **완료**(2026-08-30) — 5건 처리. 회귀 289건 |
 | **8차 M3(normalizer)** | **완료**(2026-08-30) — 5건 처리. 회귀 397건. 상세는 §3 |
-| 8차 M4(사실·규범 문서 정정)·M5(그 뒤 G0-0) | 남음 ← **지금 여기** |
-| A v2.0 / P v2.0 규범 개정 | M0/M1 수정 → raw G0-0 수집 → 축/composition 확정 후 착수 |
+| **8차 M4(사실·규범 문서 정정)** | **완료**(2026-08-30) — 5건 + §10 문서 상태 오류 6건. Oracle 사실 3건은 1차 출처로 재확인 |
+| 8차 M5(그 뒤 G0-0) | 남음 ← **지금 여기**. 사내 원천 실행 |
+| A v2.0 / P v2.0 규범 개정 | raw G0-0 수집 → 축/composition 확정 후 착수 |
 
 **핵심 원칙**: 실측 전 규범 문서를 대규모로 고치지는 않는다. 다만 **실측을 신뢰할 수 있게 만드는 실행 안전성과 증거 결속은 실측보다 먼저 고친다.**
 
@@ -192,18 +193,22 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 5. 다음 작업
 
-**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 7차 리뷰 조치 0~5 도 코드까지 끝났다.
-그러나 **8차 교차 리뷰가 P0 6건을 CLOSED 0 / PARTIAL 2 / OPEN 4 로 재판정했다.**
-사내 원천 실행은 그 전에 열지 않는다.
+**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). **8차 교차 리뷰의 M0~M4 도 끝났다**(2026-08-30).
+남은 것은 M5 — **사내 원천에서 실제로 돌리는 것**이며, 그 앞을 막던 것들은 닫혔다.
 
-0. **8차 M0 실행 안전성** — wrapper `pipefail`/producer exit, B0 `sys.exit(main())`,
-   partition/session cap, 대상 접촉 전 identity hard preflight, CE 외부 allowlist
-1. **8차 M1 child evidence contract 재검증** — A/B0/B1/C00 별 run ID·source/profile·
-   runtime/lock digest·start/end·exit·정확한 manifest. 이 브랜치의 `g0-child-contract.md`·
-   `g0-run-child.sh` 가 이미 상당 부분을 구현한다 — **8차 반례를 그 구현에 돌려 판정한다**
-2. **8차 M2 B1 재설계** — explicit `connectionProvider`, 실제 task-only scenario,
-   stack guess 와 injection/PASS 분리
-3. synthetic negative suite 에서 incomplete·mixed·stale evidence 가 전부 fail-closed 인지 확인
-4. **Oracle 이 붙는 환경 확보** — S4~S8 이 전부 여기에 걸려 있다. **사용자 WSL2 에서 한다**
-5. pinned 사내 환경에서 raw G0-0 수집 → capability composition 확정 →
+- ~~**M0 실행 안전성**~~ — wrapper `pipefail`/producer exit, B0 `sys.exit(main())`,
+  partition/session cap, 대상 접촉 전 identity hard preflight, CE 외부 allowlist
+- ~~**M1 child evidence contract**~~ — child schema 4종, `source_id`·`harness_digest`·
+  start/end, 회차 집합 검사, run 별 불변 경로
+- ~~**M2 B1 재설계**~~ — explicit `connectionProvider`, schema/task/metadata 독립 시나리오,
+  **주입을 스택 추정에서 분리**, terminal token·business SQL 0·trace 완결성
+- ~~**M3 normalizer**~~ — schema 통과 산출물만 집계, SQLCODE taxonomy + probe별 typed
+  predicate, `effective_value` floor 실동작, 최종 계약과의 차집합, current 포인터 무효화
+- ~~**M4 사실·규범 문서 정정**~~ — Oracle 사실 3건 1차 출처 재확인, grant 보류 근거 하향,
+  Spark provider 선택 수단, overlay 자기모순 4건, §10 문서 상태 오류 6건
+- synthetic negative suite 는 incomplete·mixed·stale·relabel·unbound 를 전부 fail-closed 로
+  막는다(회귀 397건). **그것은 하네스가 옳게 거부한다는 뜻이지 원천을 쟀다는 뜻이 아니다**
+
+1. **Oracle 이 붙는 환경 확보** ← **지금 여기**. S4~S8 이 전부 여기에 걸려 있다
+2. pinned 사내 환경에서 raw G0-0 수집 → capability composition 확정 →
    **A v2.0 / P v2.0**(단일 core + ConnectionRevision capability overlay, v1.2.3.1은 archive)

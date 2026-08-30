@@ -100,7 +100,7 @@ $SPARK_HOME/bin/spark-submit --version                # 판본·Scala·JDK 를 �
 ```bash
 cd ~/g0/repo/g0-0b1-connection-provider
 ./build.sh            # exit 0 + META-INF/services 등록 출력
-./run-tests.sh        # Java 주입 매트릭스 26건
+./run-tests.sh        # Java 주입 매트릭스 29건
 ```
 
 `bad path element` 경고 19건은 **정상**이다 — derby·scala-compiler 의 MANIFEST `Class-Path` 에서
@@ -120,17 +120,33 @@ TR=$(mktemp -d)
 $SPARK_HOME/bin/spark-submit --master 'local[2]' \
   --jars "$PWD/g0-0b1-tracer.jar,$OJDBC_JAR" \
   --driver-class-path "$PWD/g0-0b1-tracer.jar:$OJDBC_JAR" \
-  --conf spark.sql.sources.disabledJdbcConnProviderList=basic \
   --conf "spark.driver.extraJavaOptions=-Dg0b1.run=wiring -Dg0b1.trace.dir=$TR" \
   run-g0-0b1.py --url 'jdbc:oracle:thin:@//127.0.0.1:1/NO_SUCH' --user NOBODY \
-    --password-env ORA_PW --table X.Y --mode coverage --limit 10 --trace-dir "$TR"
+    --password-env ORA_PW --table X.Y --provider g0b1tracer \
+    --scenario schema_only --limit 10 --trace-dir "$TR"
 cat "$TR"/g0-0b1-trace-*.jsonl | wc -l     # ≥1 이어야 한다
 ```
 
-같은 명령을 `disabledJdbcConnProviderList` **없이** 한 번 더 돌린다 → 추적 라인 **0** 이어야 한다.
+> **2026-08-30 정정(8차 M4-3) — 선택 수단이 바뀌었다.** 이전 판은
+> `--conf spark.sql.sources.disabledJdbcConnProviderList=basic` 으로 **경쟁자를 JVM 전역에서
+> 꺼서** 우리 provider 가 유일 후보가 되게 했다. Spark 가 문서화한 수단은 그것이 아니라
+> **JDBC 옵션 `connectionProvider` 로 지목하는 것**이다(`--provider g0b1tracer` 가 그 옵션을
+> 싣는다). 실제로 2026-08-27 회차에서 Spark 가 던진 예외 자체가 그렇게 말하고 있었다 —
+> "Use 'connectionProvider' option to select a specific provider"(`g0-0-s1-s3-results.md` §3-F4).
+> 그 문장을 읽고도 전역 비활성화로 갔던 것이 과한 조치였다.
+>
+> 전역 비활성화가 더 나쁜 이유는 **범위**다. 같은 JVM 의 **다른 JDBC 소스까지** provider 를
+> 잃는다. 반면 `connectionProvider` 옵션은 이 DataFrame 하나에만 걸린다.
 
-> **Kerberos 원천이면 `basic` 만으로 부족하다.** 내장 `OracleConnectionProvider` 의 `canHandle` 이
-> `BasicConnectionProvider` 와 정확히 배타적이라 후보가 다시 2개가 된다 → `basic,oracle`.
+**음성 대조는 conf 가 아니라 provider 옵션으로 한다.** 같은 명령을 `--provider ''` 로 한 번 더
+돌린다 → provider 후보가 2개가 되어 job 이 죽거나(jar 가 classpath 에 있을 때) 추적 라인이
+**0** 이다(jar 가 안 올라갔을 때). 둘은 다른 사건이므로 구분해서 기록한다 — §3-F4 참조.
+
+> **전역 비활성화는 진단 fallback 으로만 남긴다.** `DISABLE_BASIC=basic` 을 주면 `run.sh` 가
+> 그 conf 를 싣는다. Kerberos 원천이면 `basic` 만으로 부족하다 — 내장 `OracleConnectionProvider`
+> 의 `canHandle` 이 `BasicConnectionProvider` 와 정확히 배타적이라 후보가 다시 2개가 된다
+> → `DISABLE_BASIC=basic,oracle`. **이 값을 규범에 고정하지 마라**: 사내 원천의 인증 방식에
+> 따라 달라지고, `connectionProvider` 옵션을 쓰면 애초에 필요 없다.
 
 ### S4 — Oracle
 
@@ -202,7 +218,7 @@ export EVID=~/g0/evidence/$RUN_ID && mkdir -p "$EVID"
 > `g0-sqlplus.sh` 는 비밀번호를 **stdin 으로만** 넘긴다. argv 에도 프로세스 목록에도 manifest 에도
 > 남지 않는다. (래퍼에도 `user/pw@host` redaction 을 넣어 뒀지만 그건 심층 방어이지 해결책이 아니다.)
 
-### S5 — G0-0A (86 probe) · C00
+### S5 — G0-0A (87 probe) · C00
 
 ```bash
 export ORA_DSN="//localhost:1521/FREEPDB1"     # jdbc: 접두사 없는 형태
@@ -403,7 +419,7 @@ python3 g0_final_gate.py "$EVID/$RUN_ID/g0-0-evidence.json"   # 항상 exit 1
 
 계획서 §1 의 등급표가 권위다. 요약하면
 
-- **H**(하네스 사실) — 86 probe 완주 · B1 빌드·배선 · CE01~09 최초 실행
+- **H**(하네스 사실) — 87 probe 완주 · B1 빌드·배선 · CE01~09 최초 실행
 - **D**(조건부, 동일 Spark 판본에서만) — 경로 커버리지 · fail-closed 성립 · connection 개수 ·
   CE 의 **존재 증명**(빈도로는 이전 금지)
 - **X**(원리적 불가) — ADG lag 일체 · `PHYSICAL STANDBY` 양성 분기 · 원천 실제 capability ·

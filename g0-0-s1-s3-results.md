@@ -182,6 +182,29 @@ canHandle = keytab == null || principal == null
 
 사내 원천의 인증 방식이 정해지기 전에는 이 conf 값을 규범에 고정하지 마라.
 
+> ### 2026-08-30 정정(8차 M4-3) — **애초에 이 conf 가 주 수단이 아니었다**
+>
+> 위 F4·F5 의 **관측은 그대로 유효하다.** 정정 대상은 그 관측에서 끌어낸 조치다.
+>
+> F4 가 인용한 Spark 3.5.9 의 예외 메시지 안에 답이 있었다 —
+> *"Use `'connectionProvider'` option to select a specific provider."* Spark 가 문서화한 선택
+> 수단은 **JDBC 옵션으로 지목하는 것**이고, `disabledJdbcConnProviderList` 로 경쟁자를 JVM
+> 전역에서 끄는 것은 그 대체재다. **메시지가 답을 말하고 있는데 읽고도 다른 길로 갔다.**
+>
+> 왜 문제인가. 전역 비활성화는 **범위가 JVM 전체**라 같은 JVM 의 다른 JDBC 소스까지 provider 를
+> 잃는다. 그리고 F5 가 보인 대로 그 값은 **원천의 인증 방식에 따라 달라진다**(`basic` /
+> `basic,oracle`) — 즉 규범에 고정할 수 없는 값에 배선을 의존시킨 것이다.
+> `connectionProvider` 옵션은 그 DataFrame 하나에만 걸리고 인증 방식과 무관하다.
+>
+> 8차 M2 이후 하네스의 기본값은 `--provider g0b1tracer`(JDBC 옵션)이고, 전역 비활성화는
+> `DISABLE_BASIC` 을 명시할 때만 실리는 **진단 fallback** 이다. 절차서(`g0-0-runbook.md` S3)도
+> 그렇게 고쳤다.
+>
+> **F4 의 함의 2번은 여전히 유효하고 오히려 더 중요해졌다** — jar 자체가 안 올라가면 예외 없이
+> 조용히 Basic 이 쓰인다. `connectionProvider` 옵션을 명시해도 그 이름을 가진 provider 가
+> 없으면 Spark 는 그 옵션을 만족하는 provider 를 못 찾는다. 유일한 탐지 신호는 여전히
+> **추적 라인 0건**이고 `analyze-trace.py` 가 그것을 `MEASUREMENT_FAILED`(exit 5)로 낸다.
+
 ### F6 — 판정기가 합성이 아닌 실제 추적에서 처음 검증됐다
 
 `analyze-trace.py` 의 판정 로직은 그동안 합성 추적으로만 확인돼 있었다. 이번에 실제 산출로 돌렸다.
@@ -256,7 +279,7 @@ registry 인증과 manifest 조회까지는 통과하고 **layer blob 내려받�
 | 단계 | 내용 | 상태 |
 |---|---|---|
 | S4 / S4.5 | Oracle Free 컨테이너 · sqlplus · fixture | **불가** (이미지 반입 차단) |
-| S5 | G0-0A 86 probe + C00 | **불가** (S4 의존) |
+| S5 | G0-0A 87 probe + C00 | **불가** (S4 의존) |
 | S6 | B1 본실행 coverage / failclosed | **불가** (S4 의존) |
 | S7 | B0 stock smoke 대조군 | **불가** (S4 의존) |
 | S8 | **CE01~CE09 최초 실행** | **불가** (S4 의존) |
