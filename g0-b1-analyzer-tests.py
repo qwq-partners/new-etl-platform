@@ -39,10 +39,17 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         print(f"  FAIL  {name}  {detail}")
 
 
-def conn(run: str, path: str, *, preamble_ok=True, preamble_error=None,
+def conn(run: str, path: str, *, phase: str = "schema_only",
+         preamble_ok=True, preamble_error=None,
          fail_mode=None, injection_target=None):
-    r = {"event": "connection", "run": run, "conn_id": f"{run}-{path}-x",
-            "path_guess": path, "jvm": "1@t", "thread": "main",
+    """추적 라인 하나.
+
+    `path`(= path_guess)는 **진단 라벨**이고 `phase`(= declared_phase)가 판정 입력이다
+    (8차 M2-3). 두 값을 일부러 어긋나게 줘서 판정기가 어느 쪽을 보는지 시험한다.
+    """
+    r = {"event": "connection", "run": run, "conn_id": f"{run}-{path}-{phase}",
+            "path_guess": path, "declared_phase": phase,
+            "jvm": "1@t", "thread": "main",
             "url_host": "@//h:1521/s", "open_error": None,
             "preamble": ({"ok": preamble_ok, "db_unique_name": "ETLSTB",
                           "database_role": "PHYSICAL STANDBY", "instance_name": "i",
@@ -51,29 +58,53 @@ def conn(run: str, path: str, *, preamble_ok=True, preamble_error=None,
             "preamble_error": preamble_error, "elapsed_ms": 1,
             "driver_props_passed": ["user"], "raw_stack": ["x.y"]}
     if fail_mode is not None:
-        # tracer 가 남기는 주입 사실. 판정기가 preamble_error 로 추정하지 않게 한다.
         r["fail_mode"] = fail_mode
         r["injection_target"] = bool(injection_target)
         r["injection_applied"] = bool(injection_target) and preamble_error is not None
     return r
 
 
+def trace_end(run="t", lines=1):
+    """추적 완결 sentinel (8차 M2-5). 없으면 판정기가 MEASUREMENT_FAILED 로 간다."""
+    return {"event": "trace_end", "run": run, "jvm": "1@t", "lines_written": lines}
+
+
 def result(mode: str, status: str, ok_steps=None):
-    r = {"mode": mode, "spark_version": "4.2.0", "disabled_providers": "basic",
+    r = {"mode": mode, "spark_version": "4.2.0", "disabled_providers": None,
          "num_partitions_requested": 4, "steps": [], "status": status}
     if ok_steps is not None:
         r["ok_steps_under_fail_all"] = ok_steps
     return r
 
 
-def run_analyzer(traces, results):
+def terminal(run: str, status: str, rows_read=0, attempts=1):
+    """driver 가 선언하는 종료 토큰 (8차 M2-5)."""
+    return {"run": run, "scenario": "x", "status": status,
+            "steps_total": attempts, "steps_ok": 0,
+            "business_sql_attempts": attempts, "rows_read_total": rows_read}
+
+
+def fc_runs_ok():
+    """두 failclosed 회차가 **정상적으로 확정되는** 최소 구성."""
+    return ([conn("failclosed_schema", "SCHEMA", phase="schema_only",
+                  preamble_ok=False, preamble_error="forced",
+                  fail_mode="all", injection_target=True),
+             conn("failclosed_task", "TASK", phase="partitioned_count",
+                  preamble_ok=False, preamble_error="forced",
+                  fail_mode="phase", injection_target=True)],
+            [terminal("failclosed_schema", "EXPECTED_FAILURE_OBSERVED"),
+             terminal("failclosed_task", "EXPECTED_FAILURE_OBSERVED")])
+
+
+def run_analyzer(traces, results, terminals=()):
     w = pathlib.Path(tempfile.mkdtemp(prefix="g0b1an-"))
     td = w / "trace"; td.mkdir()
     (td / "g0-0b1-trace-t-1@t.jsonl").write_text(
         "\n".join(json.dumps(t, ensure_ascii=False) for t in traces) + "\n", encoding="utf-8")
     log = w / "run.log"
-    log.write_text("\n".join("G0B1_RESULT " + json.dumps(r, ensure_ascii=False)
-                             for r in results) + "\n", encoding="utf-8")
+    lines = ["G0B1_RESULT " + json.dumps(r, ensure_ascii=False) for r in results]
+    lines += ["G0B1_TERMINAL " + json.dumps(t, ensure_ascii=False) for t in terminals]
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
     out = w / "ev.json"
     r = subprocess.run([sys.executable, str(ANALYZER), "--trace-dir", str(td),
                         "--result-log", str(log), "--out", str(out)],
@@ -84,171 +115,194 @@ def run_analyzer(traces, results):
 
 
 # ─────────────────────────────────────────────────────────────────────
-def t_mixed_not_double_counted():
-    print("\n[1] MIXED 한 건을 SCHEMA·TASK 양쪽으로 세지 않는다 (P0-06)")
-    # coverage 회차에 MIXED 만 있다. 이전 판은 seen_schema=1, seen_task=1 로 세어 통과시켰다.
-    traces = [conn("coverage", "MIXED")]
-    traces += [conn("failclosed", "SCHEMA", preamble_ok=False, preamble_error="forced"),
-               conn("failclosed", "TASK", preamble_ok=False, preamble_error="forced")]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+def t_path_guess_not_a_predicate():
+    print("\n[1] 판정은 declared_phase 로 한다 — path_guess 를 쓰지 않는다 (8차 M2-3)")
+    # **path_guess 는 다 맞게 주고 declared_phase 만 비운다.** 옛 판정기는 통과시켰다.
+    tr = [conn("coverage", "SCHEMA", phase="UNDECLARED"),
+          conn("coverage", "TASK", phase="UNDECLARED")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
     f = next(x for x in ev["findings"] if "schema 경로와 task" in x["q"])
-    check("경로 커버리지가 NO", f["answer"] == "NO", f["answer"])
-    check("SCHEMA 관측이 0", f["observed"]["SCHEMA"] == 0, str(f["observed"]))
-    check("TASK 관측이 0", f["observed"]["TASK"] == 0, str(f["observed"]))
-    check("MIXED 건수는 따로 남는다", f["observed"]["MIXED"] == 1, str(f["observed"]))
-    check("재판정 필요를 명시한다", "재판정" in f["note"], f["note"][:80])
+    check("경로 커버리지가 NO — path_guess 가 맞아도 선언이 없으면 못 센다",
+          f["answer"] == "NO", str(f["observed"]))
+    check("선언되지 않은 건수를 따로 남긴다",
+          f["observed"]["undeclared_or_between"] == 2, str(f["observed"]))
+    check("path_guess 는 진단으로만 남는다",
+          "path_guess_distribution_diagnostic" in f["observed"], str(f["observed"].keys()))
     check("PROVEN 이 아니다", ev["verdict"]["coverage"] == "NOT_PROVEN", ev["verdict"]["coverage"])
-    check("exit 3", rc == 3, f"rc={rc}")
 
 
-def t_failclosed_without_task_injection():
-    print("\n[2] fail=all 이 task 에 닿지 않았는데 fail-closed=YES 금지 (P0-06 핵심)")
-    # coverage 는 두 경로를 다 덮었고 프리앰블도 전부 적용됐다.
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK"), conn("coverage", "TASK")]
-    # failclosed 회차는 SCHEMA 에서 전부 막혀 TASK connection 을 연 적이 없다.
-    traces += [conn("failclosed", "SCHEMA", preamble_ok=False, preamble_error="forced"),
-               conn("failclosed", "SCHEMA", preamble_ok=False, preamble_error="forced")]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+def t_declared_phase_drives_coverage():
+    print("\n[2] declared_phase 가 맞으면 path_guess 가 틀려도 센다")
+    # path_guess 를 일부러 UNKNOWN 으로 준다. 분류기가 갈피를 못 잡아도 판정은 선다.
+    tr = [conn("coverage", "UNKNOWN", phase="schema_only"),
+          conn("coverage", "UNKNOWN", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
+    f = next(x for x in ev["findings"] if "schema 경로와 task" in x["q"])
+    check("경로 커버리지가 YES", f["answer"] == "YES", str(f["observed"]))
+    check("schema phase 1건", f["observed"]["schema_phase_connections"] == 1, str(f["observed"]))
+    check("task phase 1건", f["observed"]["task_phase_connections"] == 1, str(f["observed"]))
+    check("task phase 의 한계를 적는다", "다시 해석" in f["note"], f["note"][:120])
+
+
+def t_failclosed_needs_terminal_token():
+    print("\n[3] terminal token 이 없으면 fail-closed 는 확정되지 않는다 (8차 M2-5)")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    # 토큰을 주지 않는다.
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], [])
     f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
-    check("YES 가 아니다", f["answer"] != "YES", f["answer"])
-    check("NOT_OBSERVED 다", f["answer"] == "NOT_OBSERVED", f["answer"])
-    check("어느 경로에 안 닿았는지 남긴다",
-          f["observed"]["injection_missing_paths"] == ["TASK"],
-          str(f["observed"].get("injection_missing_paths")))
-    check("PROVEN 이 아니다", ev["verdict"]["coverage"] == "NOT_PROVEN", ev["verdict"]["coverage"])
-    check("fail_closed verdict 이 NOT_TESTED", ev["verdicts"]["fail_closed"] == "NOT_TESTED",
-          str(ev["verdicts"]))
-    check("그러나 provider_reachability 는 PROVEN — 성질을 섞지 않는다",
-          ev["verdicts"]["provider_reachability"] == "PROVEN", str(ev["verdicts"]))
-    check("exit 3", rc == 3, f"rc={rc}")
+    check("NOT_PROVEN", f["answer"] == "NOT_PROVEN", f["answer"])
+    check("사유가 terminal token 부재", "terminal token" in f["note"], f["note"][:160])
+    check("verdicts.fail_closed 가 PROVEN 이 아니다",
+          ev["verdicts"]["fail_closed"] != "PROVEN", ev["verdicts"]["fail_closed"])
+
+
+def t_rows_read_under_injection_is_fence_escape():
+    print("\n[4] 주입 회차에서 행을 읽었으면 fence 밖 읽기다 (8차 M2-5)")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    terms = [terminal("failclosed_schema", "EXPECTED_FAILURE_OBSERVED"),
+             terminal("failclosed_task", "EXPECTED_FAILURE_OBSERVED", rows_read=17)]
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
+    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
+    check("NOT_PROVEN", f["answer"] == "NOT_PROVEN", f["answer"])
+    check("사유가 fence 밖 읽기", "fence 밖" in f["note"], f["note"][:200])
+    check("몇 행인지 적는다", "17" in f["note"], f["note"][:200])
+
+
+def t_injection_must_actually_apply():
+    print("\n[5] 주입이 닿지 않은 회차는 통과가 아니다")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    # failclosed_task 회차의 connection 에 주입이 닿지 않았다(injection_applied=False).
+    tr += [conn("failclosed_schema", "SCHEMA", phase="schema_only",
+                preamble_ok=False, preamble_error="forced",
+                fail_mode="all", injection_target=True),
+           conn("failclosed_task", "TASK", phase="partitioned_count",
+                fail_mode="phase", injection_target=False)]
+    tr.append(trace_end())
+    terms = [terminal("failclosed_schema", "EXPECTED_FAILURE_OBSERVED"),
+             terminal("failclosed_task", "EXPECTED_FAILURE_OBSERVED")]
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
+    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
+    check("NOT_PROVEN", f["answer"] == "NOT_PROVEN", f["answer"])
+    check("사유가 주입 미도달", "주입이 한 건도" in f["note"], f["note"][:200])
+    check("proven_runs 에 schema 만 있다",
+          f["observed"]["proven_runs"] == ["failclosed_schema"], str(f["observed"]["proven_runs"]))
+
+
+def t_trace_incomplete_is_measurement_failed():
+    print("\n[6] trace_end sentinel 이 없으면 측정 실패다 (8차 M2-5)")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    # trace_end 를 넣지 않는다.
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
+    check("trace_complete=false", ev.get("trace_complete") is False, str(ev.get("trace_complete")))
+    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
+    check("fail-closed 가 MEASUREMENT_FAILED", f["answer"] == "MEASUREMENT_FAILED", f["answer"])
+    check("'없다'와 '못 봤다'를 구분할 수 없다고 적는다",
+          "구분할 수 없다" in f["note"], f["note"][:160])
+    g = next(x for x in ev["findings"] if "끝까지 쓰였는가" in x["q"])
+    check("완결성 finding 이 따로 있다", g["answer"] == "NO", g["answer"])
 
 
 def t_failclosed_positive():
-    print("\n[3] 양성 대조 — 두 경로에 다 닿고 전부 실패하면 PROVEN")
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK"), conn("coverage", "TASK")]
-    traces += [conn("failclosed", "SCHEMA", preamble_ok=False, preamble_error="forced"),
-               conn("failclosed", "TASK", preamble_ok=False, preamble_error="forced")]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+    print("\n[7] 양성 대조 — 두 회차가 다 확정되면 PROVEN")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
     f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
-    check("fail-closed=YES", f["answer"] == "YES", f["answer"])
-    check("PROVEN", ev["verdict"]["coverage"] == "PROVEN",
-          f'{ev["verdict"]["coverage"]} blocking={ev["verdict"].get("blocking")}')
+    check("fail-closed YES", f["answer"] == "YES", f["answer"] + " " + f["note"][:150])
+    check("두 회차 다 proven", sorted(f["observed"]["proven_runs"]) ==
+          ["failclosed_schema", "failclosed_task"], str(f["observed"]["proven_runs"]))
+    check("path_guess 를 쓰지 않았다고 적는다", "path_guess 를" in f["note"], f["note"][:200])
+    check("verdicts.fail_closed = PROVEN", ev["verdicts"]["fail_closed"] == "PROVEN",
+          ev["verdicts"]["fail_closed"])
     check("exit 0", rc == 0, f"rc={rc}")
 
 
 def t_verdicts_separated():
-    print("\n[4] verdict 를 성질별로 분리한다 (P0-06)")
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
-    traces += [conn("failclosed", "SCHEMA", preamble_ok=False, preamble_error="f"),
-               conn("failclosed", "TASK", preamble_ok=False, preamble_error="f")]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+    print("\n[8] verdict 를 성질별로 나눈다 (7차 P0-06 회귀)")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
     v = ev["verdicts"]
-    check("다섯 verdict 이 있다", set(v) == {
-        "provider_reachability", "session_assertion", "fail_closed",
-        "read_only_transaction", "common_snapshot"}, str(set(v)))
-    check("read_only_transaction=NOT_IMPLEMENTED", v["read_only_transaction"] == "NOT_IMPLEMENTED")
-    check("common_snapshot=NOT_IMPLEMENTED", v["common_snapshot"] == "NOT_IMPLEMENTED")
-    check("PROVEN 이어도 snapshot 은 증명되지 않았다고 남는다",
-          "snapshot capability 의 증거가 아니다" in ev["scope"]["note"], ev["scope"]["note"][:80])
-    check("METADATA 가 미유발 경로로 명시된다",
-          ev["scope"]["paths_not_exercised"] == ["METADATA"], str(ev["scope"]))
-
-
-def t_swallowed_path_still_no():
-    print("\n[5] fail=all 인데 일부 step 이 성공하면 NO (기존 동작 유지)")
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
-    traces += [conn("failclosed", "SCHEMA", preamble_ok=False, preamble_error="f"),
-               conn("failclosed", "TASK", preamble_ok=False, preamble_error="f")]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "FAIL_CLOSED_PARTIAL", ["schema_only"])])
-    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
-    check("fail-closed=NO", f["answer"] == "NO", f["answer"])
-    check("P0 로 표시한다", "P0" in f["note"], f["note"][:60])
-    check("exit 3", rc == 3, f"rc={rc}")
+    for k in ("provider_reachability", "session_assertion", "fail_closed",
+              "read_only_transaction", "common_snapshot"):
+        check(f"{k} 가 있다", k in v)
+    check("read_only_transaction 은 NOT_IMPLEMENTED",
+          v["read_only_transaction"] == "NOT_IMPLEMENTED", v["read_only_transaction"])
+    check("common_snapshot 은 NOT_IMPLEMENTED",
+          v["common_snapshot"] == "NOT_IMPLEMENTED", v["common_snapshot"])
+    check("PROVEN 이 snapshot 의 증거가 아님을 적는다",
+          "NOT_IMPLEMENTED" in ev["verdict"]["reason"], ev["verdict"]["reason"][:120])
 
 
 def t_no_failclosed_run():
-    print("\n[6] failclosed 회차 자체가 없으면 NOT_TESTED (통과가 아니다)")
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK")])
+    print("\n[9] failclosed 회차가 아예 없으면 NOT_TESTED (통과가 아니다)")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count"), trace_end()]
+    rc, ev = run_analyzer(tr, [result("coverage", "OK")], [])
     f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
     check("NOT_TESTED", f["answer"] == "NOT_TESTED", f["answer"])
+    check("시험하지 않은 것은 통과가 아니라고 적는다", "통과가 아니다" in f["note"], f["note"][:120])
     check("PROVEN 이 아니다", ev["verdict"]["coverage"] == "NOT_PROVEN", ev["verdict"]["coverage"])
     check("exit 3", rc == 3, f"rc={rc}")
 
 
 def t_measurement_failed():
-    print("\n[7] 추적 0건은 MEASUREMENT_FAILED(5) — NOT_PROVEN(3) 과 다르다")
-    w = pathlib.Path(tempfile.mkdtemp(prefix="g0b1an-"))
-    td = w / "trace"; td.mkdir()
-    out = w / "ev.json"
-    r = subprocess.run([sys.executable, str(ANALYZER), "--trace-dir", str(td), "--out", str(out)],
-                       capture_output=True, text=True)
-    ev = json.loads(out.read_text(encoding="utf-8"))
-    check("exit 5", r.returncode == 5, f"rc={r.returncode}")
-    check("MEASUREMENT_FAILED", ev["verdict"]["coverage"] == "MEASUREMENT_FAILED")
-    shutil.rmtree(w)
+    print("\n[10] 추적 0건은 NOT_PROVEN 이 아니라 MEASUREMENT_FAILED")
+    rc, ev = run_analyzer([], [result("coverage", "OK")], [])
+    check("MEASUREMENT_FAILED", ev["verdict"]["coverage"] == "MEASUREMENT_FAILED",
+          ev["verdict"]["coverage"])
+    check("exit 5 — NOT_PROVEN(3) 과 다르다", rc == 5, f"rc={rc}")
 
 
-def t_path_specific_injection():
-    """조치 5 — 경로별 회차를 돌리면 task 경로 fail-closed 가 실증된다."""
-    print("\n[8] 경로별 주입 회차(failclosed_schema · failclosed_task) — 조치 5")
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
-    # schema 만 주입한 회차: schema 는 죽고 task 는 애초에 열리지 않는다
-    traces += [conn("failclosed_schema", "SCHEMA", preamble_ok=False, preamble_error="f",
-                    fail_mode="schema", injection_target=True)]
-    # task 만 주입한 회차: schema 는 **정상 통과**하고 task 에서만 죽는다
-    traces += [conn("failclosed_task", "SCHEMA", preamble_ok=True,
-                    fail_mode="task", injection_target=False),
-               conn("failclosed_task", "TASK", preamble_ok=False, preamble_error="f",
-                    fail_mode="task", injection_target=True)]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
+def t_swallowed_path_still_no():
+    print("\n[11] 주입했는데 step 이 살아남으면 NO (P0)")
+    tr = [conn("coverage", "SCHEMA", phase="schema_only"),
+          conn("coverage", "TASK", phase="partitioned_count")]
+    fcs, terms = fc_runs_ok(); tr += fcs
+    tr.append(trace_end())
+    rc, ev = run_analyzer(tr, [result("coverage", "OK"),
+                               result("failclosed", "FAIL_CLOSED_PARTIAL", ["partitioned_count"])],
+                          terms)
     f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
-    check("두 회차가 모두 집계된다",
-          f["observed"]["failclosed_runs"] == ["failclosed_schema", "failclosed_task"],
-          str(f["observed"].get("failclosed_runs")))
-    check("주입 근거가 추정이 아니라 tracer flag 다",
-          f["observed"]["injection_evidence"] == "tracer flag",
-          f["observed"].get("injection_evidence"))
-    check("SCHEMA·TASK 양쪽에 주입이 닿았다",
-          f["observed"]["injection_reached_paths"] == ["SCHEMA", "TASK"],
-          str(f["observed"].get("injection_reached_paths")))
-    check("fail-closed=YES", f["answer"] == "YES", f["answer"])
-    check("PROVEN", ev["verdict"]["coverage"] == "PROVEN", ev["verdict"]["coverage"])
-    check("exit 0", rc == 0, f"rc={rc}")
-
-
-def t_injection_target_false_is_not_reach():
-    """주입 대상이 아니어서 통과한 connection 을 '닿았다' 로 세지 않는다."""
-    print("\n[9] 주입 대상이 아닌 통과를 '주입이 닿았다' 로 세지 않는다")
-    traces = [conn("coverage", "SCHEMA"), conn("coverage", "TASK")]
-    # task 만 주입했는데 task connection 이 아예 안 열린 회차
-    traces += [conn("failclosed_task", "SCHEMA", preamble_ok=True,
-                    fail_mode="task", injection_target=False)]
-    rc, ev = run_analyzer(traces, [result("coverage", "OK"),
-                                   result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])])
-    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
-    check("어느 경로에도 주입이 닿지 않았다",
-          f["observed"]["injection_reached_paths"] == [],
-          str(f["observed"].get("injection_reached_paths")))
-    check("NOT_OBSERVED", f["answer"] == "NOT_OBSERVED", f["answer"])
-    check("다음에 무엇을 돌릴지 알려 준다", "g0b1.fail=" in f["note"], f["note"][:100])
-    check("PROVEN 이 아니다", ev["verdict"]["coverage"] == "NOT_PROVEN")
+    check("NO", f["answer"] == "NO", f["answer"])
+    check("P0 로 표시한다", "P0" in f["note"], f["note"][:120])
+    check("살아남은 step 을 적는다", "partitioned_count" in str(f["observed"]), str(f["observed"])[:200])
 
 
 def main() -> int:
     print("=" * 70)
     print("analyze-trace.py 반례 회귀 시험 — 7차 교차 리뷰 P0-06(a)")
     print("=" * 70)
-    for t in (t_mixed_not_double_counted, t_failclosed_without_task_injection,
-              t_failclosed_positive, t_verdicts_separated, t_swallowed_path_still_no,
-              t_no_failclosed_run, t_measurement_failed, t_path_specific_injection,
-              t_injection_target_false_is_not_reach):
+    for t in (t_path_guess_not_a_predicate, t_declared_phase_drives_coverage,
+              t_failclosed_needs_terminal_token, t_rows_read_under_injection_is_fence_escape,
+              t_injection_must_actually_apply, t_trace_incomplete_is_measurement_failed,
+              t_failclosed_positive, t_verdicts_separated, t_no_failclosed_run,
+              t_measurement_failed, t_swallowed_path_still_no):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

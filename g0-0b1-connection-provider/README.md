@@ -218,6 +218,52 @@ row hash 재현성이므로(A §12.3), 두 축 중 하나만 맞아서는 그 �
 > `'+00:00'` 에서 다시 쓸지, CE 증거에 "규범 세션 아님" 을 명시할지는 **Oracle 에 붙여
 > 술어를 돌려 본 뒤**(S7) 정한다 — 그 파일의 주석에 같은 내용을 남겼다.
 
+### 2026-08-30 — 8차 M2: B1 재작성
+
+**가장 중요한 변경은 M2-3 이다 — 주입을 스택 추정에서 떼어 냈다.**
+
+v1 은 `Preamble.shouldFail(Trace.classify(stack))` 이었다. 그러면 **분류기의 오류가 곧
+잘못된 주입**이 되고, 그 주입 결과로 분류기를 검증할 수도 없다(순환). 판정기도 같은
+`path_guess` 로 PASS 를 냈으니 회로가 닫혀 있었다.
+
+이제 경로 귀속이 두 곳에서 온다. 둘 다 **실행 구성**이지 추정이 아니다.
+
+| 무엇 | 어떻게 |
+|---|---|
+| **선언된 phase**(M2-3) | driver 가 step 시작 전에 `g0-0b1-phase-<run>.txt` 에 step 이름을 쓴다. provider 는 `Trace.declaredPhase()` 로 그 값만 읽는다. driver 는 자기가 `.schema` 를 부르는지 `.count()` 를 부르는지 **알고 있다** |
+| **격리된 시나리오**(M2-4) | `--scenario schema_only\|task_only\|metadata_only`. schema_only 회차에는 action 이 없으므로 task connection 자체가 없다 — 분류기에 묻지 않고도 안다 |
+
+`path_guess` 는 추적에 그대로 남지만 **어떤 판정 술어에도 들어가지 않는다.** 판정기의
+`observed` 에 `path_guess_distribution_diagnostic` 으로만 나온다.
+
+**주입 키가 바뀌었다.** `-Dg0b1.fail=schema|task` 는 더 이상 아무것도 하지 않는다 —
+그 값은 분류기 결과와 대조되던 것이라 계속 받으면 추정이 다시 actuator 로 샌다.
+
+```text
+-Dg0b1.fail=none                   주입 없음
+-Dg0b1.fail=all                    선언된 phase 와 무관하게 전부(시나리오가 격리했을 때)
+-Dg0b1.fail=phase -Dg0b1.fail.phase=partitioned_count
+                                   그 phase 로 선언된 동안 열린 connection 만
+```
+
+**M2-1 explicit connectionProvider.** `--provider g0b1tracer` 가 기본이고 JDBC 옵션으로
+직접 지목한다. `disabledJdbcConnProviderList` 전역 비활성화는 `DISABLE_BASIC` 을 줄 때만
+걸리는 진단 fallback 이 됐다.
+
+**M2-5 판정 입력 셋.** fail-closed 는 아래 넷이 다 성립할 때만 회차별로 확정된다.
+
+1. `injection_applied` ≥ 1 — tracer 가 남긴 **사실**이다(추정 아님)
+2. **terminal token** — driver 가 `G0B1_TERMINAL` 로 자기 종료 상태를 선언한다.
+   판정기가 step 성공 여부로 추론하지 않는다
+3. `rows_read_total == 0` — 주입 회차인데 행을 읽었으면 **fence 밖 읽기**다
+4. **`trace_end` sentinel** — 없으면 `MEASUREMENT_FAILED`. 잘린 추적과
+   "connection 이 원래 없었다" 는 겉모습이 같다
+
+**그리고 시험 하네스 자체의 결함 하나를 고쳤다.** `run-tests.sh` 가 `test/` 만
+컴파일하고 `build/classes` 에 링크했기 때문에, `src/` 를 고치고 `build.sh` 를 다시
+돌리지 않으면 **낡은 구현에 대고 새 시험을 돌렸다.** 이 작업 중에 실제로 그 상태로
+결과가 나왔다. 이제 소스가 클래스보다 새로우면 멈춘다.
+
 ## 6. 안전 규칙
 
 1. 원천 객체 DDL·DML을 의도하지 않지만 **현재 source-safe 승인은 없다**.

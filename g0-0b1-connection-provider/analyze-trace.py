@@ -37,6 +37,23 @@ def load_results(paths):
     return out
 
 
+def load_terminals(paths):
+    """driver 가 낸 G0B1_TERMINAL 토큰을 모은다 (8차 M2-5)."""
+    out = []
+    for p in paths:
+        try:
+            for line in pathlib.Path(p).read_text(encoding="utf-8", errors="replace").splitlines():
+                i = line.find("G0B1_TERMINAL ")
+                if i >= 0:
+                    try:
+                        out.append(json.loads(line[i + len("G0B1_TERMINAL "):]))
+                    except json.JSONDecodeError:
+                        pass
+        except OSError:
+            pass
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trace-dir", required=True)
@@ -48,7 +65,30 @@ def main():
     tr = load_traces(a.trace_dir)
     res = load_results(a.result_log)
 
-    ev = {"trace_lines": len(tr), "results": res, "findings": [], "verdict": {}}
+    # ── M2-5: 추적 완결성 ────────────────────────────────────────────
+    # 잘린 추적 파일과 "connection 이 원래 없었다" 는 겉모습이 같다. tracer 가 종료 시
+    # 남기는 trace_end sentinel 이 있어야 **파일이 끝까지 쓰였다**고 말할 수 있다.
+    ends = [t for t in tr if t.get("event") == "trace_end"]
+    trace_complete = bool(ends)
+
+    # ── M2-5: terminal failure token ────────────────────────────────
+    # driver 가 자기가 어떻게 끝났는지 선언한 토큰. 판정기가 step 성공 여부로
+    # **추론**하지 않고 이 값을 읽는다.
+    terminals = load_terminals(a.result_log)
+
+    ev = {"trace_lines": len(tr), "results": res, "findings": [], "verdict": {},
+          "trace_complete": trace_complete,
+          "trace_end_records": ends,
+          "terminal_tokens": terminals}
+
+    if not trace_complete and tr:
+        ev["findings"].append({
+            "q": "추적 파일이 끝까지 쓰였는가",
+            "observed": {"trace_end_records": 0, "trace_lines": len(tr)},
+            "answer": "NO",
+            "note": ("trace_end sentinel 이 없다 — JVM 이 비정상 종료했거나 파일이 잘렸다. "
+                     "**이 추적으로는 '없다' 와 '못 봤다' 를 구분할 수 없다**(8차 M2-5)."),
+        })
 
     if not tr:
         ev["verdict"] = {
@@ -102,28 +142,41 @@ def main():
     ev["preamble_ok_by_path"] = {k: f"{v[0]}/{v[1]}" for k, v in ok_by_path.items()}
 
     # ── 질문 1: 경로 커버리지 ─────────────────────────────────────────
-    # **MIXED 를 양쪽으로 세지 않는다**(7차 교차 리뷰 P0-06). 이전 판은
-    #   seen_schema = SCHEMA + MIXED ; seen_task = TASK + MIXED
-    # 라서 MIXED 한 건이 두 경로의 관측으로 계상됐다. MIXED 는 분류기가 갈피를 못 잡은
-    # 것이므로 사람이 raw_stack 을 보고 재판정하기 전에는 어느 쪽에도 기여하지 않는다.
-    seen_schema = by_path.get("SCHEMA", 0)
-    seen_task = by_path.get("TASK", 0)
-    seen_meta = by_path.get("METADATA", 0)
-    n_mixed = by_path.get("MIXED", 0)
-    n_unknown = by_path.get("UNKNOWN", 0)
-    missing_paths = [n for n, v in (("SCHEMA", seen_schema), ("TASK", seen_task)) if not v]
+    # ── 8차 M2-3: 경로 커버리지도 declared_phase 로 판정한다 ───────────
+    #
+    # v1 은 `by_path`(= Counter(path_guess)) 로 "schema·task 경로에서 provider 가 불렸는가"
+    # 를 판정했다. **분류기가 곧 판정이었다.** 이제 driver 가 선언한 phase 로 센다 —
+    # driver 는 자기가 `.schema` 를 부르는지 `.count()` 를 부르는지 알고 있다.
+    #
+    # path_guess 는 아래 observed 에 **진단용**으로만 남는다.
+    by_phase = Counter(c.get("declared_phase") for c in cov)
+    SCHEMA_PHASES = {"schema_only"}
+    TASK_PHASES = {"partitioned_count", "second_action"}
+    seen_schema_phase = sum(v for k, v in by_phase.items() if k in SCHEMA_PHASES)
+    seen_task_phase = sum(v for k, v in by_phase.items() if k in TASK_PHASES)
+    undeclared = sum(v for k, v in by_phase.items()
+                     if k in (None, "", "UNDECLARED", "BETWEEN_STEPS"))
+
+    missing_paths = [n for n, v in (("SCHEMA", seen_schema_phase),
+                                    ("TASK", seen_task_phase)) if not v]
     ev["findings"].append({
         "q": "provider 가 schema 경로와 task 경로 모두에서 호출되는가",
-        "observed": {"SCHEMA": seen_schema, "TASK": seen_task, "METADATA": seen_meta,
-                     "MIXED": n_mixed, "UNKNOWN": n_unknown},
+        "observed": {"by_declared_phase": dict(by_phase),
+                     "schema_phase_connections": seen_schema_phase,
+                     "task_phase_connections": seen_task_phase,
+                     "undeclared_or_between": undeclared,
+                     # 진단용. 판정에 쓰지 않는다(8차 M2-3).
+                     "path_guess_distribution_diagnostic": dict(by_path)},
         "answer": "YES" if not missing_paths else "NO",
-        "note": ("METADATA 경로는 DSv2 카탈로그를 쓰지 않으면 나타나지 않는다 — 0 이라고 해서 "
-                 "덮지 못한 것이 아니라 **이 하네스가 유발하지 않은 것**이다(미측정). "
-                 "그래서 게이트에 넣지 않는다."
-                 if not missing_paths else f"관측되지 않은 경로: {missing_paths}")
-                + (f" **MIXED {n_mixed}건·UNKNOWN {n_unknown}건은 어느 경로에도 계상하지 않았다** — "
-                   f"raw_stack 을 사람이 보고 재판정하라. 재판정 전에는 PASS 에 기여하지 않는다."
-                   if (n_mixed or n_unknown) else ""),
+        "note": (("선언된 phase 로 셌다 — 분류기를 쓰지 않았다. "
+                  "**다만 task phase 의 connection 이 전부 task 경로인 것은 아니다** — "
+                  "`.load()` 가 그 안에서 schema 를 다시 해석할 수 있다. "
+                  "task 경로의 확정 증거는 failclosed_task 회차다(주입이 그 phase 에만 걸렸고 "
+                  "읽은 행이 0). METADATA 는 이 하네스가 유발하지 않으므로 게이트에 넣지 않는다."
+                  if not missing_paths else
+                  f"선언된 phase 기준으로 관측되지 않은 경로: {missing_paths}")
+                 + (f" 선언되지 않은 구간의 connection {undeclared}건은 어느 쪽에도 세지 않았다."
+                    if undeclared else "")),
     })
 
     # ── 질문 2: 프리앰블 적용 (coverage 회차 한정) ──────────────────────
@@ -147,55 +200,97 @@ def main():
     else:
         # PARTIAL 도 깨진 것이다 — fail=all 인데 일부 step 이 성공했다면
         # 그 step 이 쓰는 경로가 예외를 삼킨 것이고, 그게 이 실험의 표적이다.
+        # ── 8차 M2-3: 판정에서 path_guess 를 뺀다 ───────────────────
+        #
+        # v1 은 `applied_by_path = Counter(c["path_guess"] …)` 로 "어느 경로에 주입이
+        # 닿았는가" 를 세고 그것을 PASS 술어에 넣었다. **분류기가 틀리면 판정이 틀린다**
+        # — 그리고 그 판정으로 분류기를 검증할 수도 없다(순환).
+        #
+        # 이제 경로 귀속은 **실행 구성**에서 온다:
+        #   failclosed_schema → scenario=schema_only 회차. action 이 없으므로 그 회차의
+        #                       connection 은 전부 schema 경로다. 분류기 불필요.
+        #   failclosed_task   → scenario=task_only + fail.phase=partitioned_count.
+        #                       driver 가 선언한 phase 에만 주입이 걸린다.
+        #
+        # path_guess 는 observed 에 진단용으로만 남는다.
         broken = [r for r in fc if r.get("status") in ("FAIL_CLOSED_BROKEN", "FAIL_CLOSED_PARTIAL")]
         ok_steps = sorted({st for r in fc for st in (r.get("ok_steps_under_fail_all") or [])})
         swallowed = [c for c in fcl if (c.get("preamble_error") or c.get("open_error"))]
-        fc_by_path = Counter(c.get("path_guess") for c in fcl)
-        # **주입이 닿았다는 것을 추적 라인의 사실로 읽는다.** tracer 가 injection_target /
-        # injection_applied 를 남기므로 preamble_error 존재로 추정하지 않아도 된다.
-        # 옛 추적(그 필드가 없는 것)은 폴백으로 preamble_error 를 본다.
-        has_flag = any("injection_applied" in c for c in fcl)
-        if has_flag:
-            applied_by_path = Counter(c.get("path_guess") for c in fcl
-                                      if c.get("injection_applied") is True)
-        else:
-            applied_by_path = Counter(c.get("path_guess") for c in fcl
-                                      if c.get("preamble_error"))
-        # **경로별로 실제 주입이 닿았는지 본다**(7차 교차 리뷰 P0-06).
-        # fail=all 은 provider 가 처음 불린 connection 에서 즉시 던진다. 그래서 각 step 이
-        # schema 해석에서 막혀 task connection 에 **도달조차 못 할 수 있다.** 그런 회차에서
-        # "전 step 이 실패했다"는 task 경로의 fail-closed 를 하나도 말해 주지 않는다.
-        # 이전 판은 그 경우에도 YES 를 줬다.
-        fc_reached = [nm for nm in ("SCHEMA", "TASK") if applied_by_path.get(nm)]
-        fc_missing = [nm for nm in ("SCHEMA", "TASK") if not applied_by_path.get(nm)]
+
+        REQUIRED_RUNS = {"failclosed_schema": "SCHEMA", "failclosed_task": "TASK"}
+        per_run = {}
+        for rname, pathname in REQUIRED_RUNS.items():
+            conns = runs.get(rname) or []
+            applied = [c for c in conns if c.get("injection_applied") is True]
+            tok = next((t for t in terminals if t.get("run") == rname), None)
+            per_run[rname] = {
+                "path_under_test": pathname,
+                "connections": len(conns),
+                "injection_applied": len(applied),
+                # M2-5 — driver 가 선언한 종료 상태. step 성공 여부로 추론하지 않는다.
+                "terminal_token_present": tok is not None,
+                "terminal_status": (tok or {}).get("status"),
+                # M2-5 — 주입 회차에서 원천으로부터 받은 행 수. **0 이어야 한다.**
+                "rows_read_total": (tok or {}).get("rows_read_total"),
+                # 진단용. 판정에 쓰지 않는다.
+                "path_guess_distribution": dict(Counter(c.get("path_guess") for c in conns)),
+            }
+
+        def run_proven(r):
+            d = per_run[r]
+            return (d["injection_applied"] > 0
+                    and d["terminal_token_present"]
+                    and d["terminal_status"] == "EXPECTED_FAILURE_OBSERVED"
+                    and d["rows_read_total"] == 0)
+
+        proven = [r for r in REQUIRED_RUNS if run_proven(r)]
+        not_proven = [r for r in REQUIRED_RUNS if r not in proven]
+
         if broken:
-            answer, note = "NO", (
-                f"**P0** — fail=all 인데 {ok_steps or '일부'} step 이 성공했다. "
-                "그 step 이 쓰는 경로가 connection 예외를 삼킨다. "
-                "failclosed_by_path 와 대조해 경로를 좁혀라.")
-        elif fc_missing:
-            answer, note = "NOT_OBSERVED", (
-                f"전 step 이 실패했지만 **{fc_missing} 경로에는 주입이 닿지 않았다**"
-                f"(도달한 경로: {fc_reached or '없음'}). fail=all 은 provider 가 처음 불린 "
-                f"connection 에서 즉시 던지므로, 각 step 이 schema 해석에서 막혀 task "
-                f"connection 을 열지 못했을 수 있다. **그 경로의 fail-closed 는 시험되지 "
-                f"않았다** — 시험하지 않은 것은 통과가 아니다. "
-                f"`-Dg0b1.fail={','.join(m.lower() for m in fc_missing)}` 회차를 따로 돌려라 "
-                f"(run.sh 가 failclosed_schema·failclosed_task 로 나눠 돌린다).")
+            answer = "NO"
+            note = (f"**P0** — 주입했는데 {ok_steps or '일부'} step 이 성공했다. "
+                    "그 step 이 쓰는 경로가 connection 예외를 삼킨다.")
+        elif not trace_complete:
+            answer = "MEASUREMENT_FAILED"
+            note = ("추적에 trace_end sentinel 이 없다 — 파일이 끝까지 쓰였다는 증거가 없으므로 "
+                    "'주입이 닿지 않았다' 와 '기록이 잘렸다' 를 구분할 수 없다(8차 M2-5).")
+        elif not_proven:
+            answer = "NOT_PROVEN"
+            reasons = []
+            for r in not_proven:
+                d = per_run[r]
+                if d["connections"] == 0:
+                    reasons.append(f"{r}: 회차 자체가 없다")
+                elif d["injection_applied"] == 0:
+                    reasons.append(f"{r}: 주입이 한 건도 닿지 않았다")
+                elif not d["terminal_token_present"]:
+                    reasons.append(f"{r}: terminal token 이 없다 — driver 가 어떻게 끝났는지 "
+                                   f"선언하지 않았다")
+                elif d["terminal_status"] != "EXPECTED_FAILURE_OBSERVED":
+                    reasons.append(f"{r}: terminal status={d['terminal_status']} "
+                                   f"(EXPECTED_FAILURE_OBSERVED 여야 한다)")
+                elif d["rows_read_total"]:
+                    reasons.append(f"{r}: **주입 회차인데 {d['rows_read_total']} 행을 읽었다** — "
+                                   f"fence 밖 읽기다")
+            note = ("경로별 fail-closed 가 확정되지 않았다: " + "; ".join(reasons)
+                    + ". **시험하지 않은 것은 통과가 아니다.**")
         else:
-            answer, note = "YES", (
-                f"두 경로({fc_reached}) 모두에 주입이 닿았고 전 step 이 실패했다.")
+            answer = "YES"
+            note = ("schema·task 두 경로 모두 — 주입이 닿았고(tracer 사실), driver 가 "
+                    "EXPECTED_FAILURE_OBSERVED 를 선언했으며, 읽은 행이 0 이다. "
+                    "**경로 귀속은 실행 구성(시나리오·선언 phase)에서 왔고 path_guess 를 "
+                    "쓰지 않았다**(8차 M2-3).")
+
         ev["findings"].append({
             "q": "프리앰블이 실패하면 job 이 정말 죽는가(fail-closed)",
             "observed": {"statuses": [r.get("status") for r in fc],
                          "failed_connections_in_failclosed": len(swallowed),
-                         "succeeded_steps_under_fail_all": ok_steps,
-                         "failclosed_by_path": dict(fc_by_path),
-                         "injection_applied_by_path": dict(applied_by_path),
-                         "injection_evidence": "tracer flag" if has_flag else "preamble_error 추정(옛 추적)",
+                         "succeeded_steps_under_injection": ok_steps,
                          "failclosed_runs": sorted(k for k in runs if k.startswith("failclosed")),
-                         "injection_reached_paths": fc_reached,
-                         "injection_missing_paths": fc_missing},
+                         "per_run": per_run,
+                         "trace_complete": trace_complete,
+                         "proven_runs": proven,
+                         "not_proven_runs": not_proven},
             "answer": answer,
             "note": note,
         })

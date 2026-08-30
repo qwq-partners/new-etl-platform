@@ -83,7 +83,9 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         // preamble_error 존재로 **추정**하던 것을 사실로 바꾸기 위해서다(7차 리뷰 P0-06).
         // connection open 이 실패해 프리앰블에 도달조차 못 한 경우와, 주입 대상이 아니어서
         // 통과한 경우를 구분할 수 있어야 한다.
-        final boolean injectionTarget = Preamble.shouldFail(path);
+        // **선언된 phase 로 주입을 정한다**(8차 M2-3). path 는 아래 emit 의 진단 라벨로만 쓴다.
+        final String declaredPhase = Trace.declaredPhase();
+        final boolean injectionTarget = Preamble.shouldFail(declaredPhase);
 
         if (c != null) {
             try {
@@ -94,7 +96,7 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         }
 
         // 기록은 던지기 **전에** 한다. 예외가 삼켜지든 말든 증거는 남아야 한다.
-        emit(connId, path, stack, url, openError, pr, preambleError, t0, passedKeys(options),
+        emit(connId, path, declaredPhase, stack, url, openError, pr, preambleError, t0, passedKeys(options),
              injectionTarget);
 
         if (openError != null) {
@@ -112,7 +114,8 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         return c;
     }
 
-    private static void emit(String connId, String path, StackTraceElement[] stack, String url,
+    private static void emit(String connId, String path, String declaredPhase,
+                             StackTraceElement[] stack, String url,
                              String openError, Preamble.Result pr, String preambleError, long t0,
                              String passedKeysJson, boolean injectionTarget) {
         String jvm = ManagementFactory.getRuntimeMXBean().getName();
@@ -120,7 +123,10 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         b.append("\"event\":\"connection\"");
         b.append(",\"run\":").append(Trace.q(Trace.run()));
         b.append(",\"conn_id\":").append(Trace.q(connId));
+        // **path_guess 는 진단 라벨이다**(8차 M2-3). 어떤 판정 술어에도 들어가지 않는다.
+        // 판정에 쓰는 것은 아래 declared_phase 다 — driver 가 선언한 사실이다.
         b.append(",\"path_guess\":").append(Trace.q(path));
+        b.append(",\"declared_phase\":").append(Trace.q(declaredPhase));
         b.append(",\"jvm\":").append(Trace.q(jvm));
         b.append(",\"thread\":").append(Trace.q(Thread.currentThread().getName()));
         b.append(",\"url_host\":").append(Trace.q(hostOnly(url)));
@@ -130,6 +136,7 @@ public final class TracingConnectionProvider extends JdbcConnectionProvider {
         // fail_mode 는 이 회차의 주입 설정, injection_target 은 **이 connection 이 그 대상인가**.
         // 둘을 함께 남겨야 "주입이 이 경로에 닿았다" 를 판정기가 추정 없이 읽는다.
         b.append(",\"fail_mode\":").append(Trace.q(System.getProperty("g0b1.fail", "none")));
+        b.append(",\"fail_phase\":").append(Trace.q(System.getProperty("g0b1.fail.phase", "")));
         b.append(",\"injection_target\":").append(injectionTarget);
         b.append(",\"injection_applied\":").append(injectionTarget && preambleError != null);
         b.append(",\"elapsed_ms\":").append((System.nanoTime() - t0) / 1000000L);

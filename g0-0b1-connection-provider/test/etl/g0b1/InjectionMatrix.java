@@ -1,11 +1,12 @@
 package etl.g0b1;
 
 /**
- * `Preamble.shouldFail` 경로별 주입 매트릭스 시험 (7차 교차 리뷰 P0-06, 조치 5).
+ * {@code Preamble.shouldFail} 매트릭스 시험 (8차 교차 리뷰 M2-3).
  *
- * <p>이전에는 {@code fail=all} 하나뿐이라 task 경로의 fail-closed 를 독립적으로 시험할 수
- * 없었다. {@code all} 은 provider 가 처음 불린 connection 에서 던지므로 각 step 이 schema
- * 해석에서 막혀 <b>task connection 을 열지 못한다.</b>
+ * <p><b>이 시험이 지키는 성질 하나.</b> 주입 대상은 <b>driver 가 선언한 phase</b> 로 정하며
+ * {@code Trace.classify} 의 스택 추정은 어디에도 들어가지 않는다. v1 은 추정 경로를 받아
+ * 판단했고, 그러면 분류기의 오류가 곧 잘못된 주입이 되며 그 결과로 분류기를 검증할 수도
+ * 없다(순환).
  *
  * <p>실행: {@code ./run-tests.sh}
  */
@@ -14,16 +15,21 @@ public final class InjectionMatrix {
     private static int pass = 0;
     private static int fail = 0;
 
-    private static void check(String failMode, String path, boolean want) {
-        String prev = System.getProperty("g0b1.fail");
-        if (failMode == null) System.clearProperty("g0b1.fail");
-        else System.setProperty("g0b1.fail", failMode);
-        boolean got = Preamble.shouldFail(path);
-        if (prev == null) System.clearProperty("g0b1.fail");
-        else System.setProperty("g0b1.fail", prev);
+    /** {@code g0b1.fail} / {@code g0b1.fail.phase} 를 세우고 선언된 phase 로 물어본다. */
+    private static void check(String failMode, String failPhase, String declaredPhase, boolean want) {
+        String prevFail = System.getProperty("g0b1.fail");
+        String prevPhase = System.getProperty("g0b1.fail.phase");
+        set("g0b1.fail", failMode);
+        set("g0b1.fail.phase", failPhase);
 
-        String label = String.format("fail=%-13s path=%-9s -> %s",
-                String.valueOf(failMode), String.valueOf(path), want);
+        boolean got = Preamble.shouldFail(declaredPhase);
+
+        set("g0b1.fail", prevFail);
+        set("g0b1.fail.phase", prevPhase);
+
+        String label = String.format("fail=%-6s fail.phase=%-18s declared=%-18s -> %s",
+                String.valueOf(failMode), String.valueOf(failPhase),
+                String.valueOf(declaredPhase), want);
         if (got == want) {
             pass++;
             System.out.println("  PASS  " + label);
@@ -33,47 +39,63 @@ public final class InjectionMatrix {
         }
     }
 
+    private static void set(String k, String v) {
+        if (v == null) System.clearProperty(k);
+        else System.setProperty(k, v);
+    }
+
     public static void main(String[] args) {
-        System.out.println("Preamble.shouldFail 매트릭스");
+        System.out.println("Preamble.shouldFail 매트릭스 (8차 M2-3 — 선언된 phase 기반)");
 
         System.out.println("\n[1] 기본은 주입 없음");
-        check(null, "SCHEMA", false);
-        check("none", "SCHEMA", false);
-        check("", "TASK", false);
+        check(null, null, "schema_only", false);
+        check("none", null, "schema_only", false);
+        check("NONE", null, "partitioned_count", false);
+        check("", null, "schema_only", false);
 
-        System.out.println("\n[2] all 은 전 경로 — MIXED·UNKNOWN 포함");
-        for (String p : new String[]{"SCHEMA", "TASK", "METADATA", "MIXED", "UNKNOWN"}) {
-            check("all", p, true);
-        }
+        System.out.println("\n[2] fail=all 은 선언된 phase 와 무관하게 전부");
+        check("all", null, "schema_only", true);
+        check("all", null, "partitioned_count", true);
+        check("all", null, "second_action", true);
+        check("all", null, "UNDECLARED", true);
+        check("all", null, "BETWEEN_STEPS", true);
+        check("all", null, null, true);
+        check("ALL", null, "schema_only", true);
 
-        System.out.println("\n[3] 경로 지정 — 그 경로만");
-        check("schema", "SCHEMA", true);
-        check("schema", "TASK", false);
-        check("task", "TASK", true);
-        check("task", "SCHEMA", false);
-        check("metadata", "METADATA", true);
-        check("metadata", "SCHEMA", false);
+        System.out.println("\n[3] fail.phase 는 선언된 phase 와 정확히 일치할 때만");
+        check("phase", "partitioned_count", "partitioned_count", true);
+        check("phase", "partitioned_count", "schema_only", false);
+        check("phase", "partitioned_count", "second_action", false);
+        check("phase", "schema_only", "schema_only", true);
+        check("phase", "schema_only", "partitioned_count", false);
 
-        System.out.println("\n[4] 경로를 지정하면 MIXED·UNKNOWN 에는 주입하지 않는다");
-        System.out.println("     (어느 경로를 시험한 것인지 말할 수 없는 주입은 증거가 못 된다)");
-        check("schema", "MIXED", false);
-        check("task", "MIXED", false);
-        check("schema", "UNKNOWN", false);
-        check("task", "UNKNOWN", false);
-        check("schema,task", "MIXED", false);
+        System.out.println("\n[4] 선언되지 않은 구간에는 주입하지 않는다");
+        // 어느 step 에도 속하지 않는 connection 에 주입하면 무엇을 시험한 것인지 말할 수 없다.
+        check("phase", "partitioned_count", "UNDECLARED", false);
+        check("phase", "partitioned_count", "BETWEEN_STEPS", false);
+        check("phase", "partitioned_count", null, false);
 
-        System.out.println("\n[5] 조합·대소문자·공백");
-        check("schema,task", "SCHEMA", true);
-        check("schema,task", "TASK", true);
-        check("schema,task", "METADATA", false);
-        check("SCHEMA", "SCHEMA", true);
-        check(" task , schema ", "TASK", true);
+        System.out.println("\n[5] fail.phase 를 주지 않으면 fail-closed — 주입하지 않는다");
+        // 지정하지 않았는데 아무 데나 주입하면 그 회차가 무엇을 시험했는지 알 수 없다.
+        check("phase", null, "partitioned_count", false);
+        check("phase", "", "partitioned_count", false);
+        check("phase", "   ", "schema_only", false);
 
-        System.out.println("\n[6] null 경로는 주입 대상이 아니다");
-        check("schema", null, false);
-        check("all", null, true);
+        System.out.println("\n[6] 대소문자·공백");
+        check("phase", "PARTITIONED_COUNT", "partitioned_count", true);
+        check("phase", "partitioned_count", "PARTITIONED_COUNT", true);
+        check("  all  ", null, "schema_only", true);
 
-        System.out.println("\n통과 " + pass + "건 · 실패 " + fail + "건");
+        System.out.println("\n[7] **경로 이름은 더 이상 주입 키가 아니다**");
+        // v1 의 `-Dg0b1.fail=schema|task` 는 분류기 결과와 대조되던 값이다. 그 형태를
+        // 계속 받으면 스택 추정이 다시 actuator 로 새어 든다. 이제는 아무것도 하지 않는다.
+        check("schema", null, "schema_only", false);
+        check("task", null, "partitioned_count", false);
+        check("schema,task", null, "schema_only", false);
+        check("SCHEMA", null, "schema_only", false);
+
+        System.out.println();
+        System.out.println("통과 " + pass + "건 · 실패 " + fail + "건");
         if (fail > 0) System.exit(1);
     }
 }

@@ -16,24 +16,23 @@ import java.sql.Statement;
  * 경로는 connection 생성 예외를 삼킬 수 있고, 그러면 그 경로는 fence 밖에서 원천을 읽는다.
  * {@code -Dg0b1.fail=…} 로 일부러 실패시켜 job 이 정말 죽는지 관측한다.
  *
- * <p><b>경로별 주입</b>(2026-08-27, 7차 교차 리뷰 P0-06). {@code fail=all} 하나뿐이던 것을
- * 경로별로 나눴다. 이유는 이렇다 — {@code all} 은 provider 가 <b>처음 불린</b> connection 에서
- * 즉시 던지므로, 각 step 이 schema 해석에서 막혀 <b>task connection 을 아예 열지 못한다.</b>
- * 그 회차의 "전 step 이 실패했다" 는 task 경로의 fail-closed 에 대해 아무것도 말하지 않는다.
- * {@code fail=task} 로 두면 schema 는 정상 통과하고 task 에서만 던지므로 그 경로를 독립적으로
- * 시험할 수 있다.
+ * <p><b>주입 대상은 driver 가 선언한 phase 로 정한다</b>(2026-08-30, 8차 M2-3).
+ * v1 은 {@code Trace.classify(stack)} 의 추정 경로로 주입 여부를 정했다. 그러면
+ * <b>분류기의 오류가 곧 잘못된 주입</b>이 되고, 그 주입 결과로 분류기를 검증할 수도 없다.
+ * driver 는 자기가 {@code .schema} 를 부르는지 {@code .count()} 를 부르는지 알고 있으므로,
+ * step 을 시작하기 전에 phase 파일에 그 이름을 쓰고 provider 는 그 값만 읽는다.
  *
  * <pre>
- *   -Dg0b1.fail=none              주입 없음(기본)
- *   -Dg0b1.fail=all               모든 경로
- *   -Dg0b1.fail=schema            SCHEMA 경로만
- *   -Dg0b1.fail=task              TASK 경로만
- *   -Dg0b1.fail=metadata          METADATA 경로만(이 하네스는 유발하지 않는다)
- *   -Dg0b1.fail=schema,task       조합
+ *   -Dg0b1.fail=none                  주입 없음(기본)
+ *   -Dg0b1.fail=all                   선언된 phase 와 무관하게 전부
+ *   -Dg0b1.fail=phase
+ *   -Dg0b1.fail.phase=&lt;phase 이름&gt;   그 phase 로 선언된 동안 열린 connection 만
  * </pre>
  *
- * <p><b>MIXED·UNKNOWN 에는 주입하지 않는다</b>(경로를 지정한 경우). 분류기가 갈피를 못 잡은
- * connection 에 주입하면 어느 경로를 시험한 것인지 말할 수 없다. {@code all} 은 예외다.
+ * <p>{@code fail=all} 은 <b>시나리오가 경로를 이미 격리했을 때</b> 쓴다(M2-4) — 예컨대
+ * {@code schema_only} 시나리오에서는 그 회차의 모든 connection 이 schema 경로이므로
+ * 분류기에 묻지 않고도 그것을 안다. {@code path_guess} 는 추적에 남지만 <b>진단 라벨일 뿐</b>
+ * 이며 어떤 판정 술어에도 들어가지 않는다.
  */
 final class Preamble {
 
@@ -51,26 +50,35 @@ final class Preamble {
     }
 
     /**
-     * 이 connection 의 경로에 실패를 주입해야 하는가.
+     * 이 connection 에 실패를 주입해야 하는가.
      *
      * <p>패키지 가시성으로 열어 둔 이유는 {@code TracingConnectionProvider} 가 <b>주입 여부를
-     * 추적에 남겨야</b> 하기 때문이다. 판정기가 "주입이 그 경로에 닿았는가" 를 추정이 아니라
-     * 사실로 읽을 수 있어야 한다.
+     * 추적에 남겨야</b> 하기 때문이다. 판정기가 "주입이 닿았는가" 를 추정이 아니라 사실로
+     * 읽을 수 있어야 한다.
      *
-     * @param path {@code Trace.classify} 의 결과. SCHEMA / TASK / METADATA / MIXED / UNKNOWN
+     * @param declaredPhase driver 가 phase 파일에 선언한 값. <b>스택 추정이 아니다.</b>
      */
-    static boolean shouldFail(String path) {
+    static boolean shouldFail(String declaredPhase) {
         String fail = prop("g0b1.fail", "none").trim();
         if (fail.isEmpty() || "none".equalsIgnoreCase(fail)) return false;
+
+        // **주입 대상은 driver 가 선언한 phase 로 정한다**(2026-08-30, 8차 M2-3).
+        // v1 은 Trace.classify(stack) 의 결과를 받아 판단했다 — 스택 추정이 actuator 를
+        // 구동하면 분류기의 오류가 곧 잘못된 주입이 되고, 그 결과로 분류기를 검증할 수도
+        // 없다(순환). driver 는 자기가 무엇을 하는 중인지 알고 있으므로 그것을 쓴다.
+        //
+        //   -Dg0b1.fail=none                주입 없음
+        //   -Dg0b1.fail=all                 선언된 phase 와 무관하게 전부
+        //   -Dg0b1.fail.phase=<phase 이름>   그 phase 로 선언된 동안 열린 connection 만
+        //
+        // fail=all 은 시나리오가 경로를 이미 격리했을 때 쓴다(M2-4). 예: schema_only
+        // 시나리오에서 fail=all 이면 그 회차의 모든 connection 이 schema 경로다 —
+        // **분류기에 묻지 않고도** 그것을 안다.
         if ("all".equalsIgnoreCase(fail)) return true;
-        if (path == null) return false;
-        // 경로를 지정한 경우 MIXED·UNKNOWN 에는 주입하지 않는다 — 어느 경로를 시험한 것인지
-        // 말할 수 없는 주입은 증거를 만들지 못한다.
-        if (!"SCHEMA".equals(path) && !"TASK".equals(path) && !"METADATA".equals(path)) return false;
-        for (String tok : fail.split(",")) {
-            if (tok.trim().equalsIgnoreCase(path)) return true;
-        }
-        return false;
+
+        String want = prop("g0b1.fail.phase", "").trim();
+        if (want.isEmpty()) return false;      // 지정하지 않았으면 주입하지 않는다(fail-closed)
+        return want.equalsIgnoreCase(declaredPhase);
     }
 
     /**
@@ -81,11 +89,15 @@ final class Preamble {
         Result r = new Result();
 
         // ── 0. 강제 실패 모드 — fail-closed 가 정말 성립하는지 보는 실험용 ──────
-        if (shouldFail(path)) {
+        // **`path` 는 여기서 쓰이지 않는다.** 진단 라벨로 로그에만 남는다(M2-3).
+        String phase = Trace.declaredPhase();
+        if (shouldFail(phase)) {
             String fail = prop("g0b1.fail", "none");
             r.ok = false;
-            r.error = "forced failure (g0b1.fail=" + fail + ", path=" + path + ")";
-            throw new SQLException("[g0-0b1] 의도적 프리앰블 실패 (path=" + path
+            r.error = "forced failure (g0b1.fail=" + fail
+                    + ", fail.phase=" + prop("g0b1.fail.phase", "")
+                    + ", declared_phase=" + phase + ")";
+            throw new SQLException("[g0-0b1] 의도적 프리앰블 실패 (declared_phase=" + phase
                     + ") — 이 예외가 삼켜지는지 관측한다");
         }
 

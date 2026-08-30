@@ -27,8 +27,8 @@ OJDBC="${OJDBC_JAR:?OJDBC_JAR 에 ojdbc jar 경로를 지정하라}"
 TRACE=$(mktemp -d); LOGS=$(mktemp -d)
 echo "[run] trace dir: $TRACE"
 
-submit() {  # $1=run 라벨  $2=python --mode  $3=extra -D
-  local run="$1" mode="$2" extra="$3"
+submit() {  # $1=run 라벨  $2=python --mode  $3=extra -D  $4=시나리오  $5=fail.phase
+  local run="$1" mode="$2" extra="$3" scen="${4:-full}" failphase="${5:-}"
   # -Dg0b1.run 이 추적 파일명과 각 라인에 회차를 새긴다. 이게 없으면 coverage 와
   # failclosed 의 추적이 한 덩어리로 합산되어 정상 실행도 영원히 NOT_PROVEN 이 된다.
   # **run 과 mode 는 다르다**(2026-08-27, 조치 5). failclosed 를 경로별로 나누면서
@@ -36,17 +36,21 @@ submit() {  # $1=run 라벨  $2=python --mode  $3=extra -D
   # 둘 다 failclosed 여야 한다(그래야 "실패가 정상" 판정을 한다).
   local delay_opt="-Dg0b1.max.delay=$DELAY"
   case "$DELAY" in none|off|-|"") delay_opt="" ;; esac
-  local opts="-Dg0b1.run=$run -Dg0b1.trace.dir=$TRACE -Dg0b1.expect.dbuname=$EXPECT_DB -Dg0b1.expect.role=$ROLE $delay_opt $extra"
-  echo "[run] run=$run mode=$mode"
+  local phase_opt=""
+  [ -n "$failphase" ] && phase_opt="-Dg0b1.fail.phase=$failphase"
+  local opts="-Dg0b1.run=$run -Dg0b1.trace.dir=$TRACE -Dg0b1.expect.dbuname=$EXPECT_DB -Dg0b1.expect.role=$ROLE $delay_opt $phase_opt $extra"
+  echo "[run] run=$run mode=$mode scenario=$scen fail.phase=${failphase:-none}"
   "$SPARK_HOME"/bin/spark-submit \
     --master 'local[4]' \
     --jars "$JAR,$OJDBC" \
     --driver-class-path "$JAR:$OJDBC" \
-    --conf "spark.sql.sources.disabledJdbcConnProviderList=basic" \
+    ${DISABLE_BASIC:+--conf "spark.sql.sources.disabledJdbcConnProviderList=$DISABLE_BASIC"} \
     --conf "spark.driver.extraJavaOptions=$opts" \
     --conf "spark.executor.extraJavaOptions=$opts" \
     run-g0-0b1.py --url "$URL" --user "$USER" --password-env ORA_PW \
-      --table "$TABLE" --mode "$mode" --trace-dir "$TRACE" 2>&1 | tee "$LOGS/$run.log"
+      --table "$TABLE" --mode "$mode" --scenario "$scen" \
+      --provider "${PROVIDER_OPT:-g0b1tracer}" \
+      --trace-dir "$TRACE" 2>&1 | tee "$LOGS/$run.log"
   local rc=${PIPESTATUS[0]}
   echo "[run] run=$run exit=$rc"
   return $rc
@@ -54,27 +58,34 @@ submit() {  # $1=run 라벨  $2=python --mode  $3=extra -D
 
 # coverage 를 먼저 돌린다. 자격증명·접속 문제로 실패하면 **여기서 멈춘다** —
 # 같은 자격증명으로 두 번째 회차를 돌려 로그온 실패를 늘리지 않는다(계정 잠금 방지).
-submit coverage coverage "" || true
+submit coverage coverage "" full || true
 if grep -qiE 'ORA-01017|ORA-28000|ORA-01005|invalid username|account is locked' "$LOGS/coverage.log" 2>/dev/null; then
-  echo "[abort] 자격증명 오류가 관측됐다. failclosed 회차를 실행하지 않는다(계정 잠금 방지)." >&2
+  echo "[abort] 자격증명 오류가 관측됐다. 남은 회차를 실행하지 않는다(계정 잠금 방지)." >&2
   echo "[abort] 로그: $LOGS/coverage.log" >&2
   exit 2
 fi
 
-# **경로별로 나눠 돌린다**(2026-08-27, 7차 교차 리뷰 P0-06 조치 5).
+# ── 경로별 독립 시나리오 (8차 M2-3·M2-4) ───────────────────────────────
 #
-# fail=all 하나로는 task 경로의 fail-closed 를 시험할 수 없다. all 은 provider 가 처음
-# 불린 connection 에서 즉시 던지므로 각 step 이 schema 해석에서 막혀 **task connection 을
-# 아예 열지 못한다.** 그 회차의 "전 step 이 실패했다" 는 task 에 대해 아무것도 말하지 않는데,
-# 판정기는 그것을 fail-closed 통과로 세고 있었다.
+# **주입 대상을 스택 추정이 아니라 두 가지로 정한다.**
+#   ① 시나리오가 경로를 격리한다 — schema_only 회차에는 task connection 이 없다
+#   ② driver 가 phase 를 선언하고 provider 가 그것만 읽는다(-Dg0b1.fail.phase)
 #
-#   failclosed_schema : SCHEMA 에서만 던진다. schema 경로가 예외를 삼키는지 본다
-#   failclosed_task   : schema 는 통과시키고 TASK 에서만 던진다.
-#                       **이 회차가 task 경로 fail-closed 의 유일한 증거다**
+# 그래서 `-Dg0b1.fail=schema|task` 같은 **경로 이름 주입은 더 쓰지 않는다.** 그 값은
+# 분류기의 결과와 대조되던 것이고, 분류기가 틀리면 주입 대상 자체가 틀렸다.
 #
-# 두 회차 다 실패가 정상이다. 살아남는 step 이 있으면 그 경로가 예외를 삼킨 것이다.
-submit failclosed_schema failclosed "-Dg0b1.fail=schema" || true
-submit failclosed_task   failclosed "-Dg0b1.fail=task"   || true
+#   failclosed_schema : schema_only 시나리오 + fail=all
+#                       → 그 회차의 모든 connection 이 schema 경로다(분류기 불필요)
+#   failclosed_task   : task_only 시나리오 + fail.phase=partitioned_count
+#                       → schema 는 통과시키고 task step 에서만 주입한다
+#
+# 두 회차 다 **실패가 정상**이다. 살아남는 step 이 있으면 그 경로가 예외를 삼킨 것이다.
+submit failclosed_schema failclosed "-Dg0b1.fail=all"   schema_only || true
+submit failclosed_task   failclosed "-Dg0b1.fail=phase" task_only partitioned_count || true
+
+# METADATA 경로는 이 하네스가 유발하지 못한다. **그 사실을 회차로 남긴다** —
+# 0 건을 "없다" 로 읽지 않기 위해서다.
+submit metadata_probe coverage "" metadata_only || true
 
 echo
 python3 analyze-trace.py --trace-dir "$TRACE" --result-log "$LOGS"/*.log --out g0-0b1-evidence.json

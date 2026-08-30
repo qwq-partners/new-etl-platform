@@ -18,7 +18,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 목표 아키텍처 v1 → v1.2.4 | **완료**(다섯 차례 교차 리뷰 + UI 도출 개정 요청 13건 반영) |
 | **제약 변경**(2026-08-24, 표현 통일 2026-08-27) | **정합성을 DBA 협조에 걸 수 없다.** 비critical 권한 요청은 가능하나 **현재 보류이며 절대 가정하지 않는다.** v1.2.3.1이 전제하던 DBA 의존이 무효화됨 |
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
-| **G0-0 실측** | **원천에 대해서는 한 번도 실행되지 않았다.** Oracle 없는 회차로 S1~S3(하네스 빌드·SPI 배선)만 돌았다. M0 은 닫혔고 **M1 child 증거 계약이 남아 사내 원천 실행은 여전히 NO-GO** |
+| **G0-0 실측** | **원천에 대해서는 한 번도 실행되지 않았다.** Oracle 없는 회차로 S1~S3(하네스 빌드·SPI 배선)만 돌았다. M0·M1·M2 는 닫혔고 **M3(normalizer)·M4(문서 정정)가 남아 사내 원천 실행은 여전히 NO-GO** |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
 | DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. `FLASHBACK`의 순이익 부재라는 강한 결론은 8차 리뷰에서 재검토 대상으로 환원 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
@@ -28,7 +28,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **8차 교차 리뷰**(2026-08-30) | 완료 — 현 normalizer 결과 수용·B1 `PROVEN`·G0 PASS·v2.0 동결은 **NO-GO** |
 | **8차 M0(실행 안전성)** | **완료**(2026-08-30) — 6건 처리, 회귀 41건 신설(`g0-m0-safety-tests.py`). 상세는 §3 |
 | **8차 M1(child 증거 계약)** | **완료**(2026-08-30) — 4건 처리. 회귀 283건 |
-| 8차 M2(B1 재작성)·M3(normalizer)·M4(문서 정정) | 남음 ← **지금 여기** |
+| **8차 M2(B1 재작성)** | **완료**(2026-08-30) — 5건 처리. 회귀 289건 |
+| 8차 M3(normalizer)·M4(문서 정정) | 남음 ← **지금 여기** |
 | A v2.0 / P v2.0 규범 개정 | M0/M1 수정 → raw G0-0 수집 → 축/composition 확정 후 착수 |
 
 **핵심 원칙**: 실측 전 규범 문서를 대규모로 고치지는 않는다. 다만 **실측을 신뢰할 수 있게 만드는 실행 안전성과 증거 결속은 실측보다 먼저 고친다.**
@@ -91,13 +92,13 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 3. G0-0 실측 산출물
 
-**현재는 아래 순서로 실행하지 않는다.** 8차 리뷰의 M0/M1을 먼저 닫은 뒤 A → B0 → B1 → C00 → C01~C09 순으로 raw evidence를 수집한다.
+**현재는 아래 순서로 실행하지 않는다.** 8차 리뷰의 M3·M4를 먼저 닫은 뒤 A → B0 → B1 → C00 → C01~C09 순으로 raw evidence를 수집한다.
 
 | 게이트 | 파일 | 대상 | 안전 등급 |
 |---|---|---|---|
-| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·원천 이식성 raw fact(87 probe) | **M0·M1 완료.** 남은 차단점은 M2~M4 |
+| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·원천 이식성 raw fact(87 probe) | **M0·M1 완료.** 남은 차단점은 M3·M4 |
 | **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | **M0·M1 완료**(2026-08-30) — `sys.exit(main())`·partition/session 상한·**대상 접촉 전 신원 preflight**·child 스키마 |
-| **G0-0B1** | `g0-0b1-connection-provider/` | provider의 schema·task 경로 + fail-closed | **현재 NO-GO** — `failclosed_task` 실행 불가·stack 추정 순환 판정 |
+| **G0-0B1** | `g0-0b1-connection-provider/` | provider의 schema·task 경로 + fail-closed | **M0·M1·M2 완료**(2026-08-30) — explicit `connectionProvider`·경로별 독립 시나리오·**주입을 스택 추정에서 분리**·terminal token·trace 완결성 |
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence fact collector | external completion wrapper + scan 승인 후 조건부 |
 | **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness | **M0 조치 완료** — `CE_ENV_ALLOWLIST`(패키지 **밖**) 없이는 실행되지 않으며, 그 검사가 **preflight 접속보다 먼저** 온다 |
 
@@ -122,9 +123,9 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
   덮어쓰지 않는다**. 실행에는 `G0_SOURCE_ID` 가 필요하다
 - **회차 집합 검사**(8차 M1-3): child 들이 서로 다른 회차·원천·판본·하네스면 거부한다.
   **각 child 는 자기 manifest 와 일관되므로 개별 검사로는 잡히지 않는다**
-- 회귀 시험: `g0-normalize-tests.py`(87) · `g0-axes-tests.py`(79) · `g0-b1-analyzer-tests.py`(40)
-  · `g0-m0-safety-tests.py`(51) · `g0-0b1-connection-provider/run-tests.sh`(26, Java)
-  — **합계 283건**
+- 회귀 시험: `g0-normalize-tests.py`(87) · `g0-axes-tests.py`(79) · `g0-b1-analyzer-tests.py`(43)
+  · `g0-m0-safety-tests.py`(51) · `g0-0b1-connection-provider/run-tests.sh`(29, Java)
+  — **합계 289건**
 
 > **그렇다고 이 계약이 8차 리뷰의 M1 을 닫은 것은 아니다.** 8차는 `main` 판을 보고
 > child 완결성·run/source/runtime 결속·`effective_value` floor 미보장을 지적했다.

@@ -52,17 +52,76 @@ final class Trace {
         return r.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 
-    static void line(String json) {
+    // ── M2-3: 선언된 phase ────────────────────────────────────────────
+    //
+    // **주입은 스택 추정으로 구동하지 않는다.** v1 은 `Preamble.shouldFail(classify(stack))`
+    // 였다 — 분류기가 틀리면 **주입 대상 자체가 틀린다.** 그러면 분류기의 오류가 곧
+    // 잘못된 판정이 되고, 그 판정으로 분류기를 검증할 수도 없다(순환).
+    //
+    // 대신 **오케스트레이터가 스스로 무엇을 하는 중인지 선언한다.** driver 가 step 을
+    // 시작하기 전에 phase 파일에 그 이름을 쓰고, provider 는 그 값만 읽는다.
+    // driver 는 자기가 `.schema` 를 부르는지 `.count()` 를 부르는지 **알고 있다** —
+    // 추정할 필요가 없다.
+    //
+    // `path_guess` 는 남지만 **진단 라벨일 뿐**이며 어떤 판정 술어에도 들어가지 않는다.
+    private static Path phaseFile() {
+        String dir = System.getProperty("g0b1.trace.dir", System.getProperty("java.io.tmpdir"));
+        return Paths.get(dir, "g0-0b1-phase-" + run() + ".txt");
+    }
+
+    /** driver 가 선언한 현재 phase. 없으면 UNDECLARED. */
+    static String declaredPhase() {
+        try {
+            Path f = phaseFile();
+            if (!Files.isReadable(f)) return "UNDECLARED";
+            String v = new String(Files.readAllBytes(f), StandardCharsets.UTF_8).trim();
+            return v.isEmpty() ? "UNDECLARED" : v;
+        } catch (IOException e) {
+            return "UNDECLARED";
+        }
+    }
+
+    // ── M2-5: 추적 완결성 ─────────────────────────────────────────────
+    // 잘린 추적 파일과 "connection 이 원래 없었다" 는 구분되지 않는다. 종료 시
+    // sentinel 을 남겨, 판정기가 **파일이 끝까지 쓰였다는 사실**을 읽게 한다.
+    private static final java.util.concurrent.atomic.AtomicLong LINES =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static volatile boolean hookInstalled = false;
+
+    private static void installHook() {
+        if (hookInstalled) return;
+        synchronized (LOCK) {
+            if (hookInstalled) return;
+            hookInstalled = true;
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                StringBuilder b = new StringBuilder("{");
+                b.append("\"event\":\"trace_end\"");
+                b.append(",\"run\":").append(q(run()));
+                b.append(",\"jvm\":").append(q(
+                        ManagementFactory.getRuntimeMXBean().getName()));
+                b.append(",\"lines_written\":").append(LINES.get());
+                b.append("}");
+                rawLine(b.toString());
+            }, "g0b1-trace-end"));
+        }
+    }
+
+    private static void rawLine(String json) {
         synchronized (LOCK) {
             try (Writer w = Files.newBufferedWriter(file(), StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
                 w.write(json);
                 w.write('\n');
             } catch (IOException e) {
-                // 추적 실패가 실험을 죽이면 안 되지만 조용히 넘어가서도 안 된다.
                 System.err.println("[g0-0b1] trace write failed: " + e);
             }
         }
+    }
+
+    static void line(String json) {
+        installHook();
+        LINES.incrementAndGet();
+        rawLine(json);
     }
 
     /** JSON 문자열 이스케이프. 의존성을 늘리지 않으려고 직접 쓴다. */
