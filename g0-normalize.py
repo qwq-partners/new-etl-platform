@@ -14,17 +14,37 @@ summary 한 줄, scenario 0개인 CE `pass=true`, schema 위반에도 exit 0. �
   · 계약 위반은 warning 이 아니라 **거부**다(exit 4). 무효한 레코드를 최종 경로에 쓰지 않는다.
   · G0-0 은 G0 의 부분집합이다 — `gate_eligible` 은 schema 의 const false 다.
 
+**2026-08-30 보강(8차 M3).** 다섯 가지를 더했다.
+
+  M3-1  child schema 를 통과하지 못한 산출물은 **본문 집계에 들어가지도 않는다**.
+        이전 판은 집계한 뒤 coverage 만 FAILED 로 덮었고, 그 사이에 뽑힌 probe·축·source 는
+        레코드에 남았다.
+  M3-2  probe 별 typed predicate 와 SQLCODE taxonomy(g0_axes.py) — 권한 부족·대상 부재·
+        프로브 결함을 '기능 부재' 로 강등하지 않는다.
+  M3-3  `effective_value` 가 실제로 floor 로 내려간다. child 미완결·unbound·stale·
+        신선도 근거 부재·비권위 profile 이 사유이며, **요약과 판정은 `value` 가 아니라
+        `effective_value` 를 읽는다**.
+  M3-4  `not_covered` 를 `g0-final-contract.json` 에서 읽고 덮은 것과의 합이 최종 계약과
+        같은지 기계가 검사한다. 최종 게이트 입구는 `g0_final_gate.py` 로 분리했다.
+  M3-5  `--out` 은 run 별 경로여야 하고 덮어쓰지 않는다. `--current` 포인터는 성공 시에만
+        VALID 가 되고 **거부 시 INVALIDATED 로 덮인다** — 무효한 재실행 뒤에 이전 회차
+        결과가 current 로 읽히는 일이 없다.
+
 종료 코드 (g0-child-contract.md §4)
   0  유효한 레코드를 썼다
   3  불완전 — child 중 NOT_RUN/PARTIAL 이 있다. 레코드는 쓴다(completeness=INCOMPLETE)
   4  무효 — 계약 위반 또는 schema 위반. **최종 경로에 쓰지 않고** <out>.rejected.json 에만 남긴다
   2  실행 전 조건 미비(인자·파일 없음 등)
 
+**exit 3 은 측정 완결성만 말한다**(8차 P0-04). "capability 를 못 정했다" 는 exit 에 섞지
+않고 레코드의 `outcome.capability` 로 따로 낸다 — 두 가지를 한 코드에 섞으면 운영자가
+어느 쪽을 고쳐야 하는지 알 수 없다.
+
 사용:
   python3 g0-normalize.py --report-id NORM-2026-08-27-01 --run-id RUN-2026-08-27-01 \\
       --profile LOCAL_WSL --a g0-0a.log --b0 b0.json --b1 g0-0b1-evidence.json \\
       --c00 c00.log --c-suite g0-0c-counterexamples/evidence.json \\
-      --versions-lock versions.lock --out g0-0-evidence.json
+      --versions-lock versions.lock --out evidence/RUN-2026-08-27-01/g0-0-evidence.json
 """
 from __future__ import annotations
 
@@ -39,36 +59,18 @@ from datetime import datetime, timezone
 # 축 파생은 별도 모듈이다 — 표 기반 pure function(7차 리뷰 P0-01·P0-05 조치).
 # 파일명에 밑줄을 쓰는 이유는 import 때문이다(g0_axes.py 의 머리말 참조).
 import g0_axes
+# 최종 G0 계약(항목 집합)과 그 게이트 입구. **여기서 최종 레코드를 만들지 않는다** —
+# 이 모듈을 import 하는 이유는 `not_covered` 를 자유 목록이 아니라 계약과의 차집합으로
+# 만들기 위해서다(8차 M3-4).
+import g0_final_gate
 
 SCHEMA_FILE = "g0-0-evidence.schema.json"
-SCHEMA_VERSION = "2.1.0"
+SCHEMA_VERSION = "2.2.0"
+FINAL_CONTRACT_FILE = "g0-final-contract.json"
 
-# P §8.1 의 g0_evidence 항목 중 G0-0 이 도달하지 못하는 것.
-# **고정 집합이다.** item 값은 schema 의 enum 과 정확히 일치해야 한다(7차 리뷰 P0-04).
-NOT_COVERED = [
-    {"item": "hash_vector_result (V-01~V-16)",
-     "why": "canonical hash 벡터 시험은 G0-3 소관이다. G0-0 은 STANDARD_HASH 가용성만 본다."},
-    {"item": "ddl_digest",
-     "why": "target(Iceberg) DDL 이 아직 없다. 플랫폼을 세운 뒤에 생긴다."},
-    {"item": "verdict_sql_digest",
-     "why": "판정 SQL 이 규범 확정 후에 나온다."},
-    {"item": "canonical_hash_spec_digest",
-     "why": "ETL_CANON 함수·pinned 매핑표가 아직 없다(원천 DDL 불가로 보류)."},
-    {"item": "submission_path_result",
-     "why": "Dagster 제출 경로 시험은 G1 소관이다."},
-    {"item": "source_kind",
-     "why": "ORACLE_TEST_INSTANCE / ORACLE_COMPATIBLE_STUB 구분은 G0-1~5 aggregator 가 정한다. "
-            "G0-0 은 접속한 서버가 스스로 밝힌 신원만 기록한다."},
-    {"item": "oracle_env.nls_nchar_characterset",
-     "why": "**값은 G0-0A 가 수집한다**(probe `nls.nchar_characterset`) — source 에 담는다. "
-            "덮지 못하는 것은 그 값이 STRING 경로의 TO_NCHAR 결과에 미치는 영향 판정이며 "
-            "그것은 G0-3 V-01~V-16 소관이다."},
-    {"item": "oracle_env.max_string_size",
-     "why": "**값은 G0-0A 가 수집한다**(probe `v$parameter.max_string`) — source 에 담는다. "
-            "덮지 못하는 것은 그 값이 canonical hash 규격에 미치는 영향 판정이며 G0-3 소관이다."},
-    {"item": "same_lock (G0-5)",
-     "why": "동일 lock 실증은 G0-1~G0-4 산출물이 모두 있어야 성립한다. G0-0 하나로는 불가능하다."},
-]
+# capability 값의 기본 유효기간. **측정 분포로 정한 값이 아니다** — 그것은 M5 의 몫이며,
+# 그 전까지는 운영자가 선언한 상한이라는 사실을 `freshness.basis` 에 그대로 적는다.
+DEFAULT_TTL_DAYS = 30
 
 CHILD_KEYS = [("g0_0a", "G0_0A", "a"), ("g0_0b0", "G0_0B0", "b0"), ("g0_0b1", "G0_0B1", "b1"),
               ("g0_0c00", "G0_0C00", "c00"), ("g0_0c_suite", "G0_0C_SUITE", "c_suite")]
@@ -84,6 +86,29 @@ def sha(p: pathlib.Path) -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def write_pointer(path: pathlib.Path, body: dict) -> None:
+    """'현재 유효한 G0-0 레코드' 포인터를 쓴다 (8차 M3-5).
+
+    **거부된 회차에서도 반드시 쓴다.** 이전 판은 거부 시 `<out>.rejected.json` 만 남기고
+    최종 경로를 건드리지 않았다. 그러면 이전 회차가 만든 `g0-0-evidence.json` 이 그대로
+    남아 소비자에게는 여전히 '현재' 로 보인다 — 무효한 재실행이 있었다는 사실은 어디에도
+    나타나지 않는다. 그 별칭을 없애는 것이 이 함수의 존재 이유다.
+
+    직전 포인터가 있으면 `previous` 로 접어 넣는다(무엇을 대체했는지 남기기 위해).
+    """
+    prev = None
+    if path.is_file():
+        try:
+            prev = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            prev = {"status": "UNREADABLE"}
+        if isinstance(prev, dict):
+            prev.pop("previous", None)      # 무한 중첩을 막는다
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({**body, "previous": prev}, ensure_ascii=False, indent=1),
+                    encoding="utf-8")
 
 
 def jsonl(path: pathlib.Path | None, key: str = "probe") -> list[dict]:
@@ -534,10 +559,65 @@ def main() -> int:
     ap.add_argument("--allow-missing-manifest", action="store_true",
                     help="manifest 없는 산출물을 계약 위반이 아니라 경고로 낮춘다. "
                          "**증거 생성에 쓰지 마라** — 계약 도입 이전 로그를 살펴볼 때만 쓴다.")
+    # ── 8차 M3-5: stale final alias ────────────────────────────────
+    ap.add_argument("--current", default="",
+                    help="'현재 유효한 G0-0 레코드' 포인터 파일(8차 M3-5). 기본값은 --out 과 "
+                         "같은 디렉터리의 g0-0-evidence.current.json 이다. 성공하면 이 회차를 "
+                         "가리키고, **거부되면 INVALIDATED 로 덮인다** — 무효한 재실행 뒤에 "
+                         "이전 회차가 current 로 읽히지 않게 하는 것이 이 파일의 존재 이유다.")
+    ap.add_argument("--allow-overwrite", action="store_true",
+                    help="이미 있는 --out 을 덮어쓴다. 회차 산출물은 불변이어야 하므로 "
+                         "**증거 생성에 쓰지 마라**(8차 M1-4 와 같은 이유).")
+    # ── 8차 M3-3: 신선도 ───────────────────────────────────────────
+    ap.add_argument("--capability-ttl-days", type=int, default=DEFAULT_TTL_DAYS,
+                    help=f"capability 값의 유효기간(일, 기본 {DEFAULT_TTL_DAYS}). 지나면 그 축은 "
+                         f"stale 이고 effective_value 가 floor 로 내려간다. 0 이면 TTL 미선언 "
+                         f"— 그때는 신선도를 판정할 수 없으므로 **모든 확정값이 floor 로 "
+                         f"내려간다**(모르는 것을 신선하다고 가정하지 않는다).")
     a = ap.parse_args()
 
     V: list[str] = []   # contract_violations — 하나라도 있으면 exit 4
     W: list[str] = []   # warnings
+
+    # ── 최종 G0 계약 ───────────────────────────────────────────────
+    contract_path = pathlib.Path(__file__).resolve().parent / FINAL_CONTRACT_FILE
+    if not contract_path.is_file():
+        print(f"[fatal] {FINAL_CONTRACT_FILE} 이 없다 — not_covered 를 계약과 대조하지 못한다. "
+              f"자유 목록으로 되돌리지 않는다(8차 M3-4)", file=sys.stderr)
+        return 2
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"[fatal] {FINAL_CONTRACT_FILE} 이 JSON 이 아니다: {e}", file=sys.stderr)
+        return 2
+    contract_digest = sha(contract_path)
+    covered_spec = g0_final_gate.covered_items(contract)
+    not_covered = [{"item": str(i["item"]), "why": str(i["why"])}
+                   for i in g0_final_gate.not_covered_items(contract)]
+    all_items = set(g0_final_gate.contract_items(contract))
+    cov_names = {str(i["item"]) for i in covered_spec}
+    nc_names = {i["item"] for i in not_covered}
+    # **차집합 자동 검사**(8차 M3-4). 덮은 것과 못 덮은 것의 합이 최종 계약과 같아야 한다 —
+    # 어느 항목이 조용히 어느 쪽에도 없는 상태를 만들지 않는다.
+    if cov_names & nc_names:
+        V.append(f"최종 계약에서 같은 항목이 COVERED 이면서 NOT_COVERED 다 "
+                 f"{sorted(cov_names & nc_names)}")
+    if (cov_names | nc_names) != all_items:
+        V.append(f"최종 계약 항목과 COVERED∪NOT_COVERED 가 다르다 — "
+                 f"빠짐={sorted(all_items - (cov_names | nc_names))}, "
+                 f"군더더기={sorted((cov_names | nc_names) - all_items)}(8차 M3-4)")
+
+    # ── 출력 경로 (8차 M3-5) ───────────────────────────────────────
+    out = pathlib.Path(a.out)
+    if a.run_id and a.run_id not in str(out):
+        V.append(f"--out 경로에 run_id 가 없다({out}) — 회차마다 다른 경로가 아니면 "
+                 f"고정 이름 하나가 여러 회차의 별칭이 되고, 그 별칭을 읽는 쪽은 자기가 "
+                 f"어느 회차를 보는지 알 수 없다(8차 M3-5)")
+    if out.exists() and not a.allow_overwrite:
+        V.append(f"--out 이 이미 있다({out}) — 회차 산출물은 불변이다. 덮어쓰려면 "
+                 f"--allow-overwrite 를 명시하라(8차 M3-5)")
+    current = pathlib.Path(a.current) if a.current else \
+        out.parent / "g0-0-evidence.current.json"
 
     lock = pathlib.Path(a.versions_lock)
     if not lock.is_file():
@@ -556,6 +636,7 @@ def main() -> int:
     arts: dict = {}
     children: dict = {}
     contract_ok: dict[str, bool] = {}
+    manifest_waived = False     # --allow-missing-manifest 를 실제로 쓴 회차인가(M3-3 floor)
 
     for key, const, argname in CHILD_KEYS:
         raw = getattr(a, argname)
@@ -578,6 +659,7 @@ def main() -> int:
         if viol and a.allow_missing_manifest and not rec.get("present"):
             W.append(f"[--allow-missing-manifest] {viol[0]}")
             contract_ok[key] = True
+            manifest_waived = True
         else:
             V.extend(viol)
             contract_ok[key] = not viol
@@ -594,22 +676,42 @@ def main() -> int:
     V.extend(check_run_set(children))
 
     # ── 본문 판정 ─────────────────────────────────────────────────
-    ca, P, va = cov_a(paths["g0_0a"])
+    # **M3-1: 계약·schema 를 통과한 산출물만 집계 입력이 된다.**
+    #
+    # 이전 판은 순서가 반대였다 — 먼저 전부 집계하고, 그 다음 coverage 만 FAILED 로 덮었다.
+    # 그러면 coverage 는 정직해지지만 `account_privs`·`capability_axes`·`source`·
+    # `spark_paths`·`fence_facts`·`counterexamples` 는 **schema 를 통과하지 못한 파일에서
+    # 뽑힌 값 그대로** 레코드에 남았다. 형태가 계약과 다른 산출물을 파싱한 결과를 싣고서
+    # "이 레코드는 무엇을 세었는가" 를 말할 수 없다.
+    def gated(key: str) -> pathlib.Path | None:
+        """계약·schema 를 통과했을 때만 경로를 준다. 아니면 None — 즉 집계하지 않는다."""
+        return paths[key] if contract_ok.get(key) else None
+
+    skipped = [k for k in ("g0_0a", "g0_0b0", "g0_0b1", "g0_0c00", "g0_0c_suite")
+               if paths[k] is not None and not contract_ok.get(k)]
+    if skipped:
+        W.append(f"계약·schema 를 통과하지 못한 child {skipped} 는 **집계 입력에서 제외했다** — "
+                 f"coverage 만 FAILED 로 덮고 본문은 싣던 것이 8차 M3-1 이다")
+
+    ca, P, va = cov_a(gated("g0_0a"))
     V.extend(va)
-    cb0 = cov_b0(paths["g0_0b0"])
-    cb1, spark_paths = cov_b1(paths["g0_0b1"])
-    cc00, fence = cov_c00(paths["g0_0c00"])
-    ccs, ces, vce = cov_ce(paths["g0_0c_suite"])
+    cb0 = cov_b0(gated("g0_0b0"))
+    cb1, spark_paths = cov_b1(gated("g0_0b1"))
+    cc00, fence = cov_c00(gated("g0_0c00"))
+    ccs, ces, vce = cov_ce(gated("g0_0c_suite"))
     V.extend(vce)
 
     coverage = {"g0_0a": ca, "g0_0b0": cb0, "g0_0b1": cb1, "g0_0c00": cc00, "g0_0c_suite": ccs}
 
-    # 계약을 못 지킨 child 는 본문이 아무리 그럴듯해도 FAILED 다.
+    # 계약을 못 지킨 child 는 본문이 아무리 그럴듯해도 FAILED 다. 위 `gated` 때문에
+    # 그런 child 의 상태는 NOT_RUN 으로 나오는데, **'안 돌렸다' 와 '계약을 안 지켰다' 는
+    # 다르다** — 여기서 FAILED 로 되돌린다.
     for key in coverage:
-        if not contract_ok[key] and coverage[key]["status"] != "NOT_RUN":
+        if not contract_ok[key] and paths[key] is not None:
             coverage[key] = {"status": "FAILED", "reason": "child 계약 위반 — contract_violations 참조"}
 
-    # A 가 실패했으면 그 산출물에서 나온 것을 쓰지 않는다.
+    # A 가 MEASURED 가 아니면 그 산출물에서 나온 값을 확정으로 쓰지 않는다.
+    a_not_measured = coverage["g0_0a"]["status"] != "MEASURED"
     if coverage["g0_0a"]["status"] == "FAILED":
         P = {}
         W.append("G0-0A 가 FAILED 다 → account_privs 와 그로부터 파생될 값을 신뢰하지 않는다")
@@ -646,9 +748,44 @@ def main() -> int:
         W.append("--target-owner/--target-table 중 일부만 주었거나 서버가 db_unique_name 을 "
                  "밝히지 않았다 → 테이블 단위 축을 묶지 못해 UNDETERMINED 로 둔다")
 
+    # ── 축 파생 + effective floor (8차 M3-3) ──────────────────────
+    # `value` 는 관측 사실이고 `effective_value` 는 실행에 쓰는 값이다. 아래 사유가 하나라도
+    # 붙으면 그 축의 effective_value 는 floor 로 내려간다 — **요약도 exit 판정도
+    # effective_value 를 읽는다**(8차 §6: 구현이 모든 축에 effective_value=value 를 넣고
+    # summary 는 value 를 읽던 것이 결함이었다).
+    floor_reasons: list[str] = []
+    if a_not_measured:
+        floor_reasons.append("CHILD_NOT_MEASURED")
+    if manifest_waived:
+        floor_reasons.append("SOURCE_UNVERIFIED")
+    if a.profile in ("LOCAL_WSL", "SANDBOX_CONTAINER"):
+        # 이 레코드는 스스로 "하네스 동작 확인용이며 설계 주장의 근거가 아니다" 라고 적는다.
+        # 그렇게 적으면서 확정 capability 를 publish 값으로 내보내면 두 말이 어긋난다.
+        floor_reasons.append("PROFILE_NOT_AUTHORITATIVE")
+    # 사유 이름은 g0_axes 의 표가 권위다. 여기서 새 이름을 지어내면 레코드를 읽는 쪽이
+    # 뜻을 찾을 곳이 없다.
+    undeclared = [r for r in floor_reasons if r not in g0_axes.FLOOR_REASONS]
+    if undeclared:
+        V.append(f"선언되지 않은 floor 사유 {undeclared} — g0_axes.FLOOR_REASONS 에 뜻을 "
+                 f"적지 않은 이름은 쓰지 않는다")
+    ttl_seconds = a.capability_ttl_days * 86400 if a.capability_ttl_days > 0 else None
+    if ttl_seconds is None:
+        W.append("--capability-ttl-days 0 — TTL 미선언이므로 신선도를 판정할 수 없다. "
+                 "모든 확정값의 effective_value 가 floor 로 내려간다")
+    evaluated_at = now_iso()
+
     axes = g0_axes.derive_axes(
         P, binding=binding,
-        measured_at=children.get("g0_0a", {}).get("measured_at"))
+        measured_at=children.get("g0_0a", {}).get("measured_at"),
+        now=evaluated_at, ttl_seconds=ttl_seconds, floor_reasons=floor_reasons)
+
+    def determinate(v: str) -> bool:
+        return v not in ("UNDETERMINED", "UNDEFINED")
+
+    eff = {k: v["effective_value"] for k, v in axes.items()}
+    n_graded = sum(1 for v in eff.values() if determinate(v))
+    capability = ("GRADED" if n_graded == len(eff) else
+                  "UNGRADED" if n_graded == 0 else "PARTIALLY_GRADED")
 
     rec = {
         "schema_version": SCHEMA_VERSION,
@@ -663,7 +800,23 @@ def main() -> int:
         "versions_lock_digest": lock_digest,
         "children": children,
         "coverage": coverage,
-        "not_covered": NOT_COVERED,
+        "not_covered": not_covered,
+        "final_contract_digest": contract_digest,
+        "freshness": {
+            "basis": "OPERATOR_DECLARED_TTL" if ttl_seconds else "NO_TTL_DECLARED",
+            "ttl_seconds": ttl_seconds,
+            "evaluated_at": evaluated_at,
+            "note": "**측정 분포로 정한 값이 아니다.** capability 값이 얼마나 오래 유효한지는 "
+                    "실측을 모아야 알 수 있고(M5), 그 전까지 이것은 운영자가 선언한 상한이다.",
+        },
+        "outcome": {
+            # 네 값을 분리한다(8차 P0-04 권고). 이전 판은 exit 3 하나에 "정상 측정 결과로
+            # capability 가 없음/미확정" 과 "child 실행 불완전" 을 섞었다.
+            "process": "CLEAN",           # 아래 schema 검증 뒤에 확정한다
+            "measurement": "COMPLETE" if complete else "INCOMPLETE",
+            "capability": capability,
+            "final_gate": "REJECTED_BY_CONTRACT",
+        },
         "account_privs": list(P.values()),
         "capability_axes": axes,
         "artifacts": arts,
@@ -673,6 +826,15 @@ def main() -> int:
     }
     if src:
         rec["source"] = src
+
+    # **덮었다고 선언한 항목이 실제로 이 레코드에 있는가**(8차 M3-4). 없으면 위반이 아니라
+    # 사실로 적는다 — 그 child 를 안 돌린 회차는 없는 것이 정상이고, 거짓 주장을 막는 것이
+    # 목적이지 실행 범위를 강제하는 것이 목적이 아니다.
+    rec["covered"] = [
+        {"item": str(i["item"]), "where": str(i["where"]),
+         "present": bool(g0_final_gate.resolve(rec, str(i["where"])))}
+        for i in covered_spec
+    ]
 
     if a.profile in ("LOCAL_WSL", "SANDBOX_CONTAINER"):
         rec["warnings"].append(
@@ -695,14 +857,40 @@ def main() -> int:
                                "검증하지 못한 것을 통과로 두지 않는다")
         else:
             sc = json.loads(sp.read_text(encoding="utf-8"))
+            # **schema 의 not_covered enum 과 최종 계약이 같은 것을 말하는가**(8차 M3-4).
+            # 같은 목록을 두 파일이 각자 적으면 조용히 갈라진다 — 그것이 7차 P0-04 였다.
+            try:
+                enum = set(sc["properties"]["not_covered"]["items"]
+                             ["properties"]["item"]["enum"])
+            except (KeyError, TypeError):
+                enum = None
+            if enum is not None and enum != nc_names:
+                V.append(f"{SCHEMA_FILE} 의 not_covered enum 과 {FINAL_CONTRACT_FILE} 의 "
+                         f"NOT_COVERED 가 다르다 — schema에만={sorted(enum - nc_names)}, "
+                         f"계약에만={sorted(nc_names - enum)}(8차 M3-4)")
             for e in sorted(jsonschema.Draft202012Validator(sc).iter_errors(rec),
                             key=lambda x: list(x.path))[:8]:
                 schema_errs.append(f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message[:160]}")
 
-    out = pathlib.Path(a.out)
     if V or schema_errs:
+        rec["outcome"]["process"] = "REJECTED"
+        out.parent.mkdir(parents=True, exist_ok=True)
         rejected = out.with_name(out.name + ".rejected.json")
         rejected.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+        # **M3-5: current 포인터를 무효화한다.** 이전 회차의 유효 포인터를 그대로 두면
+        # 무효한 재실행 뒤에도 소비자는 옛 레코드를 "현재" 로 읽는다 — 그리고 그 사실을
+        # 어디에서도 알 수 없다. 거부는 조용하면 안 된다.
+        write_pointer(current, {
+            "status": "INVALIDATED",
+            "invalidated_at": now_iso(),
+            "rejected_run_id": a.run_id,
+            "rejected_report_id": a.report_id,
+            "rejected_copy": str(rejected),
+            "reason_count": {"contract_violations": len(V), "schema_errors": len(schema_errs)},
+            "note": "이 회차가 거부됐다. **이전 회차 레코드를 current 로 읽지 마라** — "
+                    "그것은 이 회차가 무효라는 사실을 반영하지 않는다. 유효한 레코드를 "
+                    "원하면 위반을 고쳐 다시 정규화하라.",
+        })
         for e in schema_errs:
             print(f"[schema] {e}", file=sys.stderr)
         for v in V:
@@ -711,20 +899,42 @@ def main() -> int:
             "verdict": "REJECTED",
             "why": "계약 위반 또는 schema 위반이 있다. **최종 경로에 쓰지 않았다.**",
             "rejected_copy": str(rejected),
+            "current_pointer": str(current),
+            "current_status": "INVALIDATED",
             "contract_violations": V,
             "schema_errors": schema_errs,
         }, ensure_ascii=False, indent=1))
         return 4
 
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+    write_pointer(current, {
+        "status": "VALID",
+        "record_type": rec["record_type"],
+        "gate_eligible": rec["gate_eligible"],
+        "run_id": a.run_id,
+        "g0_report_id": a.report_id,
+        "path": str(out),
+        "sha256": sha(out),
+        "normalized_at": rec["normalized_at"],
+        "outcome": rec["outcome"],
+        "note": "**gate_eligible=false 다.** 이 포인터는 '가장 최근에 유효했던 G0-0 레코드' 를 "
+                "가리킬 뿐이며 G0 PASS 를 뜻하지 않는다. 최종 게이트 입력 자격은 "
+                "g0_final_gate.admit 이 판정하고, 이 record_type 은 항상 거절된다.",
+    })
     print(json.dumps({
         "out": str(out),
+        "current_pointer": str(current),
         "record_type": rec["record_type"],
         "gate_eligible": rec["gate_eligible"],
         "completeness": rec["completeness"],
+        "outcome": rec["outcome"],
         "coverage": {k: v["status"] for k, v in coverage.items()},
-        "capability_axes": {k: v["value"] for k, v in axes.items()},
-        "undetermined_axes": [k for k, v in axes.items() if v["value"] == "UNDETERMINED"],
+        # **effective_value 를 낸다.** `value` 는 audit·표시용이며 여기에 싣지 않는다 —
+        # 요약이 value 를 읽던 것이 8차 §6 의 지적이다.
+        "capability_axes_effective": eff,
+        "floored_axes": {k: v["floor_reasons"] for k, v in axes.items() if v["floor_reasons"]},
+        "undetermined_axes": [k for k, v in eff.items() if not determinate(v)],
         "warnings": rec["warnings"],
     }, ensure_ascii=False, indent=1))
     return 0 if complete else 3

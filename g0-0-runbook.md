@@ -68,10 +68,11 @@ python3 -c "import jsonschema, oracledb; print('ok')"
 Oracle 도 Spark 도 필요 없다. **여기서 실패하면 뒤 단계의 결과를 믿을 수 없다.**
 
 ```bash
-python3 g0-normalize-tests.py      # 59건 — 증거 봉투 fail-closed
-python3 g0-axes-tests.py           # 79건 — capability 축 파생
-python3 g0-b1-analyzer-tests.py    # 40건 — B1 판정기
-# 세 개 모두 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
+python3 g0-normalize-tests.py      # 147건 — 증거 봉투 fail-closed
+python3 g0-axes-tests.py           # 127건 — capability 축 파생·SQLCODE taxonomy·floor
+python3 g0-b1-analyzer-tests.py    #  43건 — B1 판정기
+python3 g0-m0-safety-tests.py      #  51건 — 실행 안전성(M0)
+# 넷 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
 # (여기 적힌 숫자가 늘어나 있으면 그건 시험이 늘어난 것이지 실패가 아니다).
 ```
 
@@ -302,11 +303,55 @@ python3 g0-normalize.py \
   --b1 "$EVID/g0-0b1-evidence.json" --c00 "$EVID/g0-0c00.log" \
   --c-suite "$EVID/evidence.json" \
   --target-owner "$TGT_OWNER" --target-table "$TGT_TABLE" --wm-column "$WM" \
-  --out "$EVID/g0-0-evidence.json"
+  --source-id "$DB_UNIQUE_NAME" \
+  --out "$EVID/$RUN_ID/g0-0-evidence.json"
 ```
 
 `--target-*` 를 주지 않으면 **테이블 단위 축 4개가 전부 `UNDETERMINED`** 가 된다. 묶이지 않은
 확정값을 만들지 않는 것이 계약이다.
+
+**`--out` 경로에 `$RUN_ID` 가 들어가야 한다**(8차 M3-5). 고정 이름 하나를 계속 덮어쓰면
+그 이름은 여러 회차의 별칭이 되고, 무효한 재실행이 있어도 소비자는 이전 회차를 계속
+'현재' 로 읽는다. 이미 있는 경로에는 쓰지 않는다 — 정말 덮어야 하면 `--allow-overwrite` 를
+명시한다(증거 생성에는 쓰지 마라).
+
+### 무엇을 '현재' 로 읽는가
+
+정규화기는 `--out` 옆에 `g0-0-evidence.current.json` **포인터**를 쓴다(`--current` 로 위치를
+바꿀 수 있다). 소비자는 회차 파일이 아니라 이 포인터를 읽는다.
+
+| `status` | 뜻 |
+|---|---|
+| `VALID` | `path` 가 가리키는 회차가 현재 유효하다. `sha256` 로 대조하라 |
+| `INVALIDATED` | **마지막 정규화가 거부됐다.** 이전 회차를 현재로 읽지 마라 — 그것은 이 회차가 무효라는 사실을 반영하지 않는다 |
+
+`previous` 에 직전 포인터가 접혀 있어 무엇을 대체했는지 볼 수 있다. `VALID` 여도
+`gate_eligible` 은 언제나 `false` 다 — 이 포인터는 "가장 최근 유효한 G0-0 레코드" 를
+가리킬 뿐 G0 PASS 를 뜻하지 않는다.
+
+### 값 두 개: `value` 와 `effective_value`
+
+`capability_axes[*]` 는 값을 둘 싣는다. **판정·publish 는 `effective_value` 만 읽는다.**
+
+- `value` — 그때 관측한 것. 감사·표시용이다.
+- `effective_value` — 실행에 쓰는 값. `floor_reasons` 가 비어 있지 않으면 축의 floor 로
+  내려가 있다. 사유는 child 미완결·unbound·stale·신선도 근거 부재·비권위 profile 이며,
+  뜻은 `g0_axes.FLOOR_REASONS` 가 권위다.
+
+`--capability-ttl-days`(기본 30)가 신선도 기준이다. **측정 분포로 정한 값이 아니라 운영자
+선언값**이며 레코드의 `freshness.basis` 가 그렇게 적는다. `0` 을 주면 TTL 미선언이 되고,
+그러면 신선도를 판정할 수 없으므로 모든 확정값이 floor 로 내려간다 — 모르는 것을
+신선하다고 가정하지 않는다.
+
+### 이 레코드는 G0 게이트에 못 들어간다
+
+```bash
+python3 g0_final_gate.py "$EVID/$RUN_ID/g0-0-evidence.json"   # 항상 exit 1
+```
+
+`record_type=g0_0_evidence` 는 최종 게이트가 **무조건** 거절한다. `gate_eligible` 을 손으로
+`true` 로 고쳐도 마찬가지다. 덮은 항목과 못 덮은 항목의 목록은 `g0-final-contract.json` 이
+권위이고, 레코드의 `covered`/`not_covered` 는 그 계약에서 나온다.
 
 ---
 
@@ -322,6 +367,19 @@ python3 g0-normalize.py \
 무엇이 어긋났는지 정확히 말한다. `<out>.rejected.json` 에 거부본이 남는다.
 
 **exit 5 는 exit 3 과 다르다.** 3 은 "덮지 못했다", 5 는 "측정하지 못했다". 섞지 마라.
+
+**`g0-normalize.py` 의 exit 3 은 측정 완결성만 말한다**(8차 M3). "capability 를 못 정했다"
+는 exit 에 섞지 않고 레코드의 `outcome` 이 따로 낸다 — 네 값이 서로 다른 질문에 답한다.
+
+| 필드 | 질문 |
+|---|---|
+| `outcome.process` | 정규화가 계약·schema 를 통과했는가 (exit 4 와 짝) |
+| `outcome.measurement` | 다섯 child 가 전부 MEASURED 인가 (exit 3 과 짝) |
+| `outcome.capability` | 13축의 **effective_value** 중 확정값이 몇인가 |
+| `outcome.final_gate` | 최종 G0 게이트 입력 자격 — 언제나 `REJECTED_BY_CONTRACT` |
+
+측정이 완결돼도(`exit 0`) capability 가 `UNGRADED` 일 수 있다. 그것은 실패가 아니라
+결과다 — 고칠 것이 없다.
 
 ---
 

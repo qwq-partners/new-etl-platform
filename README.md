@@ -29,7 +29,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **8차 M0(실행 안전성)** | **완료**(2026-08-30) — 6건 처리, 회귀 41건 신설(`g0-m0-safety-tests.py`). 상세는 §3 |
 | **8차 M1(child 증거 계약)** | **완료**(2026-08-30) — 4건 처리. 회귀 283건 |
 | **8차 M2(B1 재작성)** | **완료**(2026-08-30) — 5건 처리. 회귀 289건 |
-| 8차 M3(normalizer)·M4(문서 정정) | 남음 ← **지금 여기** |
+| **8차 M3(normalizer)** | **완료**(2026-08-30) — 5건 처리. 회귀 397건. 상세는 §3 |
+| 8차 M4(사실·규범 문서 정정)·M5(그 뒤 G0-0) | 남음 ← **지금 여기** |
 | A v2.0 / P v2.0 규범 개정 | M0/M1 수정 → raw G0-0 수집 → 축/composition 확정 후 착수 |
 
 **핵심 원칙**: 실측 전 규범 문서를 대규모로 고치지는 않는다. 다만 **실측을 신뢰할 수 있게 만드는 실행 안전성과 증거 결속은 실측보다 먼저 고친다.**
@@ -103,7 +104,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness | **M0 조치 완료** — `CE_ENV_ALLOWLIST`(패키지 **밖**) 없이는 실행되지 않으며, 그 검사가 **preflight 접속보다 먼저** 온다 |
 
 **증거 계약**(2026-08-27 재설계 — 7차 리뷰 P0-02·03·04): `g0-0-evidence.schema.json` +
-`g0-normalize.py` + `g0-child-contract.md` + `g0-run-child.sh`.
+`g0-normalize.py` + `g0-child-contract.md` + `g0-run-child.sh` +
+`g0-final-contract.json` + `g0_final_gate.py`(8차 M3-4).
 
 - record_type 은 **`g0_0_evidence`** 다. P §8.1 의 최종 `g0_evidence` 와 **이름이 다르다** —
   같은 이름으로 두 계약을 정의하던 것이 P0-04 였다. `gate_eligible` 은 schema 의 `const false` 다.
@@ -123,14 +125,38 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
   덮어쓰지 않는다**. 실행에는 `G0_SOURCE_ID` 가 필요하다
 - **회차 집합 검사**(8차 M1-3): child 들이 서로 다른 회차·원천·판본·하네스면 거부한다.
   **각 child 는 자기 manifest 와 일관되므로 개별 검사로는 잡히지 않는다**
-- 회귀 시험: `g0-normalize-tests.py`(87) · `g0-axes-tests.py`(79) · `g0-b1-analyzer-tests.py`(43)
-  · `g0-m0-safety-tests.py`(51) · `g0-0b1-connection-provider/run-tests.sh`(29, Java)
-  — **합계 289건**
+- **집계 순서**(8차 M3-1): child schema 를 어긴 산출물은 **본문 집계에 들어가지 않는다.**
+  이전 판은 집계한 뒤 `coverage` 만 `FAILED` 로 덮었고, 그 사이 뽑힌 probe·축·source 는
+  레코드에 남았다
+- **SQLCODE taxonomy**(8차 M3-2): 권한 부족(ORA-01031)·대상 부재(ORA-00942)·프로브 결함·
+  뜻이 문맥에 따라 다른 코드(ORA-00904/06550)를 **'기능 부재' 로 강등하지 않는다.**
+  `NONE` 을 지지하는 것은 `UNSUPPORTED` 뿐이며, 그 뜻이 probe 마다 다른 코드는
+  **그 probe 가 `absent_codes` 로 스스로 선언한다**. probe 별 typed predicate(행·값·문법·
+  양성 대조)도 표로 분리했다
+- **`effective_value` floor**(8차 M3-3): `value` 는 관측 사실이고 **판정·publish 는
+  `effective_value` 만 읽는다.** child 미완결·unbound·stale·신선도 근거 부재·비권위 profile 이
+  사유이며 축마다 `floor_reasons` 로 남는다. floor 는 값을 **내리기만** 한다 —
+  `UNDETERMINED` 를 `sql_dialect` 의 floor(`11G`)로 올리지 않는다
+- **최종 계약과의 차집합**(8차 M3-4): `not_covered` 는 자유 목록이 아니라
+  `g0-final-contract.json`(P §8.1 항목 집합)에서 나오고, 덮은 것과의 합이 계약과 같은지
+  실행 시 검사한다. 최종 게이트 입구는 `g0_final_gate.py` 로 분리했다 —
+  `record_type != g0_evidence` 를 **무조건** 거절하며, 최종 aggregator 는 실물이 없어
+  `NotImplementedError` 다
+- **current 포인터**(8차 M3-5): 최종 레코드도 run 별 불변 경로다. `--out` 옆의
+  `g0-0-evidence.current.json` 이 '현재' 를 가리키며 **거부된 회차에서 `INVALIDATED` 로
+  덮인다** — 무효한 재실행 뒤에 이전 회차가 current 로 읽히지 않게 하는 것이 그 파일의
+  존재 이유다
+- **exit 코드 분리**(8차 M3): exit 3 은 **측정 완결성만** 말한다. capability 등급은
+  레코드의 `outcome.capability` 로 따로 낸다 — 측정이 완결돼도 `UNGRADED` 일 수 있고
+  그것은 실패가 아니라 결과다
+- 회귀 시험: `g0-normalize-tests.py`(147) · `g0-axes-tests.py`(127) ·
+  `g0-b1-analyzer-tests.py`(43) · `g0-m0-safety-tests.py`(51) ·
+  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 397건**
 
-> **그렇다고 이 계약이 8차 리뷰의 M1 을 닫은 것은 아니다.** 8차는 `main` 판을 보고
-> child 완결성·run/source/runtime 결속·`effective_value` floor 미보장을 지적했다.
-> 위 재설계가 그 지적의 상당 부분을 앞서 다루지만, **닫혔다는 판정은 8차 반례를 이 구현에
-> 직접 돌려 본 뒤에만 쓴다.** 그 전까지 현 normalizer 결과는 **판정 입력으로 수용하지 않는다.**
+> **그렇다고 이 계약이 8차 리뷰를 닫은 것은 아니다.** M0~M3 은 처리했고 회귀 시험이 각
+> 반례를 막지만, **G0-0 은 아직 한 번도 사내 원천에 대고 완주하지 않았다.** 축 값과
+> composition 은 실측 분포를 본 뒤에 확정한다(M5). 그 전까지 현 normalizer 결과는
+> **판정 입력으로 수용하지 않는다.**
 
 **판본 고정**: `versions.lock` — 이 파일의 sha256 이 모든 증거에 `versions_lock_digest` 로 박힌다.
 `UNSET` 이 남아 있으면 그 항목에 의존하는 측정은 미확정이다.

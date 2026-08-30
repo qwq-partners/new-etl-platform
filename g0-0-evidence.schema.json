@@ -10,10 +10,14 @@
   "children",
   "completeness",
   "coverage",
+  "covered",
+  "final_contract_digest",
+  "freshness",
   "g0_report_id",
   "gate_eligible",
   "normalized_at",
   "not_covered",
+  "outcome",
   "profile",
   "record_type",
   "run_id",
@@ -24,7 +28,7 @@
  "additionalProperties": false,
  "properties": {
   "schema_version": {
-   "const": "2.1.0"
+   "const": "2.2.0"
   },
   "record_type": {
    "const": "g0_0_evidence",
@@ -598,6 +602,120 @@
     "type": "string"
    },
    "description": "정규화 중 발견한 것. 계약 위반은 여기가 아니라 contract_violations 에 넣는다."
+  },
+  "final_contract_digest": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{64}$",
+   "description": "`g0-final-contract.json` 의 sha256(8차 M3-4). not_covered·covered 를 만든 계약이 어느 판본이었는지 레코드가 스스로 말한다 — 계약이 바뀌면 digest 가 바뀌고, 그러면 이 레코드가 무엇의 부분집합이었는지 사후에 확인할 수 있다."
+  },
+  "covered": {
+   "type": "array",
+   "uniqueItems": true,
+   "description": "최종 계약 항목 중 **G0-0 이 덮는다고 선언한 것**과 이 회차에 실제로 있었는가. `not_covered` 의 짝이며 둘의 합이 `g0-final-contract.json` 의 항목 집합과 같아야 한다 — 그 검사는 정규화기가 실행 시 한다(8차 M3-4). `present:false` 는 위반이 아니라 사실이다: 그 child 를 안 돌린 회차에서는 없는 것이 정상이고, 여기서 막는 것은 '덮었다고 적었는데 실제로는 없는' 거짓 주장이다.",
+   "items": {
+    "type": "object",
+    "required": [
+     "item",
+     "where",
+     "present"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "item": {
+      "enum": [
+       "g0_report_id",
+       "executed_at",
+       "versions_lock_digest",
+       "oracle_env.nls_characterset"
+      ]
+     },
+     "where": {
+      "type": "string",
+      "minLength": 1,
+      "description": "이 레코드 안에서 그 항목이 있는 경로. `a.b` 와 `a[*].b` 만 쓴다."
+     },
+     "present": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  "freshness": {
+   "type": "object",
+   "required": [
+    "basis",
+    "ttl_seconds",
+    "evaluated_at"
+   ],
+   "additionalProperties": false,
+   "description": "축 신선도 판정의 근거(8차 M3-3 · §6). 각 축의 `stale`·`expires_at` 은 여기 선언된 TTL 로 계산한다.",
+   "properties": {
+    "basis": {
+     "enum": [
+      "OPERATOR_DECLARED_TTL",
+      "NO_TTL_DECLARED"
+     ],
+     "description": "**측정 분포 기반이 아니다.** capability 값의 실제 유효기간은 실측을 모아야 알 수 있으며(M5), 그 전까지 이것은 운영자가 선언한 상한이다. `NO_TTL_DECLARED` 면 신선도를 판정할 수 없으므로 모든 확정값이 floor 로 내려간다."
+    },
+    "ttl_seconds": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "type": "integer",
+       "minimum": 1
+      }
+     ]
+    },
+    "evaluated_at": {
+     "type": "string",
+     "format": "date-time",
+     "description": "stale 판정을 한 시각. 집계기 host 의 시계다."
+    },
+    "note": {
+     "type": "string"
+    }
+   }
+  },
+  "outcome": {
+   "type": "object",
+   "required": [
+    "process",
+    "measurement",
+    "capability",
+    "final_gate"
+   ],
+   "additionalProperties": false,
+   "description": "**네 값을 분리한다**(8차 P0-04 권고). 이전 판은 exit 3 하나에 '정상 측정 결과로 capability 가 없음/미확정' 과 'child 실행 불완전' 을 섞어서, 운영자가 무엇을 고쳐야 하는지 알 수 없었다.",
+   "properties": {
+    "process": {
+     "enum": [
+      "CLEAN",
+      "REJECTED"
+     ],
+     "description": "정규화 자체가 계약·schema 를 통과했는가. REJECTED 면 이 레코드는 최종 경로가 아니라 `<out>.rejected.json` 에만 있다."
+    },
+    "measurement": {
+     "enum": [
+      "COMPLETE",
+      "INCOMPLETE"
+     ],
+     "description": "다섯 child 가 전부 MEASURED 인가. exit 3 이 말하는 것은 **이것뿐이다**."
+    },
+    "capability": {
+     "enum": [
+      "GRADED",
+      "PARTIALLY_GRADED",
+      "UNGRADED"
+     ],
+     "description": "13축의 **effective_value** 중 확정값이 몇이나 되는가. `value` 가 아니다. 측정이 완결돼도 capability 가 UNGRADED 일 수 있으며 그것은 실패가 아니라 결과다."
+    },
+    "final_gate": {
+     "const": "REJECTED_BY_CONTRACT",
+     "description": "이 레코드는 최종 G0 게이트의 입력이 될 수 없다. 판정기는 `g0_final_gate.admit` 이며 `record_type != g0_evidence` 를 무조건 거절한다."
+    }
+   }
   }
  },
  "$defs": {
@@ -696,7 +814,12 @@
     "scope",
     "binding",
     "measured_at",
-    "inputs"
+    "inputs",
+    "effective_value",
+    "stale",
+    "expires_at",
+    "freshness_basis",
+    "floor_reasons"
    ],
    "additionalProperties": false,
    "properties": {
@@ -770,15 +893,17 @@
        "type": "string",
        "format": "date-time"
       }
-     ]
+     ],
+     "description": "`measured_at + freshness.ttl_seconds`. measured_at 이나 TTL 이 없으면 null 이고, 그때는 신선도를 판정할 수 없으므로 확정값이 floor 로 내려간다."
     },
     "stale": {
      "type": "boolean",
-     "description": "유효기간이 지났는가. **stale 이면 effective_value 가 floor 로 내려간다** — 표시용 이전 값을 안전성 판정에 쓰지 않는다(7차 리뷰 P1-02)."
+     "description": "`measured_at + freshness.ttl_seconds` 가 `freshness.evaluated_at` 보다 이른가. **stale 이면 effective_value 가 floor 로 내려간다** — 표시용 이전 값을 안전성 판정에 쓰지 않는다(7차 P1-02)."
     },
     "effective_value": {
      "type": "string",
-     "description": "실행에 쓰는 값. stale 이 아니면 value 와 같고, stale 이면 UNKNOWN 또는 축의 floor 다."
+     "minLength": 1,
+     "description": "실행에 쓰는 값. floor 사유가 하나도 없으면 `value` 와 같고, 있으면 축의 floor 로 내려간다. **floor 는 값을 올리지 않는다** — `UNDETERMINED` 는 더 내려갈 곳이 없고, 이미 floor 보다 약한 값은 그대로 둔다."
     },
     "inputs": {
      "type": "array",
@@ -819,8 +944,25 @@
     },
     "note": {
      "type": "string"
+    },
+    "freshness_basis": {
+     "enum": [
+      "OPERATOR_DECLARED_TTL",
+      "NO_TTL_DECLARED",
+      "NO_MEASUREMENT"
+     ],
+     "description": "이 축의 신선도를 무엇으로 판정했는가. `NO_MEASUREMENT` 는 measured_at 이 없다는 뜻이고(대개 UNDETERMINED 축), `NO_TTL_DECLARED` 는 TTL 이 선언되지 않아 판정 자체가 불가능하다는 뜻이다 — 후자에서 확정값은 floor 로 내려간다."
+    },
+    "floor_reasons": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "uniqueItems": true,
+     "description": "effective_value 가 value 보다 내려간 사유. 비어 있으면 둘은 같다. 사유 이름과 뜻은 `g0_axes.FLOOR_REASONS` 가 권위다."
     }
-   }
+   },
+   "description": "capability 축 하나. **`value` 와 `effective_value` 는 다른 것이다** — `value` 는 과거 관측값이고 audit·표시 전용이며, `effective_value` 는 validator·publish 가 읽는 유일한 값이다(8차 §6). 둘이 다르면 `floor_reasons` 가 왜 내려갔는지 말한다."
   }
  }
 }

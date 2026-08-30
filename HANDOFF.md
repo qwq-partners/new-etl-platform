@@ -20,9 +20,9 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 | PoC 시험·합격 기준서 8차 | 완료(649줄) |
 | Profile U(무권한) 재설계 범위 | 제안 완료 · **규격 동결은 NO-GO** |
 | **8차 Codex 교차 리뷰** | 완료(2026-08-30) — 7차 P0 재판정 **CLOSED 0 / PARTIAL 2 / OPEN 4** |
-| **G0-0 실측** | 원천 미실행. **M0 실행 안전성 + M1 child evidence contract 수정 전 사내 원천 실행 NO-GO** ← 여기가 병목 |
+| **G0-0 실측** | 원천 미실행. M0·M1·M2·M3 완료(2026-08-30) — **남은 차단은 M4 문서 정정**이며 그 뒤 사내 원천 실행 |
 | G0-0B1 로컬 부분 실측 | partial Maven classpath compile·SPI linkage만 확인. full Spark/Oracle runtime·fail-closed는 미실행 |
-| A v2.0 / P v2.0 | M0/M1 → raw G0-0 → 축/composition 확정 후 착수 |
+| A v2.0 / P v2.0 | M4 → raw G0-0 → 축/composition 확정 후 착수 |
 
 **가장 중요한 사실 하나**: **저장소에 플랫폼 코드가 0줄이다.** Java 소스는 G0-0B1 tracer 3파일뿐이다. Control Plane·Guard·lease·Commit Adjudication·FI-01~66 은 설계 문서로만 존재하며 아직 시험 대상이 아니다.
 
@@ -97,7 +97,7 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 | 증거 계약 | `g0-0-evidence.schema.json` + `g0-normalize.py` |
 | 판본 고정 | `versions.lock` (**`UNSET` 17건 — 채우기 전엔 그 항목 의존 측정이 미확정**) |
 
-**G0-0 산출물 실행 순서(현재 실행 금지)**: M0/M1 수정·회귀 검증 후 A → B0 → **B1** → C00 → C01~C09 → `g0-normalize.py`
+**G0-0 산출물 실행 순서(현재 실행 금지)**: M4 문서 정정 후 A → B0 → **B1** → C00 → C01~C09 → `g0-normalize.py`
 
 ---
 
@@ -146,12 +146,17 @@ P1-09 child contract는 normalizer 수용 전에 필수라고 구분했다.
 
 ## 8. 다음에 할 일
 
-1. **M0 실행 안전성** — wrapper `pipefail`/producer exit, B0 `sys.exit(main())`, partition/session cap, target 접촉 전 identity hard preflight, C01~09 외부 allowlist
-2. **M1 child evidence contract** — A/B0/B1/C00별 run ID·source/profile·runtime/lock/harness digest·start/end·exit·exact manifest
-3. **B1 재작성** — explicit `connectionProvider`; schema/task/metadata scenario 분리; stack guess는 진단만 하고 injection/PASS를 제어하지 않음
-4. synthetic negative suite에서 incomplete·mixed·stale·relabel evidence가 전부 fail-closed인지 확인
-5. 그 뒤 pinned 사내 환경에서 raw G0-0 수집. C00은 scan 승인, C01~09는 외부 allowlist 폐기 환경만
-6. 측정 분포로 capability 축/composition을 확정하고 **A v2.0 / P v2.0** 착수
+1. ~~**M0 실행 안전성**~~ — 완료(2026-08-30). 6건 처리, 회귀 `g0-m0-safety-tests.py` 51건
+2. ~~**M1 child evidence contract**~~ — 완료(2026-08-30). child schema 4종 · `source_id`/`harness_digest`/start·end · 회차 집합 검사 · run 별 불변 경로
+3. ~~**M2 B1 재작성**~~ — 완료(2026-08-30). explicit `connectionProvider` · 선언된 phase 로 injection 구동(스택 추정과 actuator 분리) · schema/task/metadata 독립 시나리오 · terminal token·business SQL 0·trace completeness
+4. ~~**M3 normalizer**~~ — 완료(2026-08-30). schema 통과 산출물만 집계 · SQLCODE taxonomy + probe별 typed predicate · `effective_value` floor 실동작 · `not_covered` 를 최종 계약과의 차집합으로 · 최종 게이트(`g0_final_gate.py`) 분리 · current 포인터 무효화
+5. **M4 사실·규범 문서 정정** ← **지금 여기**. AS OF TIMESTAMP 3초 방향과 common snapshot 가치 · ORA-08180/08181 · Spark provider 선택 · grant hold 근거와 passive grant/runtime 활성화 분리 · overlay 내부 모순과 H/D/X 재분류
+6. 그 뒤 pinned 사내 환경에서 raw G0-0 수집. C00은 scan 승인, C01~09는 외부 allowlist 폐기 환경만
+7. 측정 분포로 capability 축/composition을 확정하고 **A v2.0 / P v2.0** 착수
+
+**회귀 시험 397건**(normalize 147 · axes 127 · b1-analyzer 43 · m0-safety 51 · Java 29).
+synthetic negative suite 는 incomplete·mixed·stale·relabel·unbound 를 전부 fail-closed 로
+막는다 — 다만 **그것은 하네스가 옳게 거부한다는 뜻이지 원천을 쟀다는 뜻이 아니다.**
 
 ---
 

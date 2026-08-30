@@ -134,14 +134,125 @@ def t_transient_is_not_none():
 
 
 def t_unsupported_is_none():
-    print("[5b] 양성 대조 — 진짜 미지원(ORA-00900)은 NONE/11G 로 내려간다")
+    print("[5b] 양성 대조 — 진짜 미지원은 NONE/11G 로 내려간다")
+    # ORA-00900(invalid SQL statement)·ORA-00933(SQL command not properly ended)은 어느
+    # probe 에서 나와도 뜻이 같다. ORA-00904 는 그렇지 않아서 여기 쓰지 않는다 —
+    # `feat.standard_hash_sha256` 에서만 부재를 뜻하고, 그 사실은 그 probe 가 선언한다.
     p = P(err("feat.fetch_first", 900), err("feat.standard_hash_sha256", 904),
-          err("dbms_flashback.get_scn", 904), err("as_of_timestamp.target", 904))
+          err("dbms_flashback.get_scn", 900), err("as_of_timestamp.target", 933))
     a = ax.derive_axes(p, binding=BINDING)
     check("sql_dialect=11G", a["sql_dialect"]["value"] == "11G", a["sql_dialect"]["value"])
-    check("hash_function=NONE", a["hash_function"]["value"] == "NONE", a["hash_function"]["value"])
+    check("hash_function=NONE(probe 가 선언한 904)",
+          a["hash_function"]["value"] == "NONE", a["hash_function"]["value"])
     check("snapshot_anchor=NONE", a["snapshot_anchor"]["value"] == "NONE",
           a["snapshot_anchor"]["value"])
+
+
+def t_m3_taxonomy_never_none():
+    print("\n[5c] M3-2 — 권한 부족·대상 부재·프로브 결함·모호 코드는 NONE 이 아니다")
+    # 8차 §7: "P1-03 의 현 ABSENCE_ORA 는 unsupported, permission denied, wrong target,
+    # probe bug 를 섞는다. 예를 들어 ORA-01031/00942 가 row_hash=NONE, sql_dialect=11G 가
+    # 될 수 있다." — 그 네 가지를 각각 넣고 어느 것도 NONE/11G 를 만들지 않는지 본다.
+    for code, kind in ((1031, "DENIED"), (1039, "DENIED"),
+                       (942, "WRONG_TARGET"), (4043, "WRONG_TARGET"),
+                       (6502, "PROBE_BUG"), (1722, "PROBE_BUG"),
+                       (904, "AMBIGUOUS"), (6550, "AMBIGUOUS")):
+        p = P(err("feat.fetch_first", code), err("dbms_flashback.get_scn", code),
+              err("as_of_timestamp.target", code), err("v$dataguard_stats", code),
+              err("feat.ora_rowscn_target", code))
+        a = ax.derive_axes(p, binding=BINDING)
+        check(f"ORA-{code:05d}({kind}) → sql_dialect 가 11G 가 아니다",
+              a["sql_dialect"]["value"] == "UNDETERMINED", a["sql_dialect"]["value"])
+        check(f"ORA-{code:05d}({kind}) → snapshot_anchor 가 NONE 이 아니다",
+              a["snapshot_anchor"]["value"] == "UNDETERMINED", a["snapshot_anchor"]["value"])
+        check(f"ORA-{code:05d}({kind}) → lag_observation 이 NONE 이 아니다",
+              a["lag_observation"]["value"] == "UNDETERMINED", a["lag_observation"]["value"])
+    # ORA-00904 는 그 뜻을 아는 probe 에서만 부재다 — 같은 코드가 축마다 다르게 읽힌다.
+    p = P(err("feat.standard_hash_sha256", 904))
+    check("같은 ORA-00904 라도 standard_hash 에서는 NONE",
+          ax.derive_axes(p, binding=BINDING)["hash_function"]["value"] == "NONE")
+
+
+def t_m3_typed_predicates():
+    print("\n[5d] M3-2 — probe 별 typed predicate: 행·값·문법을 따로 본다")
+    # query_ok=true 인데 행이 없다 / 값이 null 이다 / 값이 기대 형태가 아니다 — 셋은 서로
+    # 다른 사실이고 어느 것도 '기능 부재' 가 아니다.
+    check("행 없음 → EMPTY",
+          ax.classify({"probe": "nls.characterset", "query_ok": True,
+                       "row_present": False}) == "EMPTY")
+    check("값 null → EMPTY",
+          ax.classify({"probe": "nls.characterset", "query_ok": True,
+                       "value": None}) == "EMPTY")
+    check("문법 위반 → GRAMMAR",
+          ax.classify({"probe": "feat.rowdependencies_target", "query_ok": True,
+                       "value": "yes"}) == "GRAMMAR")
+    check("문법 충족 → OK",
+          ax.classify({"probe": "feat.rowdependencies_target", "query_ok": True,
+                       "value": "ENABLED"}) == "OK")
+    check("probe 가 해석 못 했다고 적으면 NOT_INTERPRETABLE",
+          ax.classify({"probe": "feat.standard_hash_sha256", "query_ok": True,
+                       "value": "deadbeef", "value_interpretable": False})
+          == "NOT_INTERPRETABLE")
+    # GRAMMAR 는 원천의 성질이 아니라 파싱 실패다 → successor 를 추정하지 않는다.
+    a = ax.derive_axes(P(ok("wm_column.type_facts", "타입을 못 읽었다")),
+                       binding=BINDING)["wm_successor"]
+    check("형태가 다른 type_facts 는 UNDETERMINED", a["value"] == "UNDETERMINED", a["value"])
+    check("추정하지 않았다고 남긴다", "추정하지 않는다" in a.get("note", ""), a.get("note", ""))
+    # 시험 벡터 불일치는 이 축에서만 부재의 증거다.
+    a2 = ax.derive_axes(P(ok("feat.standard_hash_sha256", "deadbeef",
+                             value_interpretable=False)), binding=BINDING)["hash_function"]
+    check("벡터 불일치 → hash_function=NONE", a2["value"] == "NONE", a2["value"])
+    # ORA_ROWSCN 은 읽혔으나 ROWDEPENDENCIES 를 못 읽으면 입도를 모른다 —
+    # 권한 부족을 DISABLED 로 읽어 BLOCK_LEVEL 을 확정하지 않는다.
+    a3 = ax.derive_axes(P(ok("feat.ora_rowscn_target", "1"),
+                          err("feat.rowdependencies_target", 1031)),
+                        binding=BINDING)["row_change_scn"]
+    check("rowdependencies 를 못 읽으면 입도는 UNDETERMINED",
+          a3["value"] == "UNDETERMINED", a3["value"])
+
+
+def t_m3_floor():
+    print("\n[5e] M3-3 — effective floor 는 값을 내리기만 한다")
+    p = P(ok("feat.fetch_first", "1"), ok("nls.characterset", "AL32UTF8"))
+    # floor 사유가 없으면 effective_value == value
+    a = ax.derive_axes(p, binding=BINDING, now="2026-08-30T00:00:00+00:00",
+                       measured_at="2026-08-29T00:00:00+00:00", ttl_seconds=86400 * 30)
+    check("사유가 없으면 effective_value == value",
+          a["sql_dialect"]["effective_value"] == "12C_PLUS", str(a["sql_dialect"])[:120])
+    check("stale=false", a["sql_dialect"]["stale"] is False)
+    check("freshness_basis=OPERATOR_DECLARED_TTL",
+          a["sql_dialect"]["freshness_basis"] == "OPERATOR_DECLARED_TTL")
+    # TTL 이 지나면 stale 이고 floor 로 내려간다
+    b = ax.derive_axes(p, binding=BINDING, now="2027-08-30T00:00:00+00:00",
+                       measured_at="2026-08-29T00:00:00+00:00", ttl_seconds=86400 * 30)
+    check("TTL 초과 → stale", b["sql_dialect"]["stale"] is True, str(b["sql_dialect"])[:120])
+    check("stale 이면 floor(11G)", b["sql_dialect"]["effective_value"] == "11G",
+          b["sql_dialect"]["effective_value"])
+    check("value 는 그대로 12C_PLUS(감사용)", b["sql_dialect"]["value"] == "12C_PLUS")
+    # floor 는 값을 올리지 않는다
+    check("UNDETERMINED 를 floor 로 올리지 않는다",
+          ax.floored_value("sql_dialect", "UNDETERMINED") == "UNDETERMINED")
+    check("이미 floor 보다 약한 값은 그대로",
+          ax.floored_value("snapshot_scope", "NONE") == "NONE")
+    check("floor 보다 강한 값은 내려간다",
+          ax.floored_value("snapshot_scope", "JOB") == "STATEMENT")
+    check("자유 값 축은 선언된 floor 로",
+          ax.floored_value("db_charset", "AL32UTF8") == "UNDETERMINED")
+    check("wm_successor 의 floor 는 UNDEFINED",
+          ax.floored_value("wm_successor", "TIMESTAMP(6)") == "UNDEFINED")
+    # 합성 축은 입력이 내려가면 같이 내려간다
+    c = ax.derive_axes(P(ok("feat.standard_hash_sha256", "ba7816bf")),
+                       binding=BINDING, floor_reasons=("CHILD_NOT_MEASURED",))
+    check("합성 축에 COMPOSITE_INPUT_FLOORED",
+          "COMPOSITE_INPUT_FLOORED" in c["canonical_row_compare"]["floor_reasons"],
+          str(c["canonical_row_compare"]["floor_reasons"]))
+    check("합성 축 effective_value 도 내려간다",
+          c["canonical_row_compare"]["effective_value"] == "NONE",
+          c["canonical_row_compare"]["effective_value"])
+    # 사유 이름은 표에 선언된 것만 쓴다
+    used = {r for v in c.values() for r in v["floor_reasons"]}
+    check("floor 사유가 전부 FLOOR_REASONS 에 있다", used <= set(ax.FLOOR_REASONS),
+          str(used - set(ax.FLOOR_REASONS)))
 
 
 def t_wm_successor_exact():
@@ -275,6 +386,7 @@ def main() -> int:
     for t in (t_no_readonly_txn_from_timestamp, t_no_as_of_scn_from_count, t_scn_positive,
               t_no_dg_stats_from_count, t_dg_positive, t_no_enforced_without_ora3172,
               t_enforced_positive, t_transient_is_not_none, t_unsupported_is_none,
+              t_m3_taxonomy_never_none, t_m3_typed_predicates, t_m3_floor,
               t_wm_successor_exact, t_unbound_table_axes,
               t_watermark_bound_independent_of_lag, t_composites, t_inputs_are_facts,
               t_empty_input, t_schema_agreement):

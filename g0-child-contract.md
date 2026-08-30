@@ -9,6 +9,14 @@
 > | M1-3 | **회차 집합 검사** — child 들이 서로 다른 회차·원천·판본·하네스면 거부 | `check_run_set()` |
 > | M1-4 | **run 별 불변 산출물 경로** — 경로에 `RUN_ID` 필수, 기존 파일 덮어쓰기 금지 | 래퍼가 생성 시, 집계기가 사후 |
 >
+> **2026-08-30 — 8차 M3 반영.** 집계기 쪽이 셋 강해졌다(§3 표 · §4 · §4.1).
+>
+> | M3 | 무엇 |
+> |---|---|
+> | M3-1 | child schema 를 어긴 산출물은 **본문 집계에 들어가지 않는다** — coverage 만 덮던 것을 고쳤다 |
+> | M3-3 | `effective_value` 가 실제로 floor 로 내려간다. 판정·publish 는 그 값만 읽는다 |
+> | M3-5 | 최종 레코드도 run 별 불변 경로. `current` 포인터는 **거부 시 INVALIDATED 로 덮인다** |
+>
 > **왜 `harness_digest` 가 따로 필요한가.** `versions.lock` 은 **실행 판본**(Spark·JDK·ojdbc)이지
 > 하네스 코드가 아니다. 프로브 SQL 이나 판정기를 고쳐도 lock digest 는 그대로다 — 그러면
 > **서로 다른 코드로 잰 값이 같은 판본으로 묶인다.**
@@ -113,6 +121,13 @@
 | `run_id` 가 child 들 사이에서 같은가 | **집계 거부**(exit 4) |
 | source identity(A 가 밝힌 것)가 다른 child 와 모순되지 않는가 | **집계 거부**(exit 4) |
 | 산출물이 자기 `expected` 를 채웠는가 | child `PARTIAL` 또는 `FAILED` |
+| child schema(`g0-child-schemas/`)를 지키는가 | **집계 거부**(exit 4) — 게다가 그 child 는 **본문 집계에 들어가지도 않는다**(8차 M3-1) |
+
+**M3-1 이 고친 순서.** 이전 판은 먼저 전부 집계하고 그 다음 `coverage` 만 `FAILED` 로 덮었다.
+그러면 coverage 는 정직해지지만 `account_privs`·`capability_axes`·`source`·`fence_facts` 는
+**schema 를 어긴 파일에서 뽑힌 값 그대로** 레코드에 남는다. 형태가 계약과 다른 산출물을 파싱한
+결과를 싣고서 "이 레코드는 무엇을 세었는가" 를 말할 수 없다. 지금은 통과한 산출물만 집계
+입력이 되고, 제외한 child 는 `warnings` 에 남는다.
 
 ### 3.1 `expected` — "한 줄이면 통과"를 막는 것
 
@@ -138,7 +153,33 @@ manifest 만으로는 B0 한 줄이 `MEASURED` 가 되는 것을 막지 못한�
 | **4** | **무효** — 계약 위반 또는 schema 위반 | **최종 경로에 쓰지 않는다.** `<out>.rejected.json` 으로만 남긴다 |
 
 **exit 0 은 "G0-0 을 완주했다"이지 "G0 PASS"가 아니다.** 레코드의 `gate_eligible` 은 항상
-`false` 이며 그것은 schema 의 `const` 다 — 도구가 그 값을 바꿀 방법이 없다.
+`false` 이며 그것은 schema 의 `const` 다 — 도구가 그 값을 바꿀 방법이 없다. 그리고
+`g0_final_gate.admit` 이 `record_type != g0_evidence` 를 **무조건** 거절하므로,
+`gate_eligible` 을 손으로 고쳐도 최종 게이트에는 들어가지 못한다(8차 M3-4).
+
+**exit 3 은 측정 완결성만 말한다**(8차 M3). "capability 를 못 정했다" 는 여기 섞지 않고
+레코드의 `outcome` 이 네 값으로 따로 낸다 — `process`(계약·schema 통과 여부) ·
+`measurement`(다섯 child 완결 여부) · `capability`(13축 `effective_value` 중 확정값 수) ·
+`final_gate`(언제나 `REJECTED_BY_CONTRACT`). 측정이 완결돼도 capability 가 `UNGRADED` 일 수
+있으며 그것은 실패가 아니라 결과다.
+
+### 4.1 회차 산출물과 current 포인터 (8차 M3-5)
+
+`--out` 은 **경로에 `RUN_ID` 가 있어야 하고 기존 파일을 덮지 않는다** — child 산출물에
+적용한 M1-4 를 최종 레코드에도 적용한 것이다. 고정 이름 하나를 계속 덮어쓰면 그 이름은
+여러 회차의 별칭이 된다.
+
+`--out` 옆(또는 `--current` 위치)에 포인터 파일을 쓴다. **소비자는 회차 파일이 아니라 이
+포인터를 읽는다.**
+
+| `status` | 언제 | 뜻 |
+|---|---|---|
+| `VALID` | exit 0/3 | `path`·`sha256` 이 가리키는 회차가 현재 유효하다 |
+| `INVALIDATED` | exit 4 | 마지막 정규화가 거부됐다. **이전 회차를 현재로 읽지 마라** |
+
+거부된 회차에서도 포인터를 반드시 쓴다는 것이 요점이다. 이전 판은 거부 시 최종 경로를
+건드리지 않았고, 그러면 이전 회차 파일이 그대로 남아 소비자에게는 여전히 '현재' 로 보였다 —
+무효한 재실행이 있었다는 사실은 어디에도 나타나지 않았다.
 
 ---
 
