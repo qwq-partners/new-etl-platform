@@ -1,0 +1,100 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "g0-child-b1.schema.json",
+ "title": "G0-0B1 child 산출물 — analyze-trace.py 의 evidence.json (문서 전체)",
+ "description": "8차 교차 리뷰 M1-1. child 산출물을 **집계 전에** 이 스키마로 검증한다 — 통과하지 못한 산출물은 집계 입력이 되지 못한다. B1 은 단일 JSON 문서다.",
+ "type": "object",
+ "required": [
+  "connections",
+  "by_path",
+  "findings",
+  "verdicts"
+ ],
+ "properties": {
+  "connections": {
+   "type": "array",
+   "description": "tracer 가 남긴 connection 라인. **0건이면 provider 가 한 번도 불리지 않은 것이고 그것은 판정 불가다**(MEASUREMENT_FAILED).",
+   "items": {
+    "type": "object",
+    "required": [
+     "path_guess"
+    ],
+    "properties": {
+     "path_guess": {
+      "enum": [
+       "SCHEMA",
+       "TASK",
+       "METADATA",
+       "MIXED",
+       "UNKNOWN"
+      ]
+     },
+     "run": {
+      "type": "string"
+     },
+     "injection_applied": {
+      "type": "boolean",
+      "description": "주입이 이 connection 에 실제로 닿았는가. **추정이 아니라 tracer 가 남긴 사실이다.**"
+     },
+     "fail_mode": {
+      "type": "string"
+     },
+     "preamble_error": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "open_error": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "raw_stack": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "additionalProperties": true
+   }
+  },
+  "by_path": {
+   "type": "object"
+  },
+  "preamble_ok_by_path": {
+   "type": "object"
+  },
+  "findings": {
+   "type": "array",
+   "items": {
+    "type": "object"
+   }
+  },
+  "verdicts": {
+   "type": "object",
+   "description": "성질별로 나뉜 판정(7차 P0-06). 하나의 coverage 로 네 질문에 답하지 않는다.",
+   "properties": {
+    "provider_reachability": {
+     "type": "string"
+    },
+    "session_assertion": {
+     "type": "string"
+    },
+    "fail_closed": {
+     "type": "string"
+    },
+    "read_only_transaction": {
+     "type": "string"
+    },
+    "common_snapshot": {
+     "type": "string"
+    }
+   },
+   "additionalProperties": true
+  }
+ },
+ "additionalProperties": true
+}

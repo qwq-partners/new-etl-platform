@@ -32,17 +32,30 @@ def sha(p: pathlib.Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+SOURCE_ID = "TESTSTBY"
+HARNESS = "b" * 64
+
+
 def write_manifest(art: pathlib.Path, child: str, *, run_id=RUN_ID, profile=PROFILE,
-                   lock_digest: str, exit_code=0, artifact_sha: str | None = None) -> None:
-    art.with_name(art.name + ".manifest.json").write_text(json.dumps({
+                   lock_digest: str, exit_code=0, artifact_sha: str | None = None,
+                   source_id: str = SOURCE_ID, harness_digest: str = HARNESS,
+                   overwrote: bool = False, drop: tuple[str, ...] = ()) -> None:
+    """`drop` 으로 필드를 빼면 M1-2 결속 검사를 반례로 시험할 수 있다."""
+    man = {
         "schema_version": "1.0.0", "record_type": "g0_child_manifest",
         "child": child, "run_id": run_id, "profile": profile,
         "started_at": "2026-08-27T00:00:00+00:00", "ended_at": "2026-08-27T00:01:00+00:00",
         "exit_code": exit_code, "versions_lock_digest": lock_digest,
+        "source_id": source_id, "harness_digest": harness_digest,
+        "overwrote_existing": overwrote,
         "artifact": {"path": str(art), "sha256": artifact_sha or sha(art),
                      "lines": len(art.read_text(encoding="utf-8").splitlines())},
         "runtime": {"uname": "test"}, "command": ["test"],
-    }, ensure_ascii=False), encoding="utf-8")
+    }
+    for k in drop:
+        man.pop(k, None)
+    art.with_name(art.name + ".manifest.json").write_text(
+        json.dumps(man, ensure_ascii=False), encoding="utf-8")
 
 
 def run_norm(work: pathlib.Path, **kw) -> tuple[int, dict, str]:
@@ -96,7 +109,7 @@ def t_jsonschema_present() -> None:
 def t_b0_one_line() -> None:
     print("\n[1] B0 한 줄 → MEASURED 금지 (이전 판은 통과시켰다)")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "b0.json"; art.write_text('{"step":"S1","ok":true}\n', encoding="utf-8")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"probe":"S1","ok":true}\n', encoding="utf-8")
     write_manifest(art, "G0_0B0", lock_digest=ld)
     rc, out, _ = run_norm(w, b0=art)
     st = (out.get("coverage") or {}).get("g0_0b0")
@@ -106,23 +119,35 @@ def t_b0_one_line() -> None:
 
 
 def t_b1_fabricated() -> None:
-    print("\n[2] B1 이 verdict 만 담은 파일 → FAILED (이전 판은 MEASURED)")
+    print("\n[2] B1 이 verdict 만 담은 파일 → **child schema 단계에서 거부**(8차 M1-1)")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "b1.json"; art.write_text('{"verdict":{"coverage":"PROVEN"}}', encoding="utf-8")
+    art = w / f"b1-{RUN_ID}.json"; art.write_text('{"verdict":{"coverage":"PROVEN"}}', encoding="utf-8")
     write_manifest(art, "G0_0B1", lock_digest=ld)
     rc, out, _ = run_norm(w, b1=art)
-    st = (out.get("coverage") or {}).get("g0_0b1")
-    check("b1 이 FAILED 다", st == "FAILED", f"status={st}")
+    # 7차 판에서는 집계까지 가서 coverage=FAILED 였다. 8차 M1-1 로 **집계 전에** 걸린다 —
+    # connections·by_path·findings·verdicts 가 없는 파일은 B1 산출물의 형태가 아니다.
+    check("exit 4(계약 위반) — 집계까지 가지 않는다", rc == 4, f"rc={rc}")
+    check("사유가 child schema 위반",
+          any("child schema" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:220])
     shutil.rmtree(w)
 
 
 def t_b1_no_failclosed() -> None:
     print("\n[3] B1 이 coverage 회차만 관측 → MEASURED 금지")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "b1.json"
-    art.write_text(json.dumps({"verdict": {"coverage": "PROVEN"}, "by_path": {"SCHEMA": 3, "TASK": 4},
-                               "preamble_ok_by_path": {"SCHEMA": "3/3"},
-                               "runs_seen": {"coverage": 7}}), encoding="utf-8")
+    art = w / f"b1-{RUN_ID}.json"
+    # child schema 를 만족하는 **현실적인** 산출물이어야 한다(8차 M1-1). 그래야 이 시험이
+    # 형태가 아니라 **판정**(failclosed 미관측 → MEASURED 금지)을 시험하게 된다.
+    art.write_text(json.dumps({
+        "connections": [{"path_guess": "SCHEMA", "run": "coverage", "injection_applied": False},
+                        {"path_guess": "TASK", "run": "coverage", "injection_applied": False}],
+        "by_path": {"SCHEMA": 3, "TASK": 4},
+        "preamble_ok_by_path": {"SCHEMA": "3/3"},
+        "findings": [],
+        "verdicts": {"provider_reachability": "PROVEN", "fail_closed": "NOT_TESTED"},
+        "verdict": {"coverage": "PROVEN"},
+        "runs_seen": {"coverage": 7}}), encoding="utf-8")
     write_manifest(art, "G0_0B1", lock_digest=ld)
     rc, out, _ = run_norm(w, b1=art)
     st = (out.get("coverage") or {}).get("g0_0b1")
@@ -133,7 +158,7 @@ def t_b1_no_failclosed() -> None:
 def t_c00_summary_only() -> None:
     print("\n[4] C00 summary 한 줄 → MEASURED 금지 (이전 판은 통과)")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "c00.log"
+    art = w / f"c00-{RUN_ID}.log"
     art.write_text('{"probe":"fence.summary","ack_full_scan":true}\n', encoding="utf-8")
     write_manifest(art, "G0_0C00", lock_digest=ld)
     rc, out, _ = run_norm(w, c00=art)
@@ -145,7 +170,7 @@ def t_c00_summary_only() -> None:
 def t_ce_empty_pass() -> None:
     print("\n[5] CE 가 scenario 0개로 pass=true → FAILED (이전 판은 MEASURED)")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "ce.json"
+    art = w / f"ce-{RUN_ID}.json"
     art.write_text(json.dumps({"suite_verdict": {"pass": True}, "scenarios": []}), encoding="utf-8")
     write_manifest(art, "G0_0C_SUITE", lock_digest=ld)
     rc, out, _ = run_norm(w, c_suite=art)
@@ -157,7 +182,7 @@ def t_ce_empty_pass() -> None:
 def t_ce_bad_returncode() -> None:
     print("\n[6] CE 시나리오가 exit != 0 → 계약 위반으로 거부")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "ce.json"
+    art = w / f"ce-{RUN_ID}.json"
     art.write_text(json.dumps({"suite_verdict": {"pass": True}, "scenarios": [
         {"id": "CE01", "outcome": "MITIGATION_HOLDS", "child_returncode": 1}]}), encoding="utf-8")
     write_manifest(art, "G0_0C_SUITE", lock_digest=ld)
@@ -170,7 +195,7 @@ def t_ce_bad_returncode() -> None:
 def t_a_no_sentinel() -> None:
     print("\n[7] A 가 sentinel 없음 → PARTIAL ∧ 축은 전부 UNDETERMINED")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "a.log"
+    art = w / f"a-{RUN_ID}.log"
     art.write_text('{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ORCL"}\n'
                    '{"probe_summary":{"expected":86,"emitted":86,"manifest_ok":true}}\n',
                    encoding="utf-8")
@@ -189,7 +214,7 @@ def t_a_no_sentinel() -> None:
 def t_a_duplicate_probe() -> None:
     print("\n[8] A 에 probe id 중복 → 거부 (마지막 값이 이기는 조립 금지)")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "a.log"
+    art = w / f"a-{RUN_ID}.log"
     art.write_text('{"probe":"x","query_ok":true,"value":"1"}\n'
                    '{"probe":"x","query_ok":true,"value":"2"}\n'
                    '{"probe_summary":{"expected":2,"emitted":2,"manifest_ok":true}}\n'
@@ -205,7 +230,7 @@ def t_a_duplicate_probe() -> None:
 def t_missing_manifest() -> None:
     print("\n[9] manifest 사이드카 없음 → 계약 위반 거부")
     w = new_work()
-    art = w / "b0.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
     rc, out, err = run_norm(w, b0=art)
     check("exit 4(거부)", rc == 4, f"rc={rc}")
     check("사유가 manifest 부재", "manifest" in err, err[:120])
@@ -215,7 +240,7 @@ def t_missing_manifest() -> None:
 def t_lock_mismatch() -> None:
     print("\n[10] child 실행 시점 lock 과 집계 시점 lock 이 다름 → 거부")
     w = new_work()
-    art = w / "b0.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
     write_manifest(art, "G0_0B0", lock_digest="0" * 64)
     rc, out, err = run_norm(w, b0=art)
     check("exit 4(거부)", rc == 4, f"rc={rc}")
@@ -226,7 +251,7 @@ def t_lock_mismatch() -> None:
 def t_run_id_mismatch() -> None:
     print("\n[11] run_id 불일치 → 거부 (다른 회차 산출물 혼합)")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "b0.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
     write_manifest(art, "G0_0B0", run_id="RUN-OTHER", lock_digest=ld)
     rc, out, err = run_norm(w, b0=art)
     check("exit 4(거부)", rc == 4, f"rc={rc}")
@@ -237,7 +262,7 @@ def t_run_id_mismatch() -> None:
 def t_artifact_tampered() -> None:
     print("\n[12] 실행 후 산출물이 바뀜 → 거부")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "b0.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
     write_manifest(art, "G0_0B0", lock_digest=ld)
     art.write_text('{"step":"S1","ok":true}\n', encoding="utf-8")   # 사후 변조
     rc, out, err = run_norm(w, b0=art)
@@ -249,7 +274,7 @@ def t_artifact_tampered() -> None:
 def t_child_nonzero_exit() -> None:
     print("\n[13] child 가 0 이 아닌 코드로 끝남 → 거부")
     w = new_work(); ld = sha(w / "versions.lock")
-    art = w / "b0.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"step":"S1"}\n', encoding="utf-8")
     write_manifest(art, "G0_0B0", lock_digest=ld, exit_code=2)
     rc, out, err = run_norm(w, b0=art)
     check("exit 4(거부)", rc == 4, f"rc={rc}")
@@ -293,7 +318,7 @@ def t_positive_control() -> None:
     print("\n[16] 양성 대조 — 제대로 된 산출물은 통과해야 한다")
     w = new_work(); ld = sha(w / "versions.lock")
 
-    a_art = w / "a.log"
+    a_art = w / f"a-{RUN_ID}.log"
     a_art.write_text(
         '{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ETLSTB"}\n'
         '{"probe":"userenv.DATABASE_ROLE","query_ok":true,"value":"PHYSICAL STANDBY"}\n'
@@ -302,22 +327,35 @@ def t_positive_control() -> None:
         '{"probe_run_end":"G0-0A","status":"reached_end"}\n', encoding="utf-8")
     write_manifest(a_art, "G0_0A", lock_digest=ld)
 
-    b0 = w / "b0.json"
+    b0 = w / f"b0-{RUN_ID}.json"
     b0.write_text(json.dumps({"b0_summary": {"expected_steps": ["S0", "S1"],
                                              "emitted_steps": ["S0", "S1"]}}) + "\n",
                   encoding="utf-8")
     write_manifest(b0, "G0_0B0", lock_digest=ld)
 
-    b1 = w / "b1.json"
-    b1.write_text(json.dumps({"verdict": {"coverage": "PROVEN"},
-                              "by_path": {"SCHEMA": 3, "TASK": 4},
-                              "preamble_ok_by_path": {"SCHEMA": "3/3", "TASK": "4/4"},
-                              # 조치 5 이후의 실제 회차 이름
-                              "runs_seen": {"coverage": 7, "failclosed_schema": 2,
-                                            "failclosed_task": 3}}), encoding="utf-8")
+    b1 = w / f"b1-{RUN_ID}.json"
+    b1.write_text(json.dumps({
+        # child schema(8차 M1-1)를 만족하는 현실적인 산출물.
+        "connections": [
+            {"path_guess": "SCHEMA", "run": "coverage", "injection_applied": False},
+            {"path_guess": "TASK", "run": "coverage", "injection_applied": False},
+            {"path_guess": "SCHEMA", "run": "failclosed_schema", "injection_applied": True,
+             "preamble_error": "forced"},
+            {"path_guess": "TASK", "run": "failclosed_task", "injection_applied": True,
+             "preamble_error": "forced"}],
+        "by_path": {"SCHEMA": 3, "TASK": 4},
+        "preamble_ok_by_path": {"SCHEMA": "3/3", "TASK": "4/4"},
+        "findings": [],
+        "verdicts": {"provider_reachability": "PROVEN", "session_assertion": "PROVEN",
+                     "fail_closed": "PROVEN", "read_only_transaction": "NOT_IMPLEMENTED",
+                     "common_snapshot": "NOT_IMPLEMENTED"},
+        "verdict": {"coverage": "PROVEN"},
+        # 조치 5 이후의 실제 회차 이름
+        "runs_seen": {"coverage": 7, "failclosed_schema": 2,
+                      "failclosed_task": 3}}), encoding="utf-8")
     write_manifest(b1, "G0_0B1", lock_digest=ld)
 
-    c00 = w / "c00.log"
+    c00 = w / f"c00-{RUN_ID}.log"
     c00.write_text(
         '{"probe":"fence.max_wm","query_ok":true,"value":"2026-08-27 00:00:00.000000"}\n'
         '{"probe":"fence.rows_at_max_wm","query_ok":true,"value":1}\n'
@@ -328,7 +366,7 @@ def t_positive_control() -> None:
         '"fence.rows_at_max_wm"]}\n', encoding="utf-8")
     write_manifest(c00, "G0_0C00", lock_digest=ld)
 
-    ce = w / "ce.json"
+    ce = w / f"ce-{RUN_ID}.json"
     ce.write_text(json.dumps({"suite_verdict": {"pass": True}, "scenarios": [
         {"id": "CE01", "outcome": "MITIGATION_HOLDS", "child_returncode": 0},
         {"id": "CE02", "outcome": "MITIGATION_HOLDS", "child_returncode": 0}]}), encoding="utf-8")
@@ -370,11 +408,16 @@ def t_b1_path_split_runs() -> None:
             ({"coverage": 7, "failclosed": 3}, "MEASURED", "옛 이름(호환)"),
             ({"coverage": 7}, "PARTIAL", "failclosed 회차 없음")):
         w = new_work(); ld = sha(w / "versions.lock")
-        art = w / "b1.json"
-        art.write_text(json.dumps({"verdict": {"coverage": "PROVEN"},
-                                   "by_path": {"SCHEMA": 3, "TASK": 4},
-                                   "preamble_ok_by_path": {"SCHEMA": "3/3", "TASK": "4/4"},
-                                   "runs_seen": runs}), encoding="utf-8")
+        art = w / f"b1-{RUN_ID}.json"
+        art.write_text(json.dumps({
+            "connections": [{"path_guess": "SCHEMA", "run": r, "injection_applied": False}
+                            for r in runs],
+            "by_path": {"SCHEMA": 3, "TASK": 4},
+            "preamble_ok_by_path": {"SCHEMA": "3/3", "TASK": "4/4"},
+            "findings": [],
+            "verdicts": {"provider_reachability": "PROVEN"},
+            "verdict": {"coverage": "PROVEN"},
+            "runs_seen": runs}), encoding="utf-8")
         write_manifest(art, "G0_0B1", lock_digest=ld)
         rc, out, _ = run_norm(w, b1=art)
         st = (out.get("coverage") or {}).get("g0_0b1")
@@ -386,7 +429,7 @@ def t_axes_derived_in_record() -> None:
     """축이 실제 probe 에서 파생돼 레코드에 담기는가 — 조치 3 통합 확인."""
     print("\n[17] 축 파생이 레코드에 반영된다 (조치 3)")
     w = new_work(); ld = sha(w / "versions.lock")
-    a_art = w / "a.log"
+    a_art = w / f"a-{RUN_ID}.log"
     a_art.write_text(
         '{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ETLSTB"}\n'
         '{"probe":"dbms_flashback.get_scn","query_ok":true,"value":"9912345",'
@@ -433,16 +476,163 @@ def t_axes_derived_in_record() -> None:
     shutil.rmtree(w)
 
 
+# ── 8차 M1: child evidence contract 반례 ─────────────────────────────
+def t_m1_no_source_id() -> None:
+    print("\n[20] M1-2 — manifest 에 source_id 가 없으면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"probe":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0B0", lock_digest=ld, drop=("source_id",))
+    rc, out, _ = run_norm(w, b0=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 source_id",
+          any("source_id" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_m1_no_harness_digest() -> None:
+    print("\n[21] M1-2 — harness_digest 가 없으면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"probe":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0B0", lock_digest=ld, drop=("harness_digest",))
+    rc, out, _ = run_norm(w, b0=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 harness_digest",
+          any("harness_digest" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_m1_source_mismatch() -> None:
+    print("\n[22] M1-3 — child 들의 source_id 가 다르면 거부 (**각자는 일관되다**)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    a0 = w / f"b0-{RUN_ID}.json"; a0.write_text('{"step":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(a0, "G0_0B0", lock_digest=ld, source_id="STBY_A")
+    a1 = w / f"b1-{RUN_ID}.json"; a1.write_text('{"connections":[]}', encoding="utf-8")
+    write_manifest(a1, "G0_0B1", lock_digest=ld, source_id="STBY_B")
+    rc, out, _ = run_norm(w, b0=a0, b1=a1)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    viols = " ".join(out.get("contract_violations", []))
+    check("사유가 '서로 다른 원천'", "다른 원천" in viols, viols[:250])
+    check("두 값을 모두 적는다", "STBY_A" in viols and "STBY_B" in viols, viols[:250])
+    shutil.rmtree(w)
+
+
+def t_m1_harness_mismatch() -> None:
+    print("\n[23] M1-3 — child 들의 harness_digest 가 다르면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    a0 = w / f"b0-{RUN_ID}.json"; a0.write_text('{"step":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(a0, "G0_0B0", lock_digest=ld, harness_digest="a" * 64)
+    a1 = w / f"b1-{RUN_ID}.json"; a1.write_text('{"connections":[]}', encoding="utf-8")
+    write_manifest(a1, "G0_0B1", lock_digest=ld, harness_digest="c" * 64)
+    rc, out, _ = run_norm(w, b0=a0, b1=a1)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 '다른 하네스 코드'",
+          "하네스 코드" in " ".join(out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:250])
+    shutil.rmtree(w)
+
+
+def t_m1_expected_source_mismatch() -> None:
+    print("\n[24] M1-2 — --source-id 를 주면 그것과도 대조한다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"probe":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0B0", lock_digest=ld, source_id="STBY_A")
+    rc, out, _ = run_norm(w, b0=art, source_id="STBY_B")
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 source_id 불일치",
+          any("source_id 불일치" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_m1_path_without_run_id() -> None:
+    print("\n[25] M1-4 — 산출물 경로에 run_id 가 없으면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / "b0.json"; art.write_text('{"step":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0B0", lock_digest=ld)
+    rc, out, _ = run_norm(w, b0=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 run_id 경로",
+          any("run_id 가 없다" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_m1_overwrote() -> None:
+    print("\n[26] M1-4 — 기존 산출물을 덮어썼으면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"probe":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0B0", lock_digest=ld, overwrote=True)
+    rc, out, _ = run_norm(w, b0=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 덮어쓰기",
+          any("덮어썼다" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_m1_no_timestamps() -> None:
+    print("\n[27] M1-2 — started_at/ended_at 이 없으면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"b0-{RUN_ID}.json"; art.write_text('{"probe":"S1","ok":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0B0", lock_digest=ld, drop=("started_at",))
+    rc, out, _ = run_norm(w, b0=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 started_at/ended_at",
+          any("started_at" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_m1_child_schema_missing_key() -> None:
+    print("\n[28] M1-1 — child 산출물이 자기 스키마를 어기면 **집계 전에** 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    # A 의 probe 줄에 probe id 가 비어 있다 — 그러면 중복 검사도 의미가 없어진다.
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text('{"probe":"","ok":true}\n'
+                   '{"probe_summary":{"expected":1,"emitted":1,"manifest_ok":true}}\n'
+                   '{"probe_run_end":true}\n', encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld)
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 child schema 위반",
+          any("child schema" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:220])
+    shutil.rmtree(w)
+
+
+def t_m1_child_schema_files_exist() -> None:
+    print("\n[29] M1-1 — A/B0/B1/C00 개별 스키마가 실재한다")
+    d = NORM.parent / "g0-child-schemas"
+    for f in ("g0-child-a.schema.json", "g0-child-b0.schema.json",
+              "g0-child-b1.schema.json", "g0-child-c00.schema.json"):
+        p = d / f
+        ok = p.is_file()
+        check(f"{f} 존재", ok)
+        if ok:
+            try:
+                doc = json.loads(p.read_text(encoding="utf-8"))
+                check(f"{f} 가 유효한 JSON Schema", "$schema" in doc and "title" in doc)
+            except json.JSONDecodeError as e:
+                check(f"{f} 가 유효한 JSON Schema", False, str(e))
+
+
 def main() -> int:
     print("=" * 70)
-    print("g0-normalize.py 반례 회귀 시험 — 7차 교차 리뷰 §5.1")
+    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1")
     print("=" * 70)
     for t in (t_jsonschema_present, t_b0_one_line, t_b1_fabricated, t_b1_no_failclosed,
               t_c00_summary_only, t_ce_empty_pass, t_ce_bad_returncode, t_a_no_sentinel,
               t_a_duplicate_probe, t_missing_manifest, t_lock_mismatch, t_run_id_mismatch,
               t_artifact_tampered, t_child_nonzero_exit, t_nothing_run,
               t_lock_unset_comment_only, t_positive_control, t_b1_path_split_runs,
-              t_axes_derived_in_record):
+              t_axes_derived_in_record,
+              # 8차 M1
+              t_m1_no_source_id, t_m1_no_harness_digest, t_m1_source_mismatch,
+              t_m1_harness_mismatch, t_m1_expected_source_mismatch,
+              t_m1_path_without_run_id, t_m1_overwrote, t_m1_no_timestamps,
+              t_m1_child_schema_missing_key, t_m1_child_schema_files_exist):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

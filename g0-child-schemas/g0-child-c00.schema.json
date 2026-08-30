@@ -1,0 +1,46 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "g0-child-c00.schema.json",
+ "title": "G0-0C00 child 산출물 — JSONL 한 줄",
+ "description": "8차 교차 리뷰 M1-1. child 산출물을 **집계 전에** 이 스키마로 검증한다 — 통과하지 못한 산출물은 집계 입력이 되지 못한다. C00 은 fence fact spool 로그다.",
+ "type": "object",
+ "required": [
+  "probe"
+ ],
+ "properties": {
+  "probe": {
+   "type": "string",
+   "minLength": 1
+  },
+  "ok": {
+   "type": "boolean"
+  },
+  "value": {},
+  "skipped": {
+   "type": "boolean",
+   "description": "분기 조건 때문에 실행하지 않은 probe. expected 에서 빼는 근거다."
+  },
+  "sqlcode": {
+   "type": [
+    "integer",
+    "string",
+    "null"
+   ]
+  },
+  "error": {
+   "type": "string"
+  },
+  "expected_probes": {
+   "type": "integer",
+   "minimum": 0
+  },
+  "expected_probe_ids": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   },
+   "description": "fence.summary 에만 있다. **분기 조건에서 파생한 값이어야 한다** — 상수면 분기를 반영하지 못한다."
+  }
+ },
+ "additionalProperties": true
+}

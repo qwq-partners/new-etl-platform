@@ -178,23 +178,78 @@ check("run.sh 가 tee 뒤에서 PIPESTATUS 로 producer exit 를 잡는다",
       "PIPESTATUS[0]" in runsh)
 
 # 래퍼가 실제로 비0 을 보존하는지 — 껍데기 명령으로 확인
+# **래퍼는 M1 계약도 요구한다**: G0_SOURCE_ID · 경로에 RUN_ID · 기존 산출물 비덮어쓰기.
+import json as _json
+
+RID = "RUN-M0-TEST"
+WRAP_ENV = {"G0_SOURCE_ID": "TESTSTBY"}
+
 with tempfile.TemporaryDirectory() as td:
-    art = Path(td) / "a.json"
-    art.write_text("{}", encoding="utf-8")
-    r = run(["bash", str(HERE / "g0-run-child.sh"), "G0_0B0", "RUN-M0-TEST",
+    art = Path(td) / f"a-{RID}.json"
+    r = run(["bash", str(HERE / "g0-run-child.sh"), "G0_0B0", RID,
              "SANDBOX_CONTAINER", str(art), "--",
-             sys.executable, "-c", "import sys; sys.exit(3)"])
+             sys.executable, "-c",
+             f"open({str(art)!r},'w').write('{{}}'); import sys; sys.exit(3)"],
+            env=WRAP_ENV)
     check("child 가 3 으로 끝나면 래퍼도 3 으로 끝난다", r.returncode == 3,
-          f"returncode={r.returncode}")
+          f"returncode={r.returncode}\n{r.stderr[-300:]}")
     man = Path(str(art) + ".manifest.json")
     if man.is_file():
-        import json
-        m = json.loads(man.read_text(encoding="utf-8"))
+        m = _json.loads(man.read_text(encoding="utf-8"))
         check("manifest 의 exit_code 가 3 이다", m.get("exit_code") == 3, str(m.get("exit_code")))
     else:
         check("manifest 가 생성된다", False)
 
-print("\n[7] M0-6 — README 의 probe 수와 실행 명령")
+print("\n[8] M1 — 래퍼가 증거 결속을 강제한다 (8차 M1-2·M1-4)")
+
+with tempfile.TemporaryDirectory() as td:
+    art = Path(td) / f"a-{RID}.json"
+    # G0_SOURCE_ID 없이
+    r = run(["bash", str(HERE / "g0-run-child.sh"), "G0_0B0", RID,
+             "SANDBOX_CONTAINER", str(art), "--", sys.executable, "-c", "pass"],
+            env={"G0_SOURCE_ID": ""})
+    check("G0_SOURCE_ID 없이 → exit 2", r.returncode == 2, f"returncode={r.returncode}")
+    check("사유가 G0_SOURCE_ID", "G0_SOURCE_ID" in (r.stdout + r.stderr))
+
+    # 경로에 RUN_ID 가 없으면
+    bad = Path(td) / "a.json"
+    r = run(["bash", str(HERE / "g0-run-child.sh"), "G0_0B0", RID,
+             "SANDBOX_CONTAINER", str(bad), "--", sys.executable, "-c", "pass"],
+            env=WRAP_ENV)
+    check("산출물 경로에 RUN_ID 가 없으면 → exit 2", r.returncode == 2,
+          f"returncode={r.returncode}")
+    check("사유가 RUN_ID 경로", "RUN_ID" in (r.stdout + r.stderr))
+
+    # 이미 있는 산출물은 덮지 않는다
+    exist = Path(td) / f"b-{RID}.json"
+    exist.write_text("{}", encoding="utf-8")
+    r = run(["bash", str(HERE / "g0-run-child.sh"), "G0_0B0", RID,
+             "SANDBOX_CONTAINER", str(exist), "--", sys.executable, "-c", "pass"],
+            env=WRAP_ENV)
+    check("기존 산출물이 있으면 → exit 2 (회차 산출물은 불변)", r.returncode == 2,
+          f"returncode={r.returncode}")
+    check("새 RUN_ID 를 쓰라고 안내한다", "새 RUN_ID" in (r.stdout + r.stderr))
+
+    # manifest 에 M1 필드가 들어간다
+    ok = Path(td) / f"c-{RID}.json"
+    r = run(["bash", str(HERE / "g0-run-child.sh"), "G0_0B0", RID,
+             "SANDBOX_CONTAINER", str(ok), "--",
+             sys.executable, "-c", f"open({str(ok)!r},'w').write('{{}}')"],
+            env=WRAP_ENV)
+    m2 = Path(str(ok) + ".manifest.json")
+    if m2.is_file():
+        d = _json.loads(m2.read_text(encoding="utf-8"))
+        check("manifest 에 source_id 가 있다", d.get("source_id") == "TESTSTBY", str(d.get("source_id")))
+        check("manifest 에 harness_digest 가 있다",
+              isinstance(d.get("harness_digest"), str) and len(d["harness_digest"]) == 64,
+              str(d.get("harness_digest"))[:40])
+        check("manifest 에 started_at·ended_at 이 있다",
+              bool(d.get("started_at")) and bool(d.get("ended_at")))
+        check("manifest 에 overwrote_existing 이 있다", "overwrote_existing" in d)
+    else:
+        check("manifest 가 생성된다(M1 필드 확인)", False, r.stderr[-300:])
+
+print("\n[9] M0-6 — README 의 probe 수와 실행 명령")
 
 rd = (HERE / "README.md").read_text(encoding="utf-8")
 check("README 가 87 probe 로 적혀 있다", "87 probe" in rd)

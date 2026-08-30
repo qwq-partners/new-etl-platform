@@ -1,0 +1,72 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "g0-child-b0.schema.json",
+ "title": "G0-0B0 child 산출물 — JSONL 한 줄",
+ "description": "8차 교차 리뷰 M1-1. child 산출물을 **집계 전에** 이 스키마로 검증한다 — 통과하지 못한 산출물은 집계 입력이 되지 못한다. B0 도 줄 단위(PROBE …)로 낸다.",
+ "type": "object",
+ "oneOf": [
+  {
+   "required": [
+    "probe"
+   ],
+   "properties": {
+    "probe": {
+     "type": "string",
+     "minLength": 1
+    },
+    "ok": {
+     "type": "boolean"
+    },
+    "value": {},
+    "error": {
+     "type": "string"
+    },
+    "note": {
+     "type": "string"
+    }
+   },
+   "additionalProperties": true
+  },
+  {
+   "required": [
+    "b0_summary"
+   ],
+   "properties": {
+    "b0_summary": {
+     "type": "object",
+     "required": [
+      "expected_steps",
+      "emitted_steps"
+     ],
+     "properties": {
+      "expected_steps": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "minItems": 1,
+       "description": "**무엇을 낼 예정이었는가.** 이것이 없으면 완주 여부를 판정할 수 없다(7차 P0-02). S-1.identity_preflight 가 포함돼야 한다(8차 M0-4)."
+      },
+      "emitted_steps": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "missing_steps": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "skipped_slow": {
+       "type": "boolean"
+      }
+     },
+     "additionalProperties": true
+    }
+   },
+   "additionalProperties": true
+  }
+ ]
+}

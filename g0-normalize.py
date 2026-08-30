@@ -72,6 +72,8 @@ NOT_COVERED = [
 
 CHILD_KEYS = [("g0_0a", "G0_0A", "a"), ("g0_0b0", "G0_0B0", "b0"), ("g0_0b1", "G0_0B1", "b1"),
               ("g0_0c00", "G0_0C00", "c00"), ("g0_0c_suite", "G0_0C_SUITE", "c_suite")]
+# check_run_set 이 '계약에 없는 child' 를 가리는 데 쓴다(8차 M1-3).
+CHILD_CONSTS = [k for k, _c, _a in CHILD_KEYS]
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -135,7 +137,8 @@ def read_manifest(art: pathlib.Path) -> dict | None:
 
 
 def check_child(child_const: str, art: pathlib.Path,
-                run_id: str, profile: str, lock_digest: str) -> tuple[dict, list[str]]:
+                run_id: str, profile: str, lock_digest: str,
+                source_id: str = "", harness_digest: str = "") -> tuple[dict, list[str]]:
     """manifest 를 읽고 계약을 대조한다.
 
     반환: (children[...] 레코드, 계약 위반 목록). 위반이 있으면 그 child 는 coverage 에서
@@ -160,6 +163,12 @@ def check_child(child_const: str, art: pathlib.Path,
         "artifact_verified": declared == actual,
         "runtime": {k: str(v) for k, v in (man.get("runtime") or {}).items()
                     if isinstance(k, str)},
+        # M1-2 — 어느 원천에서, 어느 하네스 코드로 잰 값인가.
+        "source_id": str(man.get("source_id", "")),
+        "harness_digest": str(man.get("harness_digest", "MISSING")),
+        "started_at": str(man.get("started_at", "")),
+        "ended_at": str(man.get("ended_at", "")),
+        "overwrote_existing": bool(man.get("overwrote_existing", False)),
     }
     measured = str(man.get("ended_at") or man.get("started_at") or "")
     if measured:
@@ -183,7 +192,140 @@ def check_child(child_const: str, art: pathlib.Path,
     if rec["exit_code"] != 0:
         V.append(f"{child_const}: exit_code={rec['exit_code']} — 실행이 성공으로 끝나지 않았다")
 
+    # ── M1-2: source·harness·시각 결속 ──────────────────────────────
+    if not rec["source_id"]:
+        V.append(f"{child_const}: manifest 에 source_id 가 없다 — **어느 원천에서 잰 값인지 "
+                 f"말하지 못한다.** 여러 원천의 산출물을 한 회차로 섞어도 알 수 없다(8차 M1-2)")
+    elif source_id and rec["source_id"] != source_id:
+        V.append(f"{child_const}: source_id 불일치 (manifest={rec['source_id']!r}, "
+                 f"요청={source_id!r}) — 서로 다른 원천의 산출물을 섞었다")
+
+    if rec["harness_digest"] in ("", "MISSING", "NO_HARNESS_FILES"):
+        V.append(f"{child_const}: manifest 에 harness_digest 가 없다 — versions.lock 은 "
+                 f"실행 판본이지 하네스 코드가 아니다. 프로브를 고쳐도 lock digest 는 "
+                 f"그대로이므로, 이것이 없으면 다른 코드로 잰 값이 같은 판본으로 묶인다(8차 M1-2)")
+    elif harness_digest and rec["harness_digest"] != harness_digest:
+        V.append(f"{child_const}: harness_digest 불일치 "
+                 f"(child={rec['harness_digest'][:16]}…, 지금={harness_digest[:16]}…) — "
+                 f"이 산출물을 만든 하네스와 지금 하네스가 다르다")
+
+    if not (rec["started_at"] and rec["ended_at"]):
+        V.append(f"{child_const}: manifest 에 started_at/ended_at 이 모두 있어야 한다(8차 M1-2)")
+
+    if rec["overwrote_existing"]:
+        V.append(f"{child_const}: 기존 산출물을 덮어썼다(G0_ALLOW_OVERWRITE=1). "
+                 f"회차 산출물은 불변이어야 한다 — 덮인 회차의 증거는 복구할 수 없다(8차 M1-4)")
+
+    # ── M1-4: run 별 경로 ───────────────────────────────────────────
+    if run_id and run_id not in str(art):
+        V.append(f"{child_const}: 산출물 경로에 run_id 가 없다({art}) — 회차마다 다른 경로가 "
+                 f"아니면 이전 회차가 덮였는지 사후에 말할 수 없다(8차 M1-4)")
+
     return rec, V
+
+
+# ── M1-1: child 별 개별 schema ───────────────────────────────────────
+# 산출물 형태가 child 마다 다르므로 스키마도 child 마다 다르다. **집계 전에** 건다 —
+# 형태가 계약과 다른 산출물이 집계 입력이 되면, 뒤의 완결 판정이 무엇을 세는지
+# 스스로도 말할 수 없다.
+CHILD_SCHEMA_DIR = pathlib.Path(__file__).resolve().parent / "g0-child-schemas"
+CHILD_SCHEMA = {
+    "g0_0a":   ("g0-child-a.schema.json",   "jsonl"),
+    "g0_0b0":  ("g0-child-b0.schema.json",  "jsonl"),
+    "g0_0b1":  ("g0-child-b1.schema.json",  "json"),
+    "g0_0c00": ("g0-child-c00.schema.json", "jsonl"),
+    # G0_0C_SUITE 는 자기 스키마를 패키지 안에 갖고 있고 runner 가 스스로 검증한다
+    # (g0-0c-counterexamples/evidence.schema.json). 여기서 다시 정의하지 않는다 —
+    # 같은 것을 두 곳에서 정의하던 것이 7차 P0-04 였다.
+}
+
+
+def validate_child_artifact(key: str, art: pathlib.Path) -> list[str]:
+    """child 산출물을 자기 스키마로 검증한다 (8차 M1-1)."""
+    spec = CHILD_SCHEMA.get(key)
+    if spec is None:
+        return []
+    fname, kind = spec
+    sp = CHILD_SCHEMA_DIR / fname
+    if not sp.is_file():
+        return [f"{key}: child 스키마가 없다({sp}) — 검증 없이 집계하지 않는다"]
+    try:
+        import jsonschema
+    except ImportError:
+        return [f"{key}: jsonschema 가 없어 child 산출물을 검증하지 못했다. "
+                f"**검증하지 못한 것은 통과가 아니다** — 설치 후 다시 돌려라"]
+    try:
+        schema = json.loads(sp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return [f"{key}: child 스키마를 읽지 못했다 — {type(e).__name__}"]
+
+    V: list[str] = []
+    validator = jsonschema.Draft202012Validator(schema)
+    if kind == "json":
+        try:
+            doc = json.loads(art.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            return [f"{key}: 산출물이 JSON 이 아니다 — {type(e).__name__}"]
+        for err in list(validator.iter_errors(doc))[:5]:
+            V.append(f"{key}: child schema 위반 — {'/'.join(str(x) for x in err.path) or '(root)'}: {err.message}")
+        return V
+
+    # jsonl — 줄마다 검증한다. 한 줄이라도 어긋나면 그 파일은 계약 밖이다.
+    bad = 0
+    for i, line in enumerate(art.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        t = line.strip()
+        if not t or not t.startswith("{"):
+            continue          # 로그 잡음은 무시한다. 판정은 파싱된 레코드로만 한다.
+        try:
+            rec = json.loads(t)
+        except json.JSONDecodeError:
+            continue
+        errs = list(validator.iter_errors(rec))
+        if errs:
+            bad += 1
+            if bad <= 3:
+                V.append(f"{key}: child schema 위반 (line {i}) — {errs[0].message}")
+    if bad > 3:
+        V.append(f"{key}: child schema 위반이 총 {bad}줄이다(앞 3건만 표시)")
+    return V
+
+
+def check_run_set(children: dict[str, dict]) -> list[str]:
+    """**회차 집합 전체**를 본다 (8차 M1-3).
+
+    check_child 는 child 하나씩만 본다. 그것만으로는 잡히지 않는 것이 셋이다.
+      · duplicate  — 같은 child 가 두 번 들어온 경우(집계기가 뒤엣것만 쓰면 앞엣것이 사라진다)
+      · unknown    — 계약에 없는 child 이름
+      · concatenated — child 들이 서로 다른 회차·원천·하네스인데 각자는 자기 manifest 와
+                      일관돼서 개별 검사를 다 통과하는 경우. **이것이 가장 위험하다** —
+                      각 child 를 따로 보면 아무 문제가 없다.
+    """
+    V: list[str] = []
+    known = set(CHILD_CONSTS)
+
+    for name in children:
+        if name not in known:
+            V.append(f"알 수 없는 child: {name!r}. 계약에 있는 것은 {sorted(known)} 뿐이다(8차 M1-3)")
+
+    present = {k: v for k, v in children.items()
+               if isinstance(v, dict) and v.get("present")}
+    if not present:
+        return V
+
+    def spread(field: str) -> list[str]:
+        return sorted({str(v.get(field, "")) for v in present.values()})
+
+    for field, why in (("run_id", "서로 다른 회차"),
+                       ("source_id", "서로 다른 원천"),
+                       ("versions_lock_digest", "서로 다른 실행 판본"),
+                       ("harness_digest", "서로 다른 하네스 코드")):
+        vals = [v for v in spread(field) if v and v != "MISSING"]
+        if len(vals) > 1:
+            V.append(f"child 들이 {why}의 것이다 — {field}: {vals}. "
+                     f"각 child 는 자기 manifest 와 일관되므로 개별 검사로는 잡히지 않는다. "
+                     f"**이어 붙인 회차는 하나의 회차가 아니다**(8차 M1-3)")
+
+    return V
 
 
 # ── child 별 완결 판정 ────────────────────────────────────────────────
@@ -381,6 +523,11 @@ def main() -> int:
     ap.add_argument("--out", default="g0-0-evidence.json")
     # **테이블 단위 축은 묶이지 않으면 확정값을 내지 않는다**(P0-03). 그 대상을 여기서 받는다.
     # G0-0A 가 어떤 테이블을 쟀는지는 로그에 없으므로 운영자가 알려 줘야 한다.
+    ap.add_argument("--source-id", default="",
+                    help="이 회차의 대상 원천 DB_UNIQUE_NAME(8차 M1-2). 주면 모든 child manifest 의 "
+                         "source_id 와 대조한다. 주지 않아도 child 들 사이의 불일치는 잡는다")
+    ap.add_argument("--harness-digest", default="",
+                    help="기대 harness digest(8차 M1-2). 주면 모든 child manifest 와 대조한다")
     ap.add_argument("--target-owner", help="G0-0A 가 실측한 대상 스키마. 없으면 테이블 단위 축은 UNDETERMINED")
     ap.add_argument("--target-table", help="대상 테이블")
     ap.add_argument("--wm-column", help="watermark 컬럼")
@@ -425,7 +572,8 @@ def main() -> int:
             V.append(f"{const}: 지정한 산출물이 없다({raw})")
             continue
         paths[key] = p
-        rec, viol = check_child(const, p, a.run_id, a.profile, lock_digest)
+        rec, viol = check_child(const, p, a.run_id, a.profile, lock_digest,
+                                source_id=a.source_id, harness_digest=a.harness_digest)
         children[key] = rec
         if viol and a.allow_missing_manifest and not rec.get("present"):
             W.append(f"[--allow-missing-manifest] {viol[0]}")
@@ -433,8 +581,17 @@ def main() -> int:
         else:
             V.extend(viol)
             contract_ok[key] = not viol
+        # **집계 전에** child 스키마로 검증한다(8차 M1-1).
+        sv = validate_child_artifact(key, p)
+        if sv:
+            V.extend(sv)
+            contract_ok[key] = False
         arts[key] = {"path": str(p), "sha256": sha(p),
                      "lines": len(p.read_text(encoding="utf-8", errors="replace").splitlines())}
+
+    # ── 회차 집합 검사 (8차 M1-3) ─────────────────────────────────
+    # child 하나씩 보는 검사로는 "각자는 일관되지만 서로 다른 회차" 를 잡지 못한다.
+    V.extend(check_run_set(children))
 
     # ── 본문 판정 ─────────────────────────────────────────────────
     ca, P, va = cov_a(paths["g0_0a"])
