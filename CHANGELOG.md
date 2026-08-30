@@ -1,7 +1,36 @@
 # 목표 아키텍처 변경 이력
 
-규범은 [`etl-platform-target-architecture-v1.2.3.1.md`](etl-platform-target-architecture-v1.2.3.1.md) 에 있다.
+규범은 [`etl-platform-target-architecture-v1.2.4.md`](etl-platform-target-architecture-v1.2.4.md) 에 있다.
 이 파일은 어떻게 거기까지 왔는지의 기록이며, 현재 규칙의 근거로 인용하지 않는다.
+
+## v1.2.3.1 → v1.2.4 (2026-08-30)
+
+근거: [`etl-platform-a-revision-request-ui.md`](etl-platform-a-revision-request-ui.md) —
+Control Plane UI 정보구조를 쓰며 A 를 정독해 발견한 규정 공백 17건. **13건 반영 · 1건 철회 ·
+3건은 22장 확정 대상.** 새 상태·새 실행 경로·새 구성요소 0.
+
+| 절 | 변경 요지 | 요청 번호 |
+|---|---|---|
+| **6.1 「시각 컬럼 규약」 신설** | **모든 `*_at`·`*_ts` 는 `timestamptz`(UTC).** 예외는 `window_range`(13.4) 하나. `logical_scheduled_at` 의 두 표기가 같은 컬럼임을 확정. `fence_ts` 는 저장은 같되 **값의 출처가 standby 시계**임을 명시. 배포 요건으로 Control 전 프로세스의 세션 `TimeZone = UTC` | **A-13** |
+| 22장 22번 | `control_session_timezone = UTC` 신설(잠정값이 아니라 고정값) | A-13 |
+| **6.1 「운영자 조회 표면」 신설** · 16.2 | 운영자 UI 의 **모든 조회**를 read replica 로 확정하고 `etl_ui` 뷰 7종을 규정. 16.2 의 "contract 단위 조회" 한 문장을 목록·검색·필터까지 넓혔다. 예외 2건(판정 직전 재확인·Job 생성 경로)은 17장 API | **D-01** |
+| 6.1 제약 (9) 일반화 | DML 은 Control API role 에만. 운영·분석 role 은 테이블 SELECT, **UI role 은 `etl_ui` 뷰만** | A-19 |
+| 17장 | `GET /v1/contracts/{id}` · `GET /v1/jobs/{id}` 신설(판정 직전 재확인) | A-17 |
+| 17장 | `POST /v1/holds` 응답 확정 — `impacted_job_count` 등 | A-18 |
+| 17장 | `POST /v1/jobs/{id}/advisor-analyses` 계약 확정. **Advisor 불가를 `5xx` 가 아니라 `200 {available: false}`** 로 — 선택 단계의 장애를 오류로 만들면 client 가 재시도하고 15.2 저부하 요건과 어긋난다 | A-10 |
+| 17장 | `violations[].message` 는 한국어, `rule_id`·`field` 는 식별자 원문 | A-24 |
+| 15.3 | `AdvisorRecommendation` 6필드 확정(`target_field`·`value`·`confidence`·`evidence_ids[]`·`evidence_kind`·`versions`). `evidence_kind` 가 prompt injection 분리와 "컬럼명만으로 확정하지 않음"을 값으로 표현한다 | A-8 |
+| 15.3 · 6.1 | `AdvisorAnalysis` 를 `Job` 하위로 옮기고 `(job_id, draft_revision)` 으로 결속. draft 수정 뒤 낡은 추천을 **stale 로 표시**(자동 폐기하지 않는다) | A-9 |
+| 15.3 | 수락·거절·무시를 기록하되 **승인자는 요구하지 않는다.** 17장의 7개 경로가 `사유·승인자 필수`인 것은 안전 판정을 뒤집기 때문이고 추천 수락은 뒤집는 것이 없다 — **비대칭은 누락이 아니라 의도임을 명시** | A-11 |
+| 16.1 | `Advisor` 를 독립 화면처럼 적던 것을 Wizard 3단계로 정합(7.2 가 권위). 독립 화면이 필요한 것은 15.4 1~2단계 Shadow 평가 지표 쪽이며 22장 13번 뒤 | A-12 |
+| 6.1 `SourceCapability` · 22장 4번 | 이름 없는 산문 "DB 시간대" → **`db_timezone`**. 세션 설정의 입력이 아니라 원천 사실의 기록임을 명시(11.3 이 `'+00:00'` 을 고정한다) | A-15 |
+| 6.1 `AuditEvent` | **`actor` 는 사번 문자열.** 4장 proxy access log 와 잇는 키. 1인 1계정·계정 삭제 금지·사번 재사용 비전제. `auth_method` 가 인증 방식 교체를 전제한 필드임을 명시 | A-21 |
+| 22장 7·10·12·13번 | 소비처·정합 표시. 12번은 Control DB 확정으로 **Iceberg 타입만 남는 범위로 축소**, 13번은 인가/인증/감사 셋을 분리하고 **OIDC 의 어느 claim 을 `actor` 에 싣는가**를 함께 확정하도록 | A-14 · A-20 · A-22 · A-23 |
+
+**철회 1건.** A-20(실행 이력 보존 정책 부재)은 **오인이었다** — 22장 7번이 이미
+`6.1 이력·계측 테이블 보관 기간`을 항목으로 두고 `attempt_timeline` 온라인 90일 잠정값까지
+갖고 있다. 요청서가 18장(Iceberg)만 보고 22장을 확인하지 않았다. v1.2.4 는 그 항목에
+소비처(운영자 UI 실행 이력 화면이 덮는 구간)를 한 줄 덧붙였을 뿐이다.
 
 ## v1 → v1.1 변경 이력
 
