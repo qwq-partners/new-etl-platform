@@ -35,7 +35,7 @@ RESULTS = []
 # 집계기가 완주 여부를 판정할 수 있다. emit 을 추가하면 여기도 늘려라 — 늘리지 않으면
 # 그 step 은 '예정에 없던 출력'이 되고, 빼먹으면 완주 판정이 PARTIAL 로 떨어진다.
 EXPECTED_STEPS = [
-    "env.versions", "S0.baseline_read", "S1a.semicolon_list", "S1b.single_alter",
+    "env.versions", "S-1.identity_preflight", "S0.baseline_read", "S1a.semicolon_list", "S1b.single_alter",
     "S1c.plsql_block", "S2.schema_bypass", "S3.per_task_sessions",
     "S3b.action_session_reuse", "S4.init_query_timeout", "S5.max_delay_zero",
 ]
@@ -50,6 +50,9 @@ def emit(probe, ok, note=None, value=None, err=None, extra=None):
     print("PROBE " + json.dumps(rec, ensure_ascii=False), flush=True)
 
 MAX_PROBE_ROWS = 100_000
+# **파티션 하나가 원천 세션 하나다.** 상한이 없으면 인자 하나로 원천 세션 예산을 넘긴다.
+MAX_PARTITIONS = 8
+MAX_CONCURRENT_SESSIONS = 12   # executor 파티션 + driver. A §11.2 pool_cap 과 별개인 하네스 자체 상한
 
 
 def main():
@@ -59,35 +62,51 @@ def main():
     ap.add_argument("--password-env", default="ORA_PW", help="비밀번호는 환경변수로만 전달한다")
     ap.add_argument("--table", required=True, help="SCHEMA.TABLE")
     ap.add_argument("--wm", required=True, help="watermark 컬럼")
-    ap.add_argument("--partitions", type=int, default=4)
+    ap.add_argument("--partitions", type=int, default=4,
+                    help="JDBC 읽기 파티션 수. 1..%d 만 허용한다 — 파티션 하나가 원천 세션 "
+                         "하나이므로 이 값이 곧 동시 세션 상한이다(8차 M0-3)" % MAX_PARTITIONS)
     ap.add_argument("--probe-rows", type=int, default=1000,
                     help="S3가 읽는 행 수 상한. 전체 테이블을 읽지 않는다(재검증 결함 4). "
-                         "1..PROBE_ROWS_MAX 범위여야 한다 — production-safe 라벨의 근거다")
+                         "1..%d 범위여야 한다 — production-safe 라벨의 근거다" % MAX_PROBE_ROWS)
+    ap.add_argument("--expect-db-unique-name", required=True,
+                    help="**필수.** 대상 원천의 DB_UNIQUE_NAME. 관측값이 다르면 대상 테이블을 "
+                         "건드리기 전에 중단한다(8차 M0-4). 기본값을 두지 않는 이유는 "
+                         "기본값이 곧 '아무 데나 붙어도 된다'이기 때문이다")
+    ap.add_argument("--expect-role", default="PHYSICAL STANDBY",
+                    help="기대 DATABASE_ROLE. 이 하네스는 standby 를 전제한다")
     ap.add_argument("--skip-slow", action="store_true", help="S4(timeout) 생략")
     a = ap.parse_args()
+
+    # ── 인자 하드 상한 (8차 M0-3) ───────────────────────────────────
+    # type=int 만으로는 0·음수·과대값이 그대로 들어간다. 이 스크립트가 '운영계 제한적'인
+    # 근거가 ROWNUM 제한과 파티션 수뿐이므로, 그 둘을 코드로 걸지 않으면 라벨이 사실이 아니다.
     if not (1 <= a.probe_rows <= MAX_PROBE_ROWS):
         emit("args.probe_rows", False,
              err=f"--probe-rows 는 1~{MAX_PROBE_ROWS} 여야 한다(받은 값 {a.probe_rows}). "
                  "운영 원천에서도 돌 수 있으므로 상한을 코드로 강제한다.")
-        print(json.dumps({"results": RESULTS}, ensure_ascii=False))
+        _dump()
+        return 2
+    if not (1 <= a.partitions <= MAX_PARTITIONS):
+        emit("args.partitions", False,
+             err=f"--partitions 는 1~{MAX_PARTITIONS} 여야 한다(받은 값 {a.partitions}). "
+                 "**파티션 하나가 원천 세션 하나다** — 상한이 없으면 이 인자 하나로 "
+                 "원천 세션 예산을 넘길 수 있다(8차 M0-3).")
+        _dump()
         return 2
 
-    # **상한을 강제한다.** type=int 만으로는 0·음수·과대값이 그대로 들어간다(7차 리뷰 P2).
-    # 이 스크립트가 '운영계 제한적'으로 분류돼 있는 근거가 ROWNUM 제한 하나뿐이므로,
-    # 그 제한이 실제로 걸리는지 여기서 확인하지 않으면 라벨이 사실이 아니게 된다.
-    PROBE_ROWS_MAX = 100_000
-    if not (1 <= a.probe_rows <= PROBE_ROWS_MAX):
-        print(f"--probe-rows 는 1..{PROBE_ROWS_MAX} 여야 한다 (받은 값 {a.probe_rows}). "
-              f"전수 스캔을 막는 것이 이 인자의 목적이다.", file=sys.stderr)
-        sys.exit(2)
-    if a.partitions < 1:
-        print(f"--partitions 는 1 이상이어야 한다 (받은 값 {a.partitions})", file=sys.stderr)
-        sys.exit(2)
+    # 동시 세션 추정치도 함께 건다. executor 파티션 + driver 1.
+    est_sessions = a.partitions + 1
+    if est_sessions > MAX_CONCURRENT_SESSIONS:
+        emit("args.sessions", False,
+             err=f"예상 동시 세션 {est_sessions} 가 상한 {MAX_CONCURRENT_SESSIONS} 를 넘는다. "
+                 "파티션 수를 줄여라.")
+        _dump()
+        return 2
 
     pw = os.environ.get(a.password_env)
     if not pw:
         print(f"환경변수 {a.password_env} 가 비어 있다. 비밀번호를 인자로 넘기지 마라.", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     from pyspark.sql import SparkSession
     spark = (SparkSession.builder.appName("G0-0-probe")
@@ -114,6 +133,43 @@ def main():
              " SYS_CONTEXT('USERENV','MODULE') AS mdl,"
              " SYS_CONTEXT('USERENV','DATABASE_ROLE') AS dbrole FROM DUAL)")
 
+    # ── S-1. 신원 preflight — **대상 테이블을 건드리기 전에** (8차 M0-4) ──────
+    #
+    # v1 은 S0 에서 곧바로 `SELECT * FROM <table> WHERE ROWNUM <= 10` 을 읽었다.
+    # 신원 확인은 S1c 의 PL/SQL 블록 안에만 있었는데 그것은 **이미 대상을 읽은 뒤**이고,
+    # 게다가 sessionInitStatement 는 NEW-04 대로 task 경로에서만 실행된다.
+    # 즉 잘못된 DB 에 붙어도 대상 테이블을 한 번 읽고 나서야 알게 된다.
+    #
+    # 여기서는 DUAL 만 읽는다 — 대상 스키마·테이블을 전혀 건드리지 않는다.
+    q_ident = ("(SELECT SYS_CONTEXT('USERENV','DB_UNIQUE_NAME') AS dbun,"
+               " SYS_CONTEXT('USERENV','DATABASE_ROLE') AS dbrole,"
+               " SYS_CONTEXT('USERENV','ISDBA') AS isdba,"
+               " SYS_CONTEXT('USERENV','CON_NAME') AS con_name FROM DUAL)")
+    try:
+        ident = rd(dbtable=q_ident).load().collect()[0].asDict()
+    except Exception as e:
+        emit("S-1.identity_preflight", False, err=e,
+             note="신원을 읽지 못했다. **fail-closed** — 대상 테이블을 읽지 않고 끝낸다.")
+        _dump()
+        return 2
+
+    mism = []
+    if str(ident.get("DBUN") or ident.get("dbun") or "") != a.expect_db_unique_name:
+        mism.append(f"DB_UNIQUE_NAME 관측 {ident.get('DBUN') or ident.get('dbun')!r} != 기대 {a.expect_db_unique_name!r}")
+    if str(ident.get("DBROLE") or ident.get("dbrole") or "") != a.expect_role:
+        mism.append(f"DATABASE_ROLE 관측 {ident.get('DBROLE') or ident.get('dbrole')!r} != 기대 {a.expect_role!r}")
+    if str(ident.get("ISDBA") or ident.get("isdba") or "").upper() != "FALSE":
+        mism.append("ISDBA 가 FALSE 가 아니다 — DBA 세션으로 probe 를 돌리지 않는다")
+
+    if mism:
+        emit("S-1.identity_preflight", False, value=ident,
+             err="; ".join(mism),
+             note="**대상 테이블을 읽지 않았다.** 신원 불일치는 fail-closed 다(8차 M0-4).")
+        _dump()
+        return 2
+    emit("S-1.identity_preflight", True, value=ident,
+         note="대상 접촉 전에 DUAL 만으로 신원을 확인했다.")
+
     # ── S0. 기준선: init 없이 읽힌다 ────────────────────────────────
     try:
         n = rd(dbtable=q10).load().count()
@@ -121,7 +177,8 @@ def main():
     except Exception as e:
         emit("S0.baseline_read", False, err=e)
         print("기준선 읽기가 실패하면 이후 probe는 의미가 없다. 접속 정보를 확인하라.", file=sys.stderr)
-        _dump(); sys.exit(1)
+        _dump()
+        return 1
 
     # ── S1. sessionInitStatement 페이로드 형태 (NEW-03) ─────────────
     # (a) 세미콜론 나열 — 리뷰 주장대로면 구문 오류여야 한다
@@ -291,9 +348,19 @@ def _dump(skipped_slow=False):
     print("\n===== JSON EVIDENCE =====")
     print(json.dumps(out, ensure_ascii=False, indent=1))
 
+    # **완주하지 못했으면 0 으로 끝내지 않는다**(8차 M0-2). missing_steps 가 남았는데
+    # exit 0 이면 래퍼의 manifest 에 exit_code=0 이 박히고 집계기가 완주로 읽는다.
+    if summary["b0_summary"]["missing_steps"]:
+        print("[b0] 예정 step 중 누락이 있다 — exit 3", file=sys.stderr)
+        return 3
+    return 0
+
 if __name__ == "__main__":
+    # **`sys.exit(main())` 이다**(8차 M0-2). v1 은 `main()` 만 부르고 반환값을 버려서,
+    # main 이 2(인자 거부)·3(미완주)을 돌려줘도 프로세스는 0 으로 끝났다.
+    # 그러면 g0-run-child.sh 가 exit_code=0 을 manifest 에 박고 집계기가 통과시킨다.
     try:
-        main()
+        sys.exit(main())
     except Exception:
         traceback.print_exc()
         _dump()

@@ -18,14 +18,16 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 목표 아키텍처 v1 → v1.2.4 | **완료**(다섯 차례 교차 리뷰 + UI 도출 개정 요청 13건 반영) |
 | **제약 변경**(2026-08-24, 표현 통일 2026-08-27) | **정합성을 DBA 협조에 걸 수 없다.** 비critical 권한 요청은 가능하나 **현재 보류이며 절대 가정하지 않는다.** v1.2.3.1이 전제하던 DBA 의존이 무효화됨 |
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
-| **G0-0 실측** | **원천에 대해서는 한 번도 실행되지 않았다.** Oracle 없는 회차로 S1~S3(하네스 빌드·SPI 배선)만 돌았다. **8차 리뷰의 M0 실행 안전성 차단점 수정 전 사내 원천 실행 NO-GO** ← 지금 여기 |
+| **G0-0 실측** | **원천에 대해서는 한 번도 실행되지 않았다.** Oracle 없는 회차로 S1~S3(하네스 빌드·SPI 배선)만 돌았다. M0 은 닫혔고 **M1 child 증거 계약이 남아 사내 원천 실행은 여전히 NO-GO** |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
 | DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. `FLASHBACK`의 순이익 부재라는 강한 결론은 8차 리뷰에서 재검토 대상으로 환원 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
 | **S1~S3 실행 결과** | `g0-0-s1-s3-results.md` — B1 이 실제 Spark jar 3판본(전체 배포판)에 대고 빌드·배선됐다. 정정 2건 · profile `SANDBOX_CONTAINER` |
 | **B1 로컬 부분 검증**(2026-08-28) | 병행 회차. partial Maven classpath 에서 compile·SPI linkage 확인. **full distribution runtime·Oracle 경로·fail-closed 는 미실행** |
 | **7차 교차 리뷰 판정·조치** | 판정 `…-seventh-review-assessment.md`(기각 0건) · 조치 `…-seventh-review-fixes.md`. 회귀 시험 **204건**. **8차 재검증 결과 P0 6건은 CLOSED 0 / PARTIAL 2 / OPEN 4** |
-| **8차 교차 리뷰**(2026-08-30) | 완료 — 현 normalizer 결과 수용·B1 `PROVEN`·G0 PASS·v2.0 동결은 **NO-GO**. 먼저 M0 실행 안전성 + M1 child evidence contract |
+| **8차 교차 리뷰**(2026-08-30) | 완료 — 현 normalizer 결과 수용·B1 `PROVEN`·G0 PASS·v2.0 동결은 **NO-GO** |
+| **8차 M0(실행 안전성)** | **완료**(2026-08-30) — 6건 처리, 회귀 41건 신설(`g0-m0-safety-tests.py`). 상세는 §3 |
+| **8차 M1(child 증거 계약)** | 진행 중 ← **지금 여기** |
 | A v2.0 / P v2.0 규범 개정 | M0/M1 수정 → raw G0-0 수집 → 축/composition 확정 후 착수 |
 
 **핵심 원칙**: 실측 전 규범 문서를 대규모로 고치지는 않는다. 다만 **실측을 신뢰할 수 있게 만드는 실행 안전성과 증거 결속은 실측보다 먼저 고친다.**
@@ -92,11 +94,11 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 | 게이트 | 파일 | 대상 | 안전 등급 |
 |---|---|---|---|
-| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·원천 이식성 raw fact(87 probe) | **현재 사내 원천 NO-GO** — identity 선차단·producer exit wrapper·I/O budget 필요 |
-| **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | **현재 사내 원천 NO-GO** — exit 0 결함·partition/session 하드 상한 부재 |
+| **G0-0A** | `g0-0a-capability-inventory.sql` | 계정 권한·capability·원천 이식성 raw fact(87 probe) | **여전히 NO-GO** — M0 은 닫혔으나 **M1 child 계약이 남았다** |
+| **G0-0B0** | `g0-0b0-spark-smoke.py` | stock Spark JDBC 경로 관측 | **M0 조치 완료**(2026-08-30) — `sys.exit(main())`·partition/session 상한·**대상 접촉 전 신원 preflight**. M1 이 남았다 |
 | **G0-0B1** | `g0-0b1-connection-provider/` | provider의 schema·task 경로 + fail-closed | **현재 NO-GO** — `failclosed_task` 실행 불가·stack 추정 순환 판정 |
 | **G0-0C00** | `g0-0c-fence-facts.sql` | fence fact collector | external completion wrapper + scan 승인 후 조건부 |
-| **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness | **외부 allowlist로 확인한 폐기용 쓰기 가능 환경 전용** |
+| **G0-0C01~C09** | `g0-0c-counterexamples/` | stateful counterexample harness | **M0 조치 완료** — `CE_ENV_ALLOWLIST`(패키지 **밖**) 없이는 실행되지 않으며, 그 검사가 **preflight 접속보다 먼저** 온다 |
 
 **증거 계약**(2026-08-27 재설계 — 7차 리뷰 P0-02·03·04): `g0-0-evidence.schema.json` +
 `g0-normalize.py` + `g0-child-contract.md` + `g0-run-child.sh`.
@@ -112,7 +114,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 - **실행 래퍼**: 모든 child 는 `g0-run-child.sh` 로 감싼다(manifest 사이드카). sqlplus 는
   `g0-sqlplus.sh` 로 — 비밀번호를 stdin 으로만 넘겨 manifest 에 남기지 않는다
 - 회귀 시험: `g0-normalize-tests.py`(59) · `g0-axes-tests.py`(79) · `g0-b1-analyzer-tests.py`(40)
-  · `g0-0b1-connection-provider/run-tests.sh`(26, Java) — **합계 204건**
+  · `g0-m0-safety-tests.py`(41) · `g0-0b1-connection-provider/run-tests.sh`(26, Java)
+  — **합계 245건**
 
 > **그렇다고 이 계약이 8차 리뷰의 M1 을 닫은 것은 아니다.** 8차는 `main` 판을 보고
 > child 완결성·run/source/runtime 결속·`effective_value` floor 미보장을 지적했다.

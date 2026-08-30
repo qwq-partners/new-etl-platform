@@ -170,11 +170,57 @@ def preflight(suite: dict) -> dict:
 
 
 # ── 1. 환경 가드 ─────────────────────────────────────────────────────
-def enforce_guard(suite: dict, observed: dict) -> list[str]:
+def load_external_allowlist(root: Path) -> tuple[list[str], str]:
+    """**패키지 밖**의 allowlist 를 읽는다 (8차 M0-5).
+
+    왜 밖이어야 하는가 — v1 은 `environment_guard.expected_*` 를 `suite.yaml` 에서만
+    읽었다. suite.yaml 은 이 패키지 안에 있으므로, **그 파일을 고치면 어떤 DB 든
+    파괴적 시나리오의 대상이 될 수 있다.** `suite_config_sha256` 은 그 변경을
+    기록할 뿐 막지 못한다. 이 하네스는 쓰기·DDL 을 하므로 그 차이가 사고의 크기다.
+
+    형식: 한 줄에 하나씩 `db_unique_name`. `#` 주석과 빈 줄은 무시한다.
+    경로: `CE_ENV_ALLOWLIST` 환경변수(필수). **패키지 안을 가리키면 거부한다.**
+    """
+    path = os.environ.get("CE_ENV_ALLOWLIST", "").strip()
+    if not path:
+        die(2, "CE_ENV_ALLOWLIST 가 없다. 이 하네스는 쓰기·DDL 을 하므로 **패키지 밖**의 "
+               "allowlist 파일로 대상 환경을 승인해야 실행한다(8차 M0-5). "
+               "suite.yaml 의 expected_* 만으로는 승인이 되지 않는다 — 그 파일은 "
+               "패키지 안이라 고치면 그만이다.")
+    ap = Path(path).resolve()
+    if not ap.is_file():
+        die(2, f"CE_ENV_ALLOWLIST 파일이 없다: {ap}")
+    try:
+        ap.relative_to(root.resolve())
+    except ValueError:
+        pass          # 패키지 밖 — 정상
+    else:
+        die(2, f"CE_ENV_ALLOWLIST 가 패키지 안({root})을 가리킨다: {ap}. "
+               "패키지 안의 파일은 승인 근거가 되지 못한다 — 같은 커밋에서 함께 바뀐다.")
+
+    names = []
+    for line in ap.read_text(encoding="utf-8").splitlines():
+        t = line.split("#", 1)[0].strip()
+        if t:
+            names.append(t)
+    if not names:
+        die(2, f"CE_ENV_ALLOWLIST 가 비어 있다: {ap}. 빈 allowlist 로는 실행하지 않는다.")
+    return names, sha256_file(ap)
+
+
+def enforce_guard(suite: dict, observed: dict, allowlist: list[str]) -> list[str]:
     """observed = {"primary_db_unique_name":..., "standby_db_unique_name":..., "schema":...}
     실패하면 즉시 종료한다. 통과 항목 목록을 돌려준다."""
     g = suite.get("environment_guard") or {}
     checks: list[str] = []
+
+    # **외부 allowlist 가 먼저다**(8차 M0-5). suite 의 expected 와 일치하더라도
+    # 관측된 primary 가 allowlist 에 없으면 실행하지 않는다.
+    obs_primary = str(observed.get("primary_db_unique_name", ""))
+    if obs_primary not in allowlist:
+        die(2, f"관측된 primary db_unique_name {obs_primary!r} 가 외부 allowlist 에 없다. "
+               f"승인된 것: {allowlist}. **이 검사는 suite.yaml 로 우회할 수 없다.**")
+    checks.append(f"external_allowlist_ok({obs_primary})")
 
     if g.get("class") != "DISPOSABLE_WRITABLE_PRIMARY_ADG":
         die(2, "environment_guard.class 가 DISPOSABLE_WRITABLE_PRIMARY_ADG 가 아니다.")
@@ -495,6 +541,18 @@ def main() -> int:
     if suite.get("schema_version") != SCHEMA_VERSION or suite.get("suite_id") != SUITE_ID:
         die(2, "suite.yaml 의 schema_version/suite_id 가 runner와 맞지 않는다.")
 
+    # ── 외부 allowlist 를 **가장 먼저** 읽는다 (8차 M0-5) ─────────────
+    # preflight 보다 앞이어야 한다. preflight 는 CE_DSN 으로 실제 접속을 하므로,
+    # 승인 여부를 그 뒤에 확인하면 **승인되지 않은 DB 에 이미 붙은 뒤**가 된다.
+    # 이 하네스의 약속은 "폐기용 환경이 아니면 한 줄도 실행하지 않는다" 인데
+    # 접속도 한 줄이다.
+    if a.dry_run:
+        allowlist, allowlist_digest = [], "DRY_RUN_NOT_LOADED"
+        print("[guard] --dry-run: 외부 allowlist 를 요구하지 않는다(접속도 실행도 하지 않으므로)")
+    else:
+        allowlist, allowlist_digest = load_external_allowlist(root)
+        print(f"[guard] 외부 allowlist {len(allowlist)}건 (digest {allowlist_digest[:16]}…)")
+
     if a.dry_run:
         g = suite["environment_guard"]
         observed = {"primary_db_unique_name": g.get("expected_primary_db_unique_name", ""),
@@ -535,7 +593,11 @@ def main() -> int:
             die(2, f"CE_DOC_PATH={doc!r} 가 파일이 아니다.")
         print(f"[preflight] CE_DOC_PATH={doc}")
 
-    checks = enforce_guard(suite, observed)
+    if a.dry_run:
+        checks = ["external_allowlist=NOT_REQUIRED(dry-run)"]
+        checks += enforce_guard(suite, observed, [observed.get("primary_db_unique_name", "")])
+    else:
+        checks = enforce_guard(suite, observed, allowlist)
     print(f"[guard] 통과: {', '.join(checks)}")
 
     # **코드 digest 와 suite 설정 digest 를 따로 기록한다**(7차 리뷰 P1-10).
@@ -591,6 +653,9 @@ def main() -> int:
           # 그래서 필수 시나리오·budget·pass rule 이 어떤 digest 에도 묶이지 않았다
           # (7차 리뷰 P1-10). code digest 와 config digest 를 **따로** 남긴다.
           "suite_config_sha256": sha256_file(Path(a.suite)),
+          # **외부 allowlist 의 digest**(8차 M0-5). 어떤 승인 목록으로 돌았는지가
+          # 증거에 박혀야 사후에 "그 환경이 승인돼 있었다"를 확인할 수 있다.
+          "env_allowlist_sha256": allowlist_digest,
           "environment": envrec,
           "versions": suite.get("versions", {}),
           "scenarios": scen,

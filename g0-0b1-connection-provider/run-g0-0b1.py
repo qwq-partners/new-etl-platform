@@ -24,6 +24,9 @@ import sys
 
 # 대상 테이블을 크게 읽지 않는다는 표시를 유지하려면 상한이 코드에 있어야 한다(P2).
 MAX_LIMIT = 100_000
+# **파티션 하나가 원천 세션 하나다**(8차 M0-3). b0 와 같은 상한을 건다.
+MAX_PARTITIONS = 8
+MAX_CONCURRENT_SESSIONS = 12
 
 
 def emit(rec):
@@ -37,7 +40,8 @@ def main():
     ap.add_argument("--password-env", default="ORA_PW",
                     help="비밀번호가 담긴 환경변수 이름. 비밀번호 자체를 argv 로 넘기지 마라.")
     ap.add_argument("--table", required=True, help="SCHEMA.TABLE")
-    ap.add_argument("--num-partitions", type=int, default=4)
+    ap.add_argument("--num-partitions", type=int, default=4,
+                    help="1~%d 만 허용한다 — 파티션 하나가 원천 세션 하나다(8차 M0-3)" % MAX_PARTITIONS)
     ap.add_argument("--limit", type=int, default=1000,
                     help="읽을 행 수 상한. 1~%d 만 허용한다 — production-safe 표시를 "
                          "유지하려면 하드 상한이 있어야 한다." % MAX_LIMIT)
@@ -53,9 +57,16 @@ def main():
               "reason": f"--limit 은 1~{MAX_LIMIT} 여야 한다(받은 값 {a.limit}). "
                         "이 하네스는 운영 원천에서도 돌 수 있으므로 상한을 코드로 강제한다."})
         return 2
-    if a.num_partitions < 1:
+    if not (1 <= a.num_partitions <= MAX_PARTITIONS):
         emit({"mode": a.mode, "status": "ABORT",
-              "reason": f"--num-partitions 는 1 이상이어야 한다 (받은 값 {a.num_partitions})"})
+              "reason": f"--num-partitions 는 1~{MAX_PARTITIONS} 여야 한다(받은 값 {a.num_partitions}). "
+                        "**파티션 하나가 원천 세션 하나다** — 상한이 없으면 이 인자 하나로 "
+                        "원천 세션 예산을 넘길 수 있다(8차 M0-3)."})
+        return 2
+    est_sessions = a.num_partitions + 1
+    if est_sessions > MAX_CONCURRENT_SESSIONS:
+        emit({"mode": a.mode, "status": "ABORT",
+              "reason": f"예상 동시 세션 {est_sessions} 가 상한 {MAX_CONCURRENT_SESSIONS} 를 넘는다."})
         return 2
 
     pw = os.environ.get(a.password_env)
