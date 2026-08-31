@@ -73,7 +73,8 @@ python3 g0-axes-tests.py           # 127건 — capability 축 파생·SQLCODE t
 python3 g0-b1-analyzer-tests.py    #  43건 — B1 판정기
 python3 g0-m0-safety-tests.py      #  51건 — 실행 안전성(M0)
 python3 g0-0b1-connection-provider/g0-b1-wiring-tests.py   # 16건 — **B1 종단 배선**
-# 다섯 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
+python3 g0-runbook-lint.py         #  19건 — **이 문서를 그대로 실행할 수 있는가**
+# 여섯 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
 # (여기 적힌 숫자가 늘어나 있으면 그건 시험이 늘어난 것이지 실패가 아니다).
 ```
 
@@ -81,6 +82,12 @@ python3 g0-0b1-connection-provider/g0-b1-wiring-tests.py   # 16건 — **B1 종�
 > 판정 규칙을 시험한다. 그것만으로는 **launcher 가 그 입력을 실제로 만드는가**를 아무도
 > 안 본다 — 9차 P0-03 이 그 틈에서 나왔다. 배선 시험은 실물 `run.sh` 를 돌려
 > 실물 `analyze-trace.py` 에 넣고, **배선을 일부러 깨면 실패하는지**까지 확인한다.
+>
+> **마지막 것은 이 문서 자신을 검사한다**(9차 조치 2). 9차 P0-06 에서 *"이 문서만 따라가면
+> 된다"* 고 적힌 절차서가 **문서대로 하면 첫 wrapper 호출에서 죽는** 상태였다. 여덟 건 중
+> 다섯이 같은 원인이다 — M0·M1 이 새 필수값을 만들 때 절차서를 같이 안 고쳤다. lint 는
+> 필수 인자·환경변수 목록을 **실물 스크립트에서 읽어** 이 문서와 대조하므로, 계약이 강해지면
+> 절차서가 자동으로 뒤처진 것으로 잡힌다.
 
 ---
 
@@ -199,6 +206,11 @@ sha256sum versions.lock     # 이 값이 모든 증거에 박힌다
 
 ## 4. 증거 회차 — `run_id` 하나로 묶는다
 
+> **2026-08-31(9차 조치 2) — 이 블록이 불완전했다.** M0·M1 이 새 필수값을 만들었는데
+> 절차서를 같이 고치지 않아, **문서대로 실행하면 첫 wrapper 호출에서 exit 2 로 죽었다.**
+> 운영자 실수가 아니라 문서 결함이다. 지금은 `g0-runbook-lint.py` 가 이 블록과 아래 명령을
+> 대조해 누락을 잡는다.
+
 ```bash
 cd ~/g0/repo
 export RUN_ID="RUN-$(date +%Y%m%d)-01"
@@ -208,8 +220,19 @@ read -rs -p 'Oracle password: ' ORA_PW && export ORA_PW && echo
 export URL="jdbc:oracle:thin:@//localhost:1521/FREEPDB1"
 export TGT_OWNER=ETL_PROBE TGT_TABLE=G0_TARGET WM=UPDATE_DT
 export OJDBC_JAR=~/g0/ojdbc11-<VER>.jar
+
+# ★ 대상 원천의 DB_UNIQUE_NAME. **S4 에서 서버가 밝힌 값을 그대로 쓴다.**
+#   래퍼가 G0_SOURCE_ID 로 요구하고(M1-2), 집계기가 --source-id 로 대조하고,
+#   B1·B0 가 기대 신원으로 단언한다. 세 곳이 **같은 값**이어야 한다.
+export DB_UNIQUE_NAME=ETLSTB
+export G0_SOURCE_ID="$DB_UNIQUE_NAME"
+
 export EVID=~/g0/evidence/$RUN_ID && mkdir -p "$EVID"
 ```
+
+> **`$EVID` 경로에 `$RUN_ID` 가 들어 있는 것이 중요하다.** M1-4 가 산출물 경로에 `RUN_ID` 를
+> 요구한다 — 고정 이름 하나가 여러 회차의 별칭이 되면 이전 회차가 덮였는지 사후에 말할 수
+> 없다. 아래 모든 산출물을 `$EVID` 아래에 둔다.
 
 > **모든 child 를 `g0-run-child.sh` 로 감싼다.** 그러지 않으면 manifest 사이드카가 없어 집계기가
 > 그 child 를 `FAILED` 로 두고 전체를 거부한다(exit 4). 이것은 버그가 아니라 계약이다 —
@@ -230,12 +253,36 @@ export EVID=~/g0/evidence/$RUN_ID && mkdir -p "$EVID"
 export ORA_DSN="//localhost:1521/FREEPDB1"     # jdbc: 접두사 없는 형태
 
 ./g0-run-child.sh G0_0A "$RUN_ID" "$PROFILE" "$EVID/g0-0a.log" -- \
-  ./g0-sqlplus.sh g0-0a-capability-inventory.sql "$EVID/g0-0a.log"
+  ./g0-sqlplus.sh "$EVID/g0-0a-run.sql" "$EVID/g0-0a.log"
 ```
 
-SQL 변수(`TARGET_OWNER`/`TARGET_TABLE`/`WM_COLUMN`/`EXPECT_ROLE`/`EXPECT_DBUNAME`)는 스크립트가
-프롬프트로 묻는다. **비대화식으로 돌리려면** SQL 앞에 `DEFINE` 을 넣은 wrapper `.sql` 을 만들어
-그것을 `g0-sqlplus.sh` 에 넘긴다 — 값이 argv 가 아니라 파일에 있어야 manifest 가 깨끗하다.
+> ### ⚠ SQL 변수 전달 — **이 문서가 틀리게 적고 있었다**(9차 P0-06-8)
+>
+> 이전 판은 *"스크립트가 프롬프트로 묻는다"* 고 했다. **묻지 않는다.**
+> `g0-0a-capability-inventory.sql:42-47` 과 `g0-0c-fence-facts.sql:23-32` 는 파일 안에서
+> **자리표시자 값으로 `DEFINE` 한다** — `TARGET_OWNER = 'SCHEMA_NAME'`,
+> `EXPECT_DBUNAME = 'DBUNIQUENAME'` 같은 것들이다.
+>
+> 결과가 둘이다. 앞의 wrapper `.sql` 에서 `DEFINE` 을 해도 **본문의 `DEFINE` 이 그것을 덮는다.**
+> 그리고 아무것도 안 하면 존재하지 않는 `SCHEMA_NAME.TABLE_NAME` 을 질의하고
+> `DBUNIQUENAME` 과 신원을 대조한다.
+>
+> **지금 유일하게 맞는 방법**: 그 `DEFINE` 블록을 **직접 편집한 사본**을 만들어 그것을 넘긴다.
+>
+> ```bash
+> sed -e "s/^DEFINE TARGET_OWNER .*/DEFINE TARGET_OWNER   = '$TGT_OWNER'/" \
+>     -e "s/^DEFINE TARGET_TABLE .*/DEFINE TARGET_TABLE   = '$TGT_TABLE'/" \
+>     -e "s/^DEFINE WM_COLUMN .*/DEFINE WM_COLUMN      = '$WM'/" \
+>     -e "s/^DEFINE EXPECT_DBUNAME .*/DEFINE EXPECT_DBUNAME = '$DB_UNIQUE_NAME'/" \
+>     g0-0a-capability-inventory.sql > "$EVID/g0-0a-run.sql"
+> grep -n '^DEFINE' "$EVID/g0-0a-run.sql"    # **눈으로 확인한다. 자리표시자가 남아 있으면 멈춘다**
+> ```
+>
+> 그 사본을 `$EVID` 에 두는 이유는 **어떤 값으로 쟀는지가 증거의 일부**이기 때문이다.
+>
+> **이것은 임시 방편이다.** 변수 전달을 제대로 고치는 것은 9차 조치 6(identity fail-fast)에서
+> 한다 — 그때 이 헤더를 어차피 다시 쓴다. Oracle 없이 SQL 변경을 검증할 수 없으므로
+> **지금 고치지 않는다**(검증 못 한 SQL 을 절차서에 넣는 것이 이 리뷰가 잡은 병이다).
 
 **네 조건이 다 서야 통과다** — `exit 0` ∧ `probe_run_end` sentinel ∧ `manifest_ok=true` ∧
 `emitted == expected`. 하나라도 빠지면 집계기가 `PARTIAL` 이상으로 두지 않는다.
@@ -244,17 +291,21 @@ C00 은 `ACK_FULL_SCAN=N`(기본)이면 **대상 테이블 질의가 0건**이�
 아니다 — skipped 3건 + summary 가 나온다.
 
 ```bash
+# C00 도 같은 방식으로 DEFINE 을 채운 사본을 만든다(위 경고 참조).
 ./g0-run-child.sh G0_0C00 "$RUN_ID" "$PROFILE" "$EVID/g0-0c00.log" -- \
-  ./g0-sqlplus.sh g0-0c-fence-facts.sql "$EVID/g0-0c00.log"
+  ./g0-sqlplus.sh "$EVID/g0-0c00-run.sql" "$EVID/g0-0c00.log"
 ```
 
 ### S6 — ★★ B1 본실행 (세 회차)
 
 ```bash
 cd g0-0b1-connection-provider
-../g0-run-child.sh G0_0B1 "$RUN_ID" "$PROFILE" "$PWD/g0-0b1-evidence.json" -- \
-  ./run.sh "$URL" "$ORA_USER" "$TGT_OWNER.$TGT_TABLE" <EXPECT_DBUNAME> PRIMARY none
-cp g0-0b1-evidence.json* "$EVID/"; cd ..
+# B1_OUT 로 산출물 경로를 지정한다(9차 조치 2). 그러지 않으면 run.sh 가 자기 디렉터리에
+# 고정 이름으로 쓰고, 그 경로에는 RUN_ID 가 없어 **래퍼가 거부한다**(M1-4).
+export B1_OUT="$EVID/g0-0b1-evidence.json"
+../g0-run-child.sh G0_0B1 "$RUN_ID" "$PROFILE" "$B1_OUT" -- \
+  ./run.sh "$URL" "$ORA_USER" "$TGT_OWNER.$TGT_TABLE" "$DB_UNIQUE_NAME" PHYSICAL_STANDBY none
+cd ..
 ```
 
 `run.sh` 가 **세 회차**를 돈다 — `coverage` → `failclosed_schema` → `failclosed_task`.
@@ -279,7 +330,8 @@ task connection 이 열리지도 않는다.
 ./g0-run-child.sh G0_0B0 "$RUN_ID" "$PROFILE" "$EVID/g0-0b0.log" -- \
   bash -c "$SPARK_HOME/bin/spark-submit --jars '$OJDBC_JAR' g0-0b0-spark-smoke.py \
     --url '$URL' --user '$ORA_USER' --password-env ORA_PW \
-    --table '$TGT_OWNER.$TGT_TABLE' --wm '$WM' > '$EVID/g0-0b0.log' 2>&1"
+    --table '$TGT_OWNER.$TGT_TABLE' --wm '$WM' \
+    --expect-db-unique-name '$DB_UNIQUE_NAME' > '$EVID/g0-0b0.log' 2>&1"
 ```
 
 ### S8 — ★ CE01~CE09 (폐기용 쓰기 가능 환경 **전용**)
@@ -290,16 +342,22 @@ task connection 이 열리지도 않는다.
 cd g0-0c-counterexamples
 $EDITOR suite.yaml     # expected_*_db_unique_name / allowed_schema / object_prefix / versions
 export CE_USER=ETL_CE CE_DSN='localhost:1521/FREEPDB1'
-export CE_DOC_PATH="$PWD/../etl-platform-target-architecture-v1.2.3.1.md"   # 필수
+export CE_DOC_PATH="$PWD/../etl-platform-target-architecture-v1.2.4.md"     # 필수 (현행 A)
+# ★ 패키지 **밖** 의 환경 allowlist. 이것이 없으면 runner 가 접속 전에 멈춘다(M0-5).
+#   저장소 안에 두지 마라 — "이 환경은 폐기용이다" 를 저장소가 스스로 주장하면 안 된다.
+export CE_ENV_ALLOWLIST=/etc/g0/ce-allowlist.yaml
 read -rs -p 'CE password: ' CE_PASSWORD && export CE_PASSWORD && echo
 
 python3 runner.py --suite suite.yaml --dry-run      # 가드·계획만. 먼저 이것부터
-../g0-run-child.sh G0_0C_SUITE "$RUN_ID" "$PROFILE" "$PWD/evidence.json" -- \
+# 경로에 RUN_ID 가 있어야 한다(M1-4). CE 는 **다른 환경의 증거**이므로 corporate source
+# 회차와 같은 회차로 묶지 마라 — 9차 P0-07, 조치 7 에서 scope 를 분리한다.
+../g0-run-child.sh G0_0C_SUITE "$RUN_ID" "$PROFILE" "$EVID/ce-evidence.json" -- \
   python3 runner.py --suite suite.yaml \
     --observed-env '{"primary_db_unique_name":"...","standby_db_unique_name":"...","schema":"..."}' \
-    --out evidence.json
+    --out "$EVID/ce-evidence.json"
 unset CE_PASSWORD
-cp evidence.json* "$EVID/"; cd ..
+# runner 가 이미 $EVID 에 직접 쓴다 — 예전 cp 줄은 없는 파일을 복사하고 있었다
+cd ..
 ```
 
 `--observed-env` 는 **실제 접속에서 읽은 값**을 넣는다. 운영자 신고값이 아니다.
@@ -323,10 +381,10 @@ python3 g0-normalize.py \
   --versions-lock versions.lock \
   --a "$EVID/g0-0a.log" --b0 "$EVID/g0-0b0.log" \
   --b1 "$EVID/g0-0b1-evidence.json" --c00 "$EVID/g0-0c00.log" \
-  --c-suite "$EVID/evidence.json" \
+  --c-suite "$EVID/ce-evidence.json" \
   --target-owner "$TGT_OWNER" --target-table "$TGT_TABLE" --wm-column "$WM" \
   --source-id "$DB_UNIQUE_NAME" \
-  --out "$EVID/$RUN_ID/g0-0-evidence.json"
+  --out "$EVID/g0-0-evidence.json"
 ```
 
 `--target-*` 를 주지 않으면 **테이블 단위 축 4개가 전부 `UNDETERMINED`** 가 된다. 묶이지 않은
@@ -368,7 +426,7 @@ python3 g0-normalize.py \
 ### 이 레코드는 G0 게이트에 못 들어간다
 
 ```bash
-python3 g0_final_gate.py "$EVID/$RUN_ID/g0-0-evidence.json"   # 항상 exit 1
+python3 g0_final_gate.py "$EVID/g0-0-evidence.json"   # 항상 exit 1
 ```
 
 `record_type=g0_0_evidence` 는 최종 게이트가 **무조건** 거절한다. `gate_eligible` 을 손으로

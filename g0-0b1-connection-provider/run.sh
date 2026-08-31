@@ -96,7 +96,11 @@ submit failclosed_task   failclosed "-Dg0b1.fail=phase" task_only partitioned_co
 submit metadata_probe coverage "" metadata_only || true
 
 echo
-python3 analyze-trace.py --trace-dir "$TRACE" --result-log "$LOGS"/*.log --out g0-0b1-evidence.json
+# 산출물 경로를 밖에서 받는다(9차 조치 2). M1-4 가 **경로에 RUN_ID 를 요구**하는데
+# 여기서 고정 이름으로 쓰면 래퍼가 그 산출물을 거부한다 — runbook 이 실제로 그 상태였다.
+OUT="${B1_OUT:-g0-0b1-evidence.json}"
+mkdir -p "$(dirname "$OUT")"
+python3 analyze-trace.py --trace-dir "$TRACE" --result-log "$LOGS"/*.log --out "$OUT"
 rc=$?
-echo "[run] 증거: g0-0b1-evidence.json   추적 원본: $TRACE"
+echo "[run] 증거: $OUT   추적 원본: $TRACE"
 exit $rc

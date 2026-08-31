@@ -154,11 +154,16 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 - 회귀 시험: `g0-normalize-tests.py`(147) · `g0-axes-tests.py`(127) ·
   `g0-b1-analyzer-tests.py`(43) · `g0-m0-safety-tests.py`(51) ·
   `g0-0b1-connection-provider/g0-b1-wiring-tests.py`(16, **종단 배선**) ·
-  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 413건**
+  `g0-runbook-lint.py`(19, **절차서 dry-run**) ·
+  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 432건**
 - **종단 배선 시험**(9차 조치 1): 나머지는 판정기에 합성 입력을 넣지만 이것은 **실물
   `run.sh` 를 돌려 실물 `analyze-trace.py` 에 넣는다.** 그리고 배선을 일부러 P0-03 상태로
   되돌리면 **실패하는지**까지 확인한다 — 음성 대조가 없으면 "무조건 통과하는 시험"과
   구분되지 않는다
+- **절차서 dry-run lint**(9차 조치 2): `g0-0-runbook.md` 의 bash 블록을 파싱해 미정의 변수·
+  필수 인자 누락·`RUN_ID` 없는 산출물 경로·없는 파일·낡은 판본 참조를 잡는다. 필수 목록을
+  **실물 스크립트에서 읽으므로**(argparse `required=True`, `${VAR:?}`) 계약이 강해지면
+  절차서가 뒤처진 것이 자동으로 드러난다 — 그 뒤처짐이 9차 P0-06 이었다
 
 > **그렇다고 이 계약이 8차 리뷰를 닫은 것은 아니다.** M0~M3 은 처리했고 회귀 시험이 각
 > 반례를 막지만, **G0-0 은 아직 한 번도 사내 원천에 대고 완주하지 않았다.** 축 값과
