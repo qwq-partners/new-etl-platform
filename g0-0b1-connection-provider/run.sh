@@ -34,6 +34,14 @@ submit() {  # $1=run 라벨  $2=python --mode  $3=extra -D  $4=시나리오  $5=
   # **run 과 mode 는 다르다**(2026-08-27, 조치 5). failclosed 를 경로별로 나누면서
   # run 라벨은 failclosed_schema·failclosed_task 로 갈리지만 python 의 --mode 는
   # 둘 다 failclosed 여야 한다(그래야 "실패가 정상" 판정을 한다).
+  #
+  # **그래서 run 을 python 에도 넘긴다**(9차 조치 1). 이 줄이 없던 것이 P0-03 이다 —
+  # python 은 run 을 몰라서 phase 파일·마커·terminal token 을 전부 mode 이름으로 썼고,
+  # provider 는 -Dg0b1.run 이름으로 읽었다. 두 이름이 갈리면
+  #   · failclosed_task 는 declaredPhase() 가 UNDECLARED 라 **주입이 아예 안 걸린다**
+  #   · 두 회차 다 terminal token 이름이 달라 analyzer 가 못 찾는다 → PROVEN 도달 불가
+  # coverage 만 run == mode 라 우연히 맞아서 눈에 띄지 않았다.
+  # python 쪽에 -Dg0b1.run 과 --run 을 대조하는 fail-closed 검사도 넣었다.
   local delay_opt="-Dg0b1.max.delay=$DELAY"
   case "$DELAY" in none|off|-|"") delay_opt="" ;; esac
   local phase_opt=""
@@ -48,7 +56,7 @@ submit() {  # $1=run 라벨  $2=python --mode  $3=extra -D  $4=시나리오  $5=
     --conf "spark.driver.extraJavaOptions=$opts" \
     --conf "spark.executor.extraJavaOptions=$opts" \
     run-g0-0b1.py --url "$URL" --user "$USER" --password-env ORA_PW \
-      --table "$TABLE" --mode "$mode" --scenario "$scen" \
+      --table "$TABLE" --run "$run" --mode "$mode" --scenario "$scen" \
       --provider "${PROVIDER_OPT:-g0b1tracer}" \
       --trace-dir "$TRACE" 2>&1 | tee "$LOGS/$run.log"
   local rc=${PIPESTATUS[0]}

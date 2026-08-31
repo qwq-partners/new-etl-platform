@@ -72,9 +72,15 @@ python3 g0-normalize-tests.py      # 147건 — 증거 봉투 fail-closed
 python3 g0-axes-tests.py           # 127건 — capability 축 파생·SQLCODE taxonomy·floor
 python3 g0-b1-analyzer-tests.py    #  43건 — B1 판정기
 python3 g0-m0-safety-tests.py      #  51건 — 실행 안전성(M0)
-# 넷 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
+python3 g0-0b1-connection-provider/g0-b1-wiring-tests.py   # 16건 — **B1 종단 배선**
+# 다섯 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
 # (여기 적힌 숫자가 늘어나 있으면 그건 시험이 늘어난 것이지 실패가 아니다).
 ```
+
+> **마지막 것이 9차 조치 1 로 새로 생겼다.** 나머지 넷은 판정기에 **합성 입력**을 넣어
+> 판정 규칙을 시험한다. 그것만으로는 **launcher 가 그 입력을 실제로 만드는가**를 아무도
+> 안 본다 — 9차 P0-03 이 그 틈에서 나왔다. 배선 시험은 실물 `run.sh` 를 돌려
+> 실물 `analyze-trace.py` 에 넣고, **배선을 일부러 깨면 실패하는지**까지 확인한다.
 
 ---
 
