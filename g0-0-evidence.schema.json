@@ -804,6 +804,10 @@
     "overwrote_existing": {
      "type": "boolean",
      "description": "기존 산출물을 덮어썼는가(G0_ALLOW_OVERWRITE=1). true 면 계약 위반이다 — 덮인 회차의 증거는 복구할 수 없다(8차 M1-4)."
+    },
+    "env_kind": {
+     "type": "string",
+     "description": "래퍼가 **관측한** 실행 환경(9차 조치 4). wsl|container|host|UNRECORDED. caller 가 고르는 profile label 과 다르다 — 판정은 비대칭이다: wsl·container 관측은 CORP_POC 선언을 반증하지만 host 는 아무것도 입증하지 않는다."
     }
    }
   },

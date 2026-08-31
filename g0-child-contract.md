@@ -134,6 +134,8 @@ emitted:86}` 이 `MEASURED`** 가 됐다. `cov_b0` 는 step 차집합을, `cov_c
 | `profile` 이 child 들 사이에서 같은가 | **집계 거부**(exit 4) |
 | `run_id` 가 child 들 사이에서 같은가 | **집계 거부**(exit 4) |
 | source identity(A 가 밝힌 것)가 다른 child 와 모순되지 않는가 | **집계 거부**(exit 4) |
+| manifest 의 `source_id` 가 **서버가 밝힌 `DB_UNIQUE_NAME`** 과 같은가 | **집계 거부**(exit 4) — 9차 조치 4 |
+| 선언된 `profile` 이 래퍼가 **관측한 `env_kind`** 와 모순되지 않는가 | **집계 거부**(exit 4) — 9차 조치 4 |
 | 산출물이 자기 `expected` 를 채웠는가 | child `PARTIAL` 또는 `FAILED` |
 | child schema(`g0-child-schemas/`)를 지키는가 | **집계 거부**(exit 4) — 게다가 그 child 는 **본문 집계에 들어가지도 않는다**(8차 M3-1) |
 
@@ -142,6 +144,32 @@ emitted:86}` 이 `MEASURED`** 가 됐다. `cov_b0` 는 step 차집합을, `cov_c
 **schema 를 어긴 파일에서 뽑힌 값 그대로** 레코드에 남는다. 형태가 계약과 다른 산출물을 파싱한
 결과를 싣고서 "이 레코드는 무엇을 세었는가" 를 말할 수 없다. 지금은 통과한 산출물만 집계
 입력이 되고, 제외한 child 는 `warnings` 에 남는다.
+
+### 3.0 원천 신원과 profile 은 **신고값이 아니다** (9차 조치 4)
+
+9차 P0-02 가 잡은 것 둘. 둘 다 "운영자가 적은 값을 그대로 믿었다" 는 같은 뿌리다.
+
+**① `source_id` 를 서버가 밝힌 값과 대조하지 않았다.** 그래서 한 레코드 안에
+`children.g0_0a.source_id = TESTSTBY` 와 `source.db_unique_name = ETLSTB` 가 공존하고
+위반이 0건이었다. M1-2 는 manifest ↔ `--source-id` ↔ 다른 child 만 봤는데,
+**child 들이 같은 거짓 이름을 공유하는 것은 같은 원천에서 나왔다는 증명이 아니다.**
+지금은 A 의 `userenv.DB_UNIQUE_NAME` 과 대조한다. 서버 신원을 못 읽은 회차는 위반이 아니라
+**미확인**이고, 그 사실이 축의 `SOURCE_IDENTITY_UNVERIFIED` floor 사유가 된다.
+
+**② `profile` 이 caller 가 고르는 label 이었다.** WSL 에서 `PROFILE=CORP_POC` 로 재라벨하면
+`PROFILE_NOT_AUTHORITATIVE` floor 를 우회했다 — 그 floor 는 **정직하게 신고한 회차만** 막고
+있었다. 지금은 래퍼가 `env_kind` 를 **관측해** manifest 에 남기고, 집계기가 모순을 거부한다.
+
+**판정은 비대칭이다.** 완전한 attestation(승인된 launcher·서명)은 이 저장소 범위 밖이므로,
+할 수 있는 것은 **알려진 거짓말을 막는 것**뿐이다.
+
+| 관측 `env_kind` | 뜻 |
+|---|---|
+| `wsl` · `container` | 그 환경에서 `CORP_POC` 선언은 **거짓이다** → 거부 |
+| `host` | `CORP_POC` 를 **입증하지 않는다.** cgroup v2 컨테이너도 여기로 온다 → 반증만 안 될 뿐 |
+| `UNRECORDED` | 래퍼가 기록하지 않았다 → **관측 못 한 것을 통과로 두지 않는다** → 거부 |
+
+`CORP_POC` 의 실질적 근거는 fingerprint 가 아니라 **①의 서버 신원 대조**다.
 
 ### 3.1 `expected` — "한 줄이면 통과"를 막는 것
 

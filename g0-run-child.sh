@@ -30,6 +30,34 @@ case " $CHILDREN " in *" $CHILD "*) ;; *) echo "알 수 없는 CHILD: $CHILD" >&
 case " $PROFILES " in *" $PROFILE "*) ;; *) echo "알 수 없는 PROFILE: $PROFILE" >&2; usage;; esac
 case "$RUN_ID" in ""|*[!A-Za-z0-9._-]*) echo "RUN_ID 에는 [A-Za-z0-9._-] 만 쓴다: $RUN_ID" >&2; exit 2;; esac
 
+# ── 9차 조치 4: 실행 환경을 **관측한다** ─────────────────────────────
+#
+# 9차 P0-02. profile 이 caller 가 고르는 label 이라 **WSL 에서 PROFILE=CORP_POC 로
+# 재라벨**하면 아무도 막지 못했다. 8차의 profile relabel 반례가 그대로 살아 있었다.
+#
+# 완전한 attestation(승인된 launcher·서명)은 이 저장소 범위 밖이다. 대신 **래퍼가
+# 자기가 도는 환경의 관측 가능한 사실**을 남기고, 집계기가 선언된 profile 과 모순되면
+# 거부한다. 증명은 못 해도 **알려진 거짓말은 막는다.**
+#
+#   wsl        /proc/sys/kernel/osrelease 에 microsoft|WSL
+#   container  /.dockerenv 또는 cgroup 에 docker|containerd|kubepods
+#   host       위 둘 다 아님 — CORP_POC 를 **증명하지는 않는다**
+env_kind() {
+  local osr="" cg=""
+  [ -r /proc/sys/kernel/osrelease ] && osr=$(cat /proc/sys/kernel/osrelease 2>/dev/null || true)
+  case "$osr" in *microsoft*|*Microsoft*|*WSL*) echo wsl; return;; esac
+  [ -e /.dockerenv ] || [ -e /run/.containerenv ] && { echo container; return; }
+  [ -n "${container:-}" ] && { echo container; return; }
+  [ -r /proc/1/cgroup ] && cg=$(cat /proc/1/cgroup 2>/dev/null || true)
+  case "$cg" in *docker*|*containerd*|*kubepods*|*lxc*) echo container; return;; esac
+  # **`host` 는 "컨테이너가 아니다" 를 증명하지 않는다.** cgroup v2 는 `0::/` 만 내는 경우가
+  # 있어 컨테이너 안에서도 여기까지 온다(이 저장소의 샌드박스가 그렇다). 그래서 판정은
+  # **비대칭**이다 — wsl·container 관측은 CORP_POC 선언을 반증하지만, host 는 아무것도
+  # 입증하지 않는다. CORP_POC 의 실질 근거는 서버가 밝힌 원천 신원이다(집계기 §조치 4).
+  echo host
+}
+ENV_KIND=$(env_kind)
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 LOCK="${VERSIONS_LOCK:-$HERE/versions.lock}"
 [ -f "$LOCK" ] || { echo "versions.lock 이 없다: $LOCK" >&2; exit 2; }
@@ -125,6 +153,7 @@ MAN="$ARTIFACT.manifest.json"
   echo "    \"sha256\": $(jq_str "$ART_SHA"),"
   echo "    \"lines\": $ART_LINES"
   echo '  },'
+  echo "  \"env_kind\": $(jq_str "$ENV_KIND"),"
   echo '  "runtime": {'
   echo "    \"uname\": $(jq_str "$(uname -srmo 2>/dev/null || uname -a)"),"
   echo "    \"python\": $(jq_str "$(python3 -V 2>&1 | head -1)"),"

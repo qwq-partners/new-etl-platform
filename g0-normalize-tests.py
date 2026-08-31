@@ -32,7 +32,9 @@ def sha(p: pathlib.Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-SOURCE_ID = "TESTSTBY"
+# **서버가 밝히는 값과 같아야 한다**(9차 조치 4 · P0-02). 이전 픽스처는 manifest 에
+# TESTSTBY, A probe 에 ETLSTB 를 넣고도 통과했다 — 한 레코드가 두 원천을 말했다.
+SOURCE_ID = "ETLSTB"
 HARNESS = "b" * 64
 
 # **고정 날짜를 쓰지 않는다.** M3-3 이 TTL 기반 stale 판정을 넣었으므로, 픽스처의 측정
@@ -48,7 +50,7 @@ def write_manifest(art: pathlib.Path, child: str, *, run_id=RUN_ID, profile=PROF
                    lock_digest: str, exit_code=0, artifact_sha: str | None = None,
                    source_id: str = SOURCE_ID, harness_digest: str = HARNESS,
                    overwrote: bool = False, drop: tuple[str, ...] = (),
-                   age_days: float = 0.02) -> None:
+                   age_days: float = 0.02, env_kind: str = "host") -> None:
     """`drop` 으로 필드를 빼면 M1-2 결속 검사를 반례로 시험할 수 있다.
 
     `age_days` 는 측정 시각을 과거로 미는 값이다 — M3-3 stale 시험용. 기본값이 0 이 아닌
@@ -62,6 +64,8 @@ def write_manifest(art: pathlib.Path, child: str, *, run_id=RUN_ID, profile=PROF
         "exit_code": exit_code, "versions_lock_digest": lock_digest,
         "source_id": source_id, "harness_digest": harness_digest,
         "overwrote_existing": overwrote,
+        # 9차 조치 4 — 래퍼가 관측한 실행 환경. 시험은 'host'(반증 불가)로 둔다.
+        "env_kind": env_kind,
         "artifact": {"path": str(art), "sha256": artifact_sha or sha(art),
                      "lines": len(art.read_text(encoding="utf-8").splitlines())},
         "runtime": {"uname": "test"}, "command": ["test"],
@@ -1091,9 +1095,111 @@ def t_a9_positive_control() -> None:
     shutil.rmtree(w)
 
 
+# ── 9차 조치 4 ───────────────────────────────────────────────────────
+def t_a9_source_identity_mismatch() -> None:
+    print("\n[48] 조치 4 — manifest source_id ≠ 서버 DB_UNIQUE_NAME 이면 거부 (9차 §9-4)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(), encoding="utf-8")          # 서버는 ETLSTB 라고 말한다
+    write_manifest(art, "G0_0A", lock_digest=ld, source_id="TESTSTBY")
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    v = " ".join(out.get("contract_violations", []))
+    check("한 레코드가 두 원천을 말한다고 지적한다", "두 원천을 말한다" in v, v[:250])
+    check("최종 경로에 쓰지 않았다", not (w / f"{RUN_ID}-out.json").exists())
+    shutil.rmtree(w)
+
+
+def t_a9_declared_source_mismatch() -> None:
+    print("\n[49] 조치 4 — **M1 을 통과하는 구멍**: manifest 와 --source-id 는 일치하는데 둘 다 서버와 다르다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(), encoding="utf-8")          # 서버는 ETLSTB 라고 말한다
+    # M1-2 는 manifest ↔ --source-id 만 본다. 둘을 같은 거짓 이름으로 맞추면 통과했다 —
+    # **같은 이름을 공유하는 것은 같은 원천에서 나왔다는 증명이 아니다.**
+    write_manifest(art, "G0_0A", lock_digest=ld, source_id="OTHERDB")
+    rc, out, _ = run_norm(w, a=art, source_id="OTHERDB")
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    v = " ".join(out.get("contract_violations", []))
+    check("M1-2 의 manifest↔인자 대조는 통과했다", "source_id 불일치" not in v, v[:200])
+    check("서버 신원과 다름을 지적한다(9차 조치 4 가 잡는다)",
+          "두 원천을 말한다" in v, v[:300])
+    shutil.rmtree(w)
+
+
+def t_a9_no_server_identity_floors() -> None:
+    print("\n[50] 조치 4 — 서버 신원을 못 읽으면 위반이 아니라 **floor** 다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    # A 를 안 돌린 회차. 대조할 상대가 없다 — 그것은 계약 위반이 아니라 미확인이다.
+    b0 = w / f"b0-{RUN_ID}.json"
+    b0.write_text(json.dumps({"b0_summary": {"expected_steps": ["S0"],
+                                             "emitted_steps": ["S0"]}}) + "\n", encoding="utf-8")
+    write_manifest(b0, "G0_0B0", lock_digest=ld)
+    rc, out, _ = run_norm(w, b0=b0)
+    check("계약 위반은 아니다(exit 3)", rc == 3, f"rc={rc}")
+    rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
+    check("대조할 상대가 없다고 경고한다",
+          any("대조할 상대가 없다" in x for x in rec.get("warnings", [])),
+          str(rec.get("warnings"))[:250])
+    reasons = {r for v in rec["capability_axes"].values() for r in v["floor_reasons"]}
+    check("SOURCE_IDENTITY_UNVERIFIED floor 가 걸린다",
+          "SOURCE_IDENTITY_UNVERIFIED" in reasons, str(sorted(reasons)))
+    shutil.rmtree(w)
+
+
+def t_a9_profile_relabel() -> None:
+    print("\n[51] 조치 4 — WSL 에서 CORP_POC 로 재라벨하면 거부 (9차 §9-5)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(), encoding="utf-8")
+    # 래퍼가 관측한 환경은 wsl 인데 caller 는 CORP_POC 라고 선언했다.
+    write_manifest(art, "G0_0A", lock_digest=ld, profile="CORP_POC", env_kind="wsl")
+    rc, out, _ = run_norm(w, a=art, profile="CORP_POC")
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("재라벨을 지적한다",
+          any("재라벨한 것이다" in x for x in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:250])
+    shutil.rmtree(w)
+
+
+def t_a9_env_kind_required() -> None:
+    print("\n[52] 조치 4 — env_kind 를 기록하지 않은 manifest 는 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(), encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld, drop=("env_kind",))
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("관측하지 못한 것을 통과로 두지 않는다",
+          any("env_kind 가 없다" in x for x in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:250])
+    shutil.rmtree(w)
+
+
+def t_a9_profile_positive_control() -> None:
+    print("\n[53] 조치 4 — **양성 대조**: 환경이 profile 을 반증하지 않으면 통과")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(), encoding="utf-8")
+    # host 는 CORP_POC 를 **입증하지 않지만 반증하지도 않는다** — 판정은 비대칭이다.
+    write_manifest(art, "G0_0A", lock_digest=ld, profile="CORP_POC", env_kind="host")
+    rc, out, _ = run_norm(w, a=art, profile="CORP_POC")
+    check("통과한다(exit 3 — 다른 child 미실행)", rc == 3, f"rc={rc}")
+    # LOCAL_WSL 선언 + wsl 관측도 정상이다.
+    w2 = new_work(); ld2 = sha(w2 / "versions.lock")
+    (w2 / "versions.lock").write_text("profile: LOCAL_WSL\n", encoding="utf-8")
+    ld2 = sha(w2 / "versions.lock")
+    a2 = w2 / f"a-{RUN_ID}.log"
+    a2.write_text(a_log(), encoding="utf-8")
+    write_manifest(a2, "G0_0A", lock_digest=ld2, profile="LOCAL_WSL", env_kind="wsl")
+    rc2, out2, _ = run_norm(w2, a=a2, profile="LOCAL_WSL")
+    check("LOCAL_WSL + wsl 관측은 정상", rc2 == 3, f"rc={rc2}")
+    shutil.rmtree(w); shutil.rmtree(w2)
+
+
 def main() -> int:
     print("=" * 70)
-    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3")
+    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3·4")
     print("=" * 70)
     for t in (t_jsonschema_present, t_b0_one_line, t_b1_fabricated, t_b1_no_failclosed,
               t_c00_summary_only, t_ce_empty_pass, t_ce_bad_returncode, t_a_no_sentinel,
@@ -1115,7 +1221,11 @@ def main() -> int:
               # 9차 조치 3
               t_a9_probe_manifest_matches_sql, t_a9_missing_probe,
               t_a9_unknown_probe, t_a9_lying_summary,
-              t_a9_summary_count_mismatch, t_a9_positive_control):
+              t_a9_summary_count_mismatch, t_a9_positive_control,
+              # 9차 조치 4
+              t_a9_source_identity_mismatch, t_a9_declared_source_mismatch,
+              t_a9_no_server_identity_floors, t_a9_profile_relabel,
+              t_a9_env_kind_required, t_a9_profile_positive_control):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

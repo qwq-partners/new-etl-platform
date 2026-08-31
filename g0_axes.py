@@ -730,6 +730,9 @@ FLOOR_REASONS: dict[str, str] = {
     "SOURCE_UNVERIFIED":
         "이 회차의 profile·source·harness 를 대조하지 못했다(manifest 누락 허용 등). "
         "어느 원천을 어느 코드로 잰 값인지 확인되지 않았다.",
+    "SOURCE_IDENTITY_UNVERIFIED":
+        "manifest 의 source_id 를 서버가 밝힌 DB_UNIQUE_NAME 과 대조하지 못했다. "
+        "이 회차가 **어느 원천의 capability 인지** 말할 수 없다(9차 P0-02).",
     "PROFILE_NOT_AUTHORITATIVE":
         "profile 이 LOCAL_WSL·SANDBOX_CONTAINER 다. 그 레코드는 스스로 '하네스 동작 "
         "확인용이며 설계 주장의 근거가 아니다' 라고 적는다 — 그렇게 적으면서 확정 "

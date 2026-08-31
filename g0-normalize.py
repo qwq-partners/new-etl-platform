@@ -208,6 +208,8 @@ def check_child(child_const: str, art: pathlib.Path,
         "started_at": str(man.get("started_at", "")),
         "ended_at": str(man.get("ended_at", "")),
         "overwrote_existing": bool(man.get("overwrote_existing", False)),
+        # 9차 조치 4 — 래퍼가 **관측한** 실행 환경. caller 가 고른 profile label 과 다르다.
+        "env_kind": str(man.get("env_kind", "")) or "UNRECORDED",
     }
     measured = str(man.get("ended_at") or man.get("started_at") or "")
     if measured:
@@ -327,6 +329,85 @@ def validate_child_artifact(key: str, art: pathlib.Path) -> list[str]:
     if bad > 3:
         V.append(f"{key}: child schema 위반이 총 {bad}줄이다(앞 3건만 표시)")
     return V
+
+
+# ── 9차 조치 4: profile attestation 과 서버 신원 결속 ────────────────
+#
+# 9차 P0-02 가 잡은 것 둘.
+#
+#   ① manifest 의 `source_id` 를 **서버가 밝힌 `DB_UNIQUE_NAME` 과 대조하지 않았다.**
+#      그래서 한 레코드 안에 `source_id=TESTSTBY` 와 `db_unique_name=ETLSTB` 가 공존하고
+#      위반이 0건이었다. child 들이 같은 **거짓** 이름을 공유하는 것은 같은 원천에서
+#      나왔다는 증명이 아니다.
+#   ② profile 이 caller 가 고르는 label 이라 WSL 에서 `CORP_POC` 로 재라벨하면 막을 수
+#      없었다 — `PROFILE_NOT_AUTHORITATIVE` floor 는 정직하게 신고한 회차만 막고 있었다.
+#
+# 완전한 attestation 은 이 저장소 범위 밖이다. 여기서 하는 것은 **알려진 모순을 거부**하는
+# 것이고, 그 판정은 비대칭이다 — `wsl`·`container` 관측은 `CORP_POC` 를 반증하지만
+# `host` 는 아무것도 입증하지 않는다.
+PROFILE_ENV = {
+    "LOCAL_WSL": {"wsl"},
+    "SANDBOX_CONTAINER": {"container"},
+    # CORP_POC 는 어떤 fingerprint 로도 **입증되지 않는다.** 아래 표는 반증용이다.
+}
+# 이 환경이 관측되면 그 profile 은 거짓이다.
+PROFILE_CONTRADICTED_BY = {
+    "CORP_POC": {"wsl", "container"},
+    "LOCAL_WSL": {"container"},
+    "SANDBOX_CONTAINER": {"wsl"},
+}
+
+
+def check_profile_attestation(children: dict[str, dict], profile: str) -> list[str]:
+    """선언된 profile 이 래퍼가 관측한 환경과 모순되는가 (9차 조치 4)."""
+    V: list[str] = []
+    bad = PROFILE_CONTRADICTED_BY.get(profile, set())
+    for name, rec in children.items():
+        if not (isinstance(rec, dict) and rec.get("present")):
+            continue
+        kind = rec.get("env_kind") or "UNRECORDED"
+        if kind in bad:
+            V.append(f"{name}: profile={profile} 인데 래퍼가 관측한 실행 환경은 {kind!r} 다 — "
+                     f"**로컬 증거를 사내 회차로 재라벨한 것이다**(9차 P0-02). profile 은 "
+                     f"caller 가 고르는 label 이지만 환경은 관측된 사실이다")
+        elif kind == "UNRECORDED":
+            V.append(f"{name}: manifest 에 env_kind 가 없다 — 래퍼가 실행 환경을 기록하지 "
+                     f"않았다(9차 조치 4 이전 판본으로 실행했는가). **관측하지 못한 것을 "
+                     f"통과로 두지 않는다**")
+    return V
+
+
+def check_source_identity(P: dict[str, dict], children: dict[str, dict],
+                          declared_source_id: str) -> tuple[list[str], list[str]]:
+    """manifest 의 `source_id` 를 **서버가 밝힌 신원**과 대조한다 (9차 조치 4 · P0-02).
+
+    반환은 (위반, 경고). 서버 신원을 못 읽은 회차는 위반이 아니라 **미확인**이며,
+    그 사실이 capability floor 사유가 된다 — 호출자가 그것을 판단한다.
+    """
+    V: list[str] = []
+    W: list[str] = []
+    r = P.get("userenv.DB_UNIQUE_NAME")
+    server = str(r.get("value")) if (r and r.get("query_ok") is True and
+                                     r.get("value") is not None) else ""
+    if not server:
+        W.append("서버가 밝힌 DB_UNIQUE_NAME 이 없다(G0-0A 미실행 또는 그 probe 실패) — "
+                 "**manifest 의 source_id 를 대조할 상대가 없다.** 이 회차의 원천 신원은 "
+                 "운영자 신고값뿐이며 그것은 증거가 아니다(9차 P0-02)")
+        return V, W
+
+    for name, rec in children.items():
+        if not (isinstance(rec, dict) and rec.get("present")):
+            continue
+        sid = str(rec.get("source_id") or "")
+        if sid and sid.upper() != server.upper():
+            V.append(f"{name}: manifest 의 source_id={sid!r} 인데 서버가 밝힌 "
+                     f"DB_UNIQUE_NAME 은 {server!r} 다 — **한 레코드가 두 원천을 말한다.** "
+                     f"child 들이 같은 이름을 공유하는 것은 같은 원천에서 나왔다는 증명이 "
+                     f"아니다(9차 P0-02)")
+    if declared_source_id and declared_source_id.upper() != server.upper():
+        V.append(f"--source-id={declared_source_id!r} 인데 서버가 밝힌 DB_UNIQUE_NAME 은 "
+                 f"{server!r} 다 — 운영자가 지정한 원천과 실제로 붙은 원천이 다르다")
+    return V, W
 
 
 def check_run_set(children: dict[str, dict]) -> list[str]:
@@ -730,6 +811,9 @@ def main() -> int:
     # child 하나씩 보는 검사로는 "각자는 일관되지만 서로 다른 회차" 를 잡지 못한다.
     V.extend(check_run_set(children))
 
+    # ── profile attestation (9차 조치 4) ──────────────────────────
+    V.extend(check_profile_attestation(children, a.profile))
+
     # ── 본문 판정 ─────────────────────────────────────────────────
     # **M3-1: 계약·schema 를 통과한 산출물만 집계 입력이 된다.**
     #
@@ -803,6 +887,14 @@ def main() -> int:
         W.append("--target-owner/--target-table 중 일부만 주었거나 서버가 db_unique_name 을 "
                  "밝히지 않았다 → 테이블 단위 축을 묶지 못해 UNDETERMINED 로 둔다")
 
+    # ── 서버 신원 결속 (9차 조치 4 · P0-02) ───────────────────────
+    # manifest 의 source_id 는 **운영자 신고값**이다. 서버가 스스로 밝힌 값과 대조해야
+    # 증거가 된다 — 그 대조가 없어서 한 레코드 안에 두 원천이 공존했다.
+    v_src, w_src = check_source_identity(P, children, a.source_id)
+    V.extend(v_src)
+    W.extend(w_src)
+    source_identity_verified = not v_src and not w_src
+
     # ── 축 파생 + effective floor (8차 M3-3) ──────────────────────
     # `value` 는 관측 사실이고 `effective_value` 는 실행에 쓰는 값이다. 아래 사유가 하나라도
     # 붙으면 그 축의 effective_value 는 floor 로 내려간다 — **요약도 exit 판정도
@@ -817,6 +909,10 @@ def main() -> int:
         # 이 레코드는 스스로 "하네스 동작 확인용이며 설계 주장의 근거가 아니다" 라고 적는다.
         # 그렇게 적으면서 확정 capability 를 publish 값으로 내보내면 두 말이 어긋난다.
         floor_reasons.append("PROFILE_NOT_AUTHORITATIVE")
+    if not source_identity_verified:
+        # 9차 조치 4 — 서버가 밝힌 신원과 대조하지 못했으면 이 회차가 **어느 원천의
+        # capability 인지** 말할 수 없다. `CORP_POC` 라고 적혀 있어도 마찬가지다.
+        floor_reasons.append("SOURCE_IDENTITY_UNVERIFIED")
     # 사유 이름은 g0_axes 의 표가 권위다. 여기서 새 이름을 지어내면 레코드를 읽는 쪽이
     # 뜻을 찾을 곳이 없다.
     undeclared = [r for r in floor_reasons if r not in g0_axes.FLOOR_REASONS]
