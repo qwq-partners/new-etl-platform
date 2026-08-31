@@ -160,11 +160,16 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
   그리고 래퍼가 실행 환경(`wsl`/`container`/`host`)을 **관측해** 남기고, 선언된 profile 과
   모순되면 거부한다. **판정은 비대칭이다** — `wsl` 관측은 `CORP_POC` 를 반증하지만
   `host` 는 아무것도 입증하지 않는다(cgroup v2 컨테이너도 `host` 로 보인다)
-- 회귀 시험: `g0-normalize-tests.py`(178) · `g0-axes-tests.py`(127) ·
+- **harness manifest**(9차 조치 5): `g0-harness-manifest.json` 이 저장소의 **모든 파일**을
+  `harness`(digest 대상 45건) · `tooling` · `excluded_globs`(이유 명시)로 선언한다. 미선언
+  파일이 있으면 digest 를 내주지 않으므로 **새 파일을 만들면 어느 쪽인지 정해야 한다** —
+  이전 판은 11개를 하드코딩해 provider Java source·ServiceLoader 등록·CE 시나리오가 전부
+  빠져 있었고, 그 파일을 바꿔도 digest 가 그대로였다
+- 회귀 시험: `g0-normalize-tests.py`(193) · `g0-axes-tests.py`(127) ·
   `g0-b1-analyzer-tests.py`(43) · `g0-m0-safety-tests.py`(51) ·
   `g0-0b1-connection-provider/g0-b1-wiring-tests.py`(16, **종단 배선**) ·
   `g0-runbook-lint.py`(19, **절차서 dry-run**) ·
-  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 463건**
+  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 478건**
 - **종단 배선 시험**(9차 조치 1): 나머지는 판정기에 합성 입력을 넣지만 이것은 **실물
   `run.sh` 를 돌려 실물 `analyze-trace.py` 에 넣는다.** 그리고 배선을 일부러 P0-03 상태로
   되돌리면 **실패하는지**까지 확인한다 — 음성 대조가 없으면 "무조건 통과하는 시험"과

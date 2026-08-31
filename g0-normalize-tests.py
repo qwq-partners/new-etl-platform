@@ -1197,9 +1197,72 @@ def t_a9_profile_positive_control() -> None:
     shutil.rmtree(w); shutil.rmtree(w2)
 
 
+# ── 9차 조치 5 ───────────────────────────────────────────────────────
+def t_a9_harness_manifest_complete() -> None:
+    print("\n[54] 조치 5 — harness manifest 가 저장소 전체를 덮는가 (9차 §9-6)")
+    r = subprocess.run([sys.executable, str(ROOT / "g0-harness-manifest.py")],
+                       capture_output=True, text=True, cwd=str(ROOT))
+    check("미선언 파일이 없다", r.returncode == 0,
+          f"{r.stdout.strip()} {r.stderr.strip()}"[:400])
+
+    man = json.loads((ROOT / "g0-harness-manifest.json").read_text(encoding="utf-8"))
+    h = {e["path"] for e in man["harness"]}
+    # 9차가 "빠져 있다" 고 지목한 파일들이 이제 들어 있는가.
+    for must in ("g0-0b1-connection-provider/src/main/java/etl/g0b1/Preamble.java",
+                 "g0-0b1-connection-provider/src/main/resources/META-INF/services/"
+                 "org.apache.spark.sql.jdbc.JdbcConnectionProvider",
+                 "g0-0b1-connection-provider/build.sh",
+                 "g0-child-schemas/g0-child-a.schema.json",
+                 "g0-final-contract.json",
+                 "g0_final_gate.py",
+                 "g0-0c-counterexamples/suite.yaml"):
+        check(f"harness 에 있다: {must.split('/')[-1]}", must in h, must)
+    check("이전 판(11건)보다 늘었다", len(h) > 11, str(len(h)))
+
+
+def t_a9_harness_digest_changes() -> None:
+    print("\n[55] 조치 5 — behavior 파일을 바꾸면 digest 가 바뀐다")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("hm", ROOT / "g0-harness-manifest.py")
+    hm = importlib.util.module_from_spec(spec); spec.loader.exec_module(hm)
+    base = hm.digest()
+
+    # 9차가 지목한 "빠져 있던" 파일 하나를 건드려 본다. 되돌린다.
+    target = ROOT / "g0-0b1-connection-provider/src/main/java/etl/g0b1/Preamble.java"
+    orig = target.read_bytes()
+    try:
+        target.write_bytes(orig + b"\n// wiring test touch\n")
+        after = hm.digest()
+        check("Preamble.java 를 바꾸면 digest 가 바뀐다", after != base,
+              "이전 판은 이 파일이 목록에 없어 digest 가 그대로였다")
+    finally:
+        target.write_bytes(orig)
+    check("되돌리면 digest 가 복원된다", hm.digest() == base)
+
+
+def t_a9_undeclared_file_fails() -> None:
+    print("\n[56] 조치 5 — **음성 대조**: 선언되지 않은 파일이 생기면 실패한다")
+    newf = ROOT / "g0-zz-undeclared-probe.py"
+    assert not newf.exists()
+    newf.write_text("# 9차 조치 5 음성 대조용 임시 파일\n", encoding="utf-8")
+    try:
+        r = subprocess.run([sys.executable, str(ROOT / "g0-harness-manifest.py")],
+                           capture_output=True, text=True, cwd=str(ROOT))
+        check("검사가 실패한다", r.returncode != 0, f"rc={r.returncode}")
+        check("그 파일을 지목한다", "g0-zz-undeclared-probe.py" in r.stderr, r.stderr[:200])
+        rd = subprocess.run([sys.executable, str(ROOT / "g0-harness-manifest.py"), "--digest"],
+                            capture_output=True, text=True, cwd=str(ROOT))
+        check("불완전하면 digest 를 내주지 않는다", rd.returncode != 0, rd.stdout[:80])
+    finally:
+        newf.unlink()
+    r2 = subprocess.run([sys.executable, str(ROOT / "g0-harness-manifest.py")],
+                        capture_output=True, text=True, cwd=str(ROOT))
+    check("지우면 다시 통과한다", r2.returncode == 0, r2.stderr[:200])
+
+
 def main() -> int:
     print("=" * 70)
-    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3·4")
+    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3·4·5")
     print("=" * 70)
     for t in (t_jsonschema_present, t_b0_one_line, t_b1_fabricated, t_b1_no_failclosed,
               t_c00_summary_only, t_ce_empty_pass, t_ce_bad_returncode, t_a_no_sentinel,
@@ -1225,7 +1288,10 @@ def main() -> int:
               # 9차 조치 4
               t_a9_source_identity_mismatch, t_a9_declared_source_mismatch,
               t_a9_no_server_identity_floors, t_a9_profile_relabel,
-              t_a9_env_kind_required, t_a9_profile_positive_control):
+              t_a9_env_kind_required, t_a9_profile_positive_control,
+              # 9차 조치 5
+              t_a9_harness_manifest_complete, t_a9_harness_digest_changes,
+              t_a9_undeclared_file_fails):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

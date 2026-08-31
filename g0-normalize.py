@@ -241,7 +241,7 @@ def check_child(child_const: str, art: pathlib.Path,
         V.append(f"{child_const}: source_id 불일치 (manifest={rec['source_id']!r}, "
                  f"요청={source_id!r}) — 서로 다른 원천의 산출물을 섞었다")
 
-    if rec["harness_digest"] in ("", "MISSING", "NO_HARNESS_FILES"):
+    if rec["harness_digest"] in ("", "MISSING", "NO_HARNESS_FILES", "MANIFEST_INCOMPLETE"):
         V.append(f"{child_const}: manifest 에 harness_digest 가 없다 — versions.lock 은 "
                  f"실행 판본이지 하네스 코드가 아니다. 프로브를 고쳐도 lock digest 는 "
                  f"그대로이므로, 이것이 없으면 다른 코드로 잰 값이 같은 판본으로 묶인다(8차 M1-2)")

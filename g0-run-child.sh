@@ -105,16 +105,27 @@ LOCK_DIGEST=$(sha "$LOCK")
 # versions.lock 은 **실행 판본**(Spark·JDK·ojdbc)이지 **하네스 코드**가 아니다.
 # 프로브 SQL 이나 판정기를 고쳐도 lock digest 는 그대로다 — 그러면 서로 다른 코드로
 # 잰 값이 같은 판본으로 묶인다. 하네스 자신의 digest 를 따로 남긴다.
+# ── 9차 조치 5: harness digest 는 **선언된 목록**에서 나온다 ────────
+#
+# 9차 P1-01. 이전 판은 여기에 11개 파일을 **하드코딩**했고 provider Java source·
+# ServiceLoader 등록·build.sh·child schema 4종·final contract·gate·CE 시나리오가 전부
+# 빠져 있었다. **빠진 파일을 바꿔도 digest 가 그대로**여서, M1-2 가 세운 명제
+# ("서로 다른 코드로 잰 값이 같은 판본으로 묶이는 것을 막는다")가 그 파일들에는
+# 성립하지 않았다. 그리고 새 파일은 목록에 자동으로 들어가지 않았다.
+#
+# 이제 목록은 `g0-harness-manifest.json` 이 선언하고, 그 검사기가 저장소의 **모든**
+# 파일(미커밋 포함)이 harness·tooling·excluded 중 하나에 속하는지 확인한다.
+# 미선언 파일이 있으면 digest 를 내주지 않는다 — 그 digest 는 "이 코드로 쟀다" 를
+# 말하지 못하기 때문이다.
 harness_digest() {
-  local files
-  files=$(cd "$HERE" && ls -1 \
-    g0-0a-capability-inventory.sql g0-0b0-spark-smoke.py g0-0c-fence-facts.sql \
-    g0-normalize.py g0_axes.py g0-run-child.sh g0-sqlplus.sh \
-    g0-0b1-connection-provider/run.sh g0-0b1-connection-provider/run-g0-0b1.py \
-    g0-0b1-connection-provider/analyze-trace.py \
-    g0-0c-counterexamples/runner.py 2>/dev/null | sort)
-  [ -n "$files" ] || { echo NO_HARNESS_FILES; return; }
-  (cd "$HERE" && printf '%s\n' $files | xargs sha256sum | sha256sum | cut -d' ' -f1)
+  local d
+  d=$(cd "$HERE" && python3 g0-harness-manifest.py --digest 2>/dev/null) || {
+    echo "harness manifest 가 불완전하다. 다음을 실행해 원인을 보라:" >&2
+    echo "  python3 $HERE/g0-harness-manifest.py" >&2
+    echo "MANIFEST_INCOMPLETE"
+    return
+  }
+  [ -n "$d" ] && echo "$d" || echo MANIFEST_INCOMPLETE
 }
 HARNESS_DIGEST=$(harness_digest)
 

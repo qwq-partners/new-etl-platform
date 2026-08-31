@@ -21,6 +21,14 @@
 > 하네스 코드가 아니다. 프로브 SQL 이나 판정기를 고쳐도 lock digest 는 그대로다 — 그러면
 > **서로 다른 코드로 잰 값이 같은 판본으로 묶인다.**
 >
+> **2026-08-31(9차 조치 5) — 그 digest 가 코드의 일부만 덮고 있었다.** 래퍼가 11개 파일을
+> 하드코딩했고 provider Java source·ServiceLoader 등록·`build.sh`·child schema 4종·
+> final contract·gate·CE 시나리오가 전부 빠져 있었다. 빠진 파일을 바꿔도 digest 는 그대로였다.
+> 지금은 `g0-harness-manifest.json` 이 **저장소의 모든 파일**(미커밋 포함)을
+> `harness`(digest 대상) · `tooling`(아님) · `excluded_globs`(문서 등, 이유 명시)로 선언하고,
+> 검사기가 미선언 파일을 찾으면 **digest 를 내주지 않는다** — 그런 digest 는 "이 코드로 쟀다"
+> 를 말하지 못하기 때문이다. harness 45건이다(이전 11건).
+>
 > **M1-3 이 잡는 것이 개별 검사로는 안 잡힌다.** child 마다 자기 manifest 와 일관되면
 > child 단위 검사는 전부 통과한다. 그런데 그 child 들이 서로 다른 회차의 것이면
 > **이어 붙인 회차는 하나의 회차가 아니다.** 그래서 집합을 따로 본다.
