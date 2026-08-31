@@ -12,16 +12,71 @@ from collections import Counter, defaultdict
 
 
 def load_traces(d):
+    """추적 레코드와 **stream 별** 상태를 함께 돌려준다 (9차 조치 10 / P1-02).
+
+    stream 은 파일 하나이며 곧 JVM 하나다 — `Trace.file()` 이 JVM 마다 파일을 연다.
+    이전 판은 모든 파일을 한 목록으로 뭉개서 어느 레코드가 어느 파일에서 왔는지를
+    잃었다. 그래서 driver 하나만 정상 종료해도 전체가 complete 로 읽혔고, executor
+    추적이 통째로 잘려도 판정이 그대로 진행됐다.
+    """
     out = []
+    streams: dict[str, dict] = {}
     for p in sorted(pathlib.Path(d).glob("g0-0b1-trace-*.jsonl")):
+        st = {"file": p.name, "lines": 0, "unparsable": 0, "ends": []}
         for i, ln in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             ln = ln.strip()
             if not ln:
                 continue
+            st["lines"] += 1          # **물리 줄 수**. tracer 가 센 것과 대조할 값이다.
             try:
-                out.append(json.loads(ln))
+                rec = json.loads(ln)
             except json.JSONDecodeError as e:
+                st["unparsable"] += 1
                 print(f"[warn] {p.name}:{i} JSON 아님 — {e}", file=sys.stderr)
+                continue
+            if rec.get("event") == "trace_end":
+                st["ends"].append(rec)
+            out.append(rec)
+        streams[p.name] = st
+    return out, streams
+
+
+def stream_status(streams: dict) -> list[dict]:
+    """stream 마다 '끝까지 쓰였는가' 를 따로 답한다.
+
+    sentinel 이 있는 것만으로는 부족하다. `trace_end.lines_written` 은 tracer 가
+    `line()` 으로 **센** 줄 수이고 sentinel 자신은 세지 않으므로, 온전한 파일이면
+    물리 줄 수가 정확히 `lines_written + 1` 이다. 모자라면 센 줄 중 일부가 파일에
+    닿지 않은 것이다(write 실패는 삼켜진다 — `rawLine` 의 catch). 그것은 구멍이며,
+    구멍 뚫린 추적으로 '없었다' 를 말할 수 없다.
+    """
+    out = []
+    for name, st in sorted(streams.items()):
+        ends = st["ends"]
+        row = {"file": name, "lines": st["lines"], "unparsable": st["unparsable"],
+               "trace_end_records": len(ends), "complete": False,
+               "lines_written": None, "expected_lines": None, "lost_lines": None,
+               "why": None}
+        if not ends:
+            row["why"] = "trace_end sentinel 이 없다 — JVM 이 비정상 종료했거나 파일이 잘렸다"
+        elif len(ends) > 1:
+            row["why"] = f"trace_end 가 {len(ends)}건이다 — 한 JVM 의 파일에 둘 이상 있을 수 없다"
+        else:
+            lw = ends[0].get("lines_written")
+            row["lines_written"] = lw
+            if not isinstance(lw, int):
+                row["why"] = f"trace_end 에 lines_written 이 정수가 아니다: {lw!r}"
+            else:
+                row["expected_lines"] = lw + 1     # sentinel 자신은 세지 않는다
+                row["lost_lines"] = (lw + 1) - st["lines"]
+                if st["lines"] < lw + 1:
+                    row["why"] = (f"줄이 {row['lost_lines']}건 모자란다 — tracer 는 {lw}건을 "
+                                  f"썼다고 세는데 파일에는 {st['lines']}건뿐이다")
+                elif st["unparsable"]:
+                    row["why"] = f"JSON 이 아닌 줄이 {st['unparsable']}건이다"
+                else:
+                    row["complete"] = True
+        out.append(row)
     return out
 
 
@@ -62,14 +117,21 @@ def main():
     ap.add_argument("--out", default="g0-0b1-evidence.json")
     a = ap.parse_args()
 
-    tr = load_traces(a.trace_dir)
+    tr, streams = load_traces(a.trace_dir)
     res = load_results(a.result_log)
 
-    # ── M2-5: 추적 완결성 ────────────────────────────────────────────
+    # ── M2-5 + 9차 조치 10: 추적 완결성은 **stream 별**이다 ──────────
     # 잘린 추적 파일과 "connection 이 원래 없었다" 는 겉모습이 같다. tracer 가 종료 시
     # 남기는 trace_end sentinel 이 있어야 **파일이 끝까지 쓰였다**고 말할 수 있다.
+    #
+    # 이전 판은 `trace_complete = bool(ends)` 였다 — 모든 파일의 레코드를 한 목록으로
+    # 뭉갠 뒤 sentinel 이 **하나라도** 있으면 완결이라고 했다. driver 는 거의 항상
+    # 정상 종료하므로, executor 추적이 통째로 없어져도 이 값은 true 다(P1-02).
+    # 완결은 이제 **모든 stream** 이 각자 끝까지 쓰였을 때만 참이다.
     ends = [t for t in tr if t.get("event") == "trace_end"]
-    trace_complete = bool(ends)
+    stream_rows = stream_status(streams)
+    incomplete = [r for r in stream_rows if not r["complete"]]
+    trace_complete = bool(stream_rows) and not incomplete
 
     # ── M2-5: terminal failure token ────────────────────────────────
     # driver 가 자기가 어떻게 끝났는지 선언한 토큰. 판정기가 step 성공 여부로
@@ -78,16 +140,21 @@ def main():
 
     ev = {"trace_lines": len(tr), "results": res, "findings": [], "verdict": {},
           "trace_complete": trace_complete,
+          "trace_streams": stream_rows,
           "trace_end_records": ends,
           "terminal_tokens": terminals}
 
-    if not trace_complete and tr:
+    if incomplete:
         ev["findings"].append({
-            "q": "추적 파일이 끝까지 쓰였는가",
-            "observed": {"trace_end_records": 0, "trace_lines": len(tr)},
+            "q": "추적 파일이 **전부** 끝까지 쓰였는가",
+            "observed": {"streams": len(stream_rows), "incomplete": len(incomplete),
+                         "incomplete_streams": [{"file": r["file"], "why": r["why"]}
+                                                for r in incomplete]},
             "answer": "NO",
-            "note": ("trace_end sentinel 이 없다 — JVM 이 비정상 종료했거나 파일이 잘렸다. "
-                     "**이 추적으로는 '없다' 와 '못 봤다' 를 구분할 수 없다**(8차 M2-5)."),
+            "note": ("stream 하나라도 끝까지 쓰이지 않으면 이 회차 전체가 측정 실패다"
+                     "(9차 조치 10 / P1-02). **이 추적으로는 '없다' 와 '못 봤다' 를 "
+                     "구분할 수 없다** — driver 가 정상 종료했다는 것은 executor 가 "
+                     "무엇을 했는지에 대해 아무 말도 하지 않는다."),
         })
 
     if not tr:
@@ -100,6 +167,23 @@ def main():
                        "(4) canHandle 의 URL 접두사가 실제 URL 과 맞는가"),
         }
         pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(json.dumps(ev["verdict"], ensure_ascii=False, indent=1))
+        return 5   # MEASUREMENT_FAILED 는 NOT_PROVEN(3) 과 다른 것이다. 섞으면 안 된다.
+
+    if incomplete:
+        # **§8 재리뷰 기준 9번**: executor trace 하나만 sentinel 이 없어도 전체가
+        # MEASUREMENT_FAILED 다. 남은 stream 으로 부분 판정을 내지 않는다 — 무엇이
+        # 빠졌는지 모르는 채로 "덮었다" 를 말하는 것이 이 저장소가 막으려는 것이다.
+        ev["verdict"] = {
+            "coverage": "MEASUREMENT_FAILED",
+            "reason": (f"추적 stream {len(stream_rows)}개 중 {len(incomplete)}개가 끝까지 "
+                       f"쓰이지 않았다: "
+                       + "; ".join(f"{r['file']}({r['why']})" for r in incomplete)
+                       + ". 이것은 '덮지 못한다' 가 아니라 '측정하지 못했다' 이다."),
+            "incomplete_streams": [r["file"] for r in incomplete],
+        }
+        pathlib.Path(a.out).write_text(json.dumps(ev, ensure_ascii=False, indent=1),
+                                       encoding="utf-8")
         print(json.dumps(ev["verdict"], ensure_ascii=False, indent=1))
         return 5   # MEASUREMENT_FAILED 는 NOT_PROVEN(3) 과 다른 것이다. 섞으면 안 된다.
 
@@ -252,8 +336,9 @@ def main():
                     "그 step 이 쓰는 경로가 connection 예외를 삼킨다.")
         elif not trace_complete:
             answer = "MEASUREMENT_FAILED"
-            note = ("추적에 trace_end sentinel 이 없다 — 파일이 끝까지 쓰였다는 증거가 없으므로 "
-                    "'주입이 닿지 않았다' 와 '기록이 잘렸다' 를 구분할 수 없다(8차 M2-5).")
+            note = ("추적 stream 중 끝까지 쓰이지 않은 것이 있다 — 파일이 온전하다는 증거가 "
+                    "없으므로 '주입이 닿지 않았다' 와 '기록이 잘렸다' 를 구분할 수 없다"
+                    "(8차 M2-5 · 9차 조치 10).")
         elif not_proven:
             answer = "NOT_PROVEN"
             reasons = []

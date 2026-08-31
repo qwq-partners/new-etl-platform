@@ -96,6 +96,32 @@ def fc_runs_ok():
              terminal("failclosed_task", "EXPECTED_FAILURE_OBSERVED")])
 
 
+def run_analyzer_streams(streams: dict, results, terminals=()):
+    """**stream(=파일) 여러 개**를 쓴다 (9차 조치 10 / P1-02).
+
+    `streams` 는 `{파일접미사: [추적 레코드…]}` 다. 파일이 곧 JVM 이므로, driver 와
+    executor 를 따로 두어야 "driver 만 정상 종료" 를 재현할 수 있다. 한 파일에 다 넣는
+    기존 하네스로는 이 결함이 원리상 드러나지 않는다.
+    """
+    w = pathlib.Path(tempfile.mkdtemp(prefix="g0b1an-"))
+    td = w / "trace"; td.mkdir()
+    for suffix, recs in streams.items():
+        (td / f"g0-0b1-trace-t-{suffix}.jsonl").write_text(
+            "\n".join(json.dumps(t, ensure_ascii=False) for t in recs) + "\n",
+            encoding="utf-8")
+    log = w / "run.log"
+    lines = ["G0B1_RESULT " + json.dumps(r, ensure_ascii=False) for r in results]
+    lines += ["G0B1_TERMINAL " + json.dumps(t, ensure_ascii=False) for t in terminals]
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out = w / "ev.json"
+    r = subprocess.run([sys.executable, str(ANALYZER), "--trace-dir", str(td),
+                        "--result-log", str(log), "--out", str(out)],
+                       capture_output=True, text=True)
+    ev = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
+    shutil.rmtree(w)
+    return r.returncode, ev
+
+
 def run_analyzer(traces, results, terminals=()):
     w = pathlib.Path(tempfile.mkdtemp(prefix="g0b1an-"))
     td = w / "trace"; td.mkdir()
@@ -205,7 +231,7 @@ def t_injection_must_actually_apply():
 
 
 def t_trace_incomplete_is_measurement_failed():
-    print("\n[6] trace_end sentinel 이 없으면 측정 실패다 (8차 M2-5)")
+    print("\n[6] trace_end sentinel 이 없으면 측정 실패다 (8차 M2-5 · 9차 조치 10)")
     tr = [conn("coverage", "SCHEMA", phase="schema_only"),
           conn("coverage", "TASK", phase="partitioned_count")]
     fcs, terms = fc_runs_ok(); tr += fcs
@@ -213,12 +239,16 @@ def t_trace_incomplete_is_measurement_failed():
     rc, ev = run_analyzer(tr, [result("coverage", "OK"),
                                result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])], terms)
     check("trace_complete=false", ev.get("trace_complete") is False, str(ev.get("trace_complete")))
-    f = next(x for x in ev["findings"] if "fail-closed" in x["q"])
-    check("fail-closed 가 MEASUREMENT_FAILED", f["answer"] == "MEASUREMENT_FAILED", f["answer"])
-    check("'없다'와 '못 봤다'를 구분할 수 없다고 적는다",
-          "구분할 수 없다" in f["note"], f["note"][:160])
+    # **NOT_PROVEN(3) 이 아니라 MEASUREMENT_FAILED(5) 다**(9차 조치 10). 이전 판은
+    # 완결성 finding 만 남기고 판정을 계속해서 NOT_PROVEN·exit 3 으로 끝냈다 —
+    # 이 파일 머리말이 스스로 금지한 혼동이다("덮지 못한다"와 "측정하지 못했다").
+    check("verdict 가 MEASUREMENT_FAILED",
+          ev["verdict"]["coverage"] == "MEASUREMENT_FAILED", str(ev["verdict"])[:160])
+    check("exit 5", rc == 5, f"rc={rc}")
     g = next(x for x in ev["findings"] if "끝까지 쓰였는가" in x["q"])
     check("완결성 finding 이 따로 있다", g["answer"] == "NO", g["answer"])
+    check("'없다'와 '못 봤다'를 구분할 수 없다고 적는다",
+          "구분할 수 없다" in g["note"], g["note"][:160])
 
 
 def t_failclosed_positive():
@@ -294,6 +324,78 @@ def t_swallowed_path_still_no():
     check("살아남은 step 을 적는다", "partitioned_count" in str(f["observed"]), str(f["observed"])[:200])
 
 
+def _two_stream_run(executor_end: bool, exec_lines_written=None):
+    """driver 와 executor 를 **다른 파일**에 둔 한 회차.
+
+    driver 는 언제나 정상 종료한다 — 실제로도 거의 항상 그렇다. 그래서 executor 쪽만
+    잘렸을 때 이전 판이 완결이라고 답했다.
+    """
+    drv = [conn("coverage", "SCHEMA", phase="schema_only")]
+    fcs, terms = fc_runs_ok()
+    drv += fcs
+    drv.append(trace_end(lines=len(drv)))
+    ex = [conn("coverage", "TASK", phase="partitioned_count")]
+    if executor_end:
+        ex.append(trace_end(lines=len(ex) if exec_lines_written is None
+                            else exec_lines_written))
+    return {"1@driver": drv, "2@exec": ex}, terms
+
+
+def t_a9_one_stream_missing_sentinel():
+    print("\n[12] 조치 10 — executor stream 하나만 sentinel 이 없어도 전체가 측정 실패다")
+    streams, terms = _two_stream_run(executor_end=False)
+    rc, ev = run_analyzer_streams(streams, [result("coverage", "OK"),
+                                            result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])],
+                                  terms)
+    check("trace_complete=false", ev.get("trace_complete") is False, str(ev.get("trace_complete")))
+    check("verdict 가 MEASUREMENT_FAILED",
+          ev["verdict"]["coverage"] == "MEASUREMENT_FAILED", str(ev["verdict"])[:200])
+    check("exit 5", rc == 5, f"rc={rc}")
+    check("어느 stream 인지 지목한다",
+          ev["verdict"]["incomplete_streams"] == ["g0-0b1-trace-t-2@exec.jsonl"],
+          str(ev["verdict"].get("incomplete_streams")))
+    # **driver 는 멀쩡하다.** 그 사실이 executor 를 대신 말해 주지 않는다는 것이 요지다.
+    rows = {r["file"]: r for r in ev["trace_streams"]}
+    check("driver stream 은 complete", rows["g0-0b1-trace-t-1@driver.jsonl"]["complete"] is True,
+          str(rows["g0-0b1-trace-t-1@driver.jsonl"]))
+    check("executor stream 만 incomplete",
+          rows["g0-0b1-trace-t-2@exec.jsonl"]["complete"] is False,
+          str(rows["g0-0b1-trace-t-2@exec.jsonl"]))
+
+
+def t_a9_all_streams_complete_positive():
+    print("\n[13] 조치 10 — 양성 대조: 두 stream 이 다 온전하면 판정이 진행된다")
+    streams, terms = _two_stream_run(executor_end=True)
+    rc, ev = run_analyzer_streams(streams, [result("coverage", "OK"),
+                                            result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])],
+                                  terms)
+    # 이게 서지 않으면 [12] 의 실패는 '파일을 나누면 무조건 실패' 라는 뜻일 뿐이다.
+    check("trace_complete=true", ev.get("trace_complete") is True, str(ev.get("trace_complete")))
+    check("MEASUREMENT_FAILED 가 아니다",
+          ev["verdict"]["coverage"] != "MEASUREMENT_FAILED", str(ev["verdict"])[:160])
+    check("exit 5 가 아니다", rc != 5, f"rc={rc}")
+    check("stream 2개를 다 봤다", len(ev["trace_streams"]) == 2, str(len(ev["trace_streams"])))
+    check("둘 다 complete", all(r["complete"] for r in ev["trace_streams"]),
+          str(ev["trace_streams"]))
+
+
+def t_a9_lost_lines_detected():
+    print("\n[14] 조치 10 — sentinel 이 있어도 줄이 모자라면 측정 실패다")
+    # sentinel 은 붙어 있는데 tracer 가 센 줄 수가 파일보다 많다 = 쓰다 만 줄이 있다.
+    # write 실패는 삼켜지므로(`rawLine` 의 catch) 이 구멍은 sentinel 만으로는 안 보인다.
+    streams, terms = _two_stream_run(executor_end=True, exec_lines_written=99)
+    rc, ev = run_analyzer_streams(streams, [result("coverage", "OK"),
+                                            result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])],
+                                  terms)
+    check("trace_complete=false", ev.get("trace_complete") is False, str(ev.get("trace_complete")))
+    check("exit 5", rc == 5, f"rc={rc}")
+    rows = {r["file"]: r for r in ev["trace_streams"]}
+    ex = rows["g0-0b1-trace-t-2@exec.jsonl"]
+    check("sentinel 은 있었다", ex["trace_end_records"] == 1, str(ex))
+    check("모자란 줄 수를 센다", ex["lost_lines"] == 99 + 1 - ex["lines"], str(ex))
+    check("사유가 줄 부족이다", "모자란다" in (ex["why"] or ""), str(ex["why"]))
+
+
 def main() -> int:
     print("=" * 70)
     print("analyze-trace.py 반례 회귀 시험 — 7차 교차 리뷰 P0-06(a)")
@@ -302,7 +404,10 @@ def main() -> int:
               t_failclosed_needs_terminal_token, t_rows_read_under_injection_is_fence_escape,
               t_injection_must_actually_apply, t_trace_incomplete_is_measurement_failed,
               t_failclosed_positive, t_verdicts_separated, t_no_failclosed_run,
-              t_measurement_failed, t_swallowed_path_still_no):
+              t_measurement_failed, t_swallowed_path_still_no,
+              # 9차 조치 10
+              t_a9_one_stream_missing_sentinel, t_a9_all_streams_complete_positive,
+              t_a9_lost_lines_detected):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

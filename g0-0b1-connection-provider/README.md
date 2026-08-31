@@ -259,6 +259,19 @@ v1 은 `Preamble.shouldFail(Trace.classify(stack))` 이었다. 그러면 **분�
 4. **`trace_end` sentinel** — 없으면 `MEASUREMENT_FAILED`. 잘린 추적과
    "connection 이 원래 없었다" 는 겉모습이 같다
 
+**완결성은 stream 별이다**(9차 조치 10 / P1-02). stream 은 파일 하나이며 곧 JVM 하나다 —
+`Trace.file()` 이 JVM 마다 파일을 연다. 이전 판은 모든 파일을 한 목록으로 뭉갠 뒤 sentinel 이
+**하나라도** 있으면 완결로 봤고, driver 는 거의 항상 정상 종료하므로 **executor 추적이 통째로
+없어져도 `trace_complete=true` · `coverage=PROVEN` · exit 0** 이 나왔다. 지금은 stream 하나라도
+끝까지 쓰이지 않으면 회차 전체가 `MEASUREMENT_FAILED`(exit 5)이고, 어느 파일이 문제인지
+`trace_streams` 와 `verdict.incomplete_streams` 에 적는다. 남은 stream 으로 부분 판정을 내지
+않는다 — 무엇이 빠졌는지 모르는 채로 "덮었다" 를 말하지 않는다.
+
+sentinel 이 있는 것만으로는 부족하다. `trace_end.lines_written` 은 tracer 가 `line()` 으로
+**센** 줄 수이고 sentinel 자신은 세지 않으므로, 온전한 파일이면 물리 줄 수가 정확히
+`lines_written + 1` 이다. 모자라면 센 줄 중 일부가 파일에 닿지 않은 것이다 — `rawLine` 의
+write 실패는 삼켜지므로 그 구멍은 sentinel 만 봐서는 보이지 않는다.
+
 **그리고 시험 하네스 자체의 결함 하나를 고쳤다.** `run-tests.sh` 가 `test/` 만
 컴파일하고 `build/classes` 에 링크했기 때문에, `src/` 를 고치고 `build.sh` 를 다시
 돌리지 않으면 **낡은 구현에 대고 새 시험을 돌렸다.** 이 작업 중에 실제로 그 상태로
