@@ -220,16 +220,29 @@ def t_a_no_sentinel() -> None:
     print("\n[7] A 가 sentinel 없음 → PARTIAL ∧ 축은 전부 UNDETERMINED")
     w = new_work(); ld = sha(w / "versions.lock")
     art = w / f"a-{RUN_ID}.log"
-    art.write_text('{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ORCL"}\n'
-                   '{"probe_summary":{"expected":86,"emitted":86,"manifest_ok":true}}\n',
-                   encoding="utf-8")
+    # **sentinel 부재만 격리한다.** 나머지는 정상이어야 그 성질을 시험한 것이 된다 —
+    # 이전 판은 probe 1건에 summary 86 이라 9차 조치 3 이후 다른 이유로 거부된다.
+    art.write_text(a_log(sentinel=False), encoding="utf-8")
     write_manifest(art, "G0_0A", lock_digest=ld)
     rc, out, _ = run_norm(w, a=art)
     st = (out.get("coverage") or {}).get("g0_0a")
     check("sentinel 없으면 PARTIAL", st == "PARTIAL", f"status={st}")
     rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
-    vals = {v["value"] for v in rec["capability_axes"].values()}
-    check("축이 전부 UNDETERMINED", vals == {"UNDETERMINED"}, str(vals))
+    # **`value` 가 아니라 `effective_value` 를 본다**(8차 M3-3). 87 probe 를 실제로 낸
+    # 픽스처에서는 관측값이 나오는 것이 정상이다 — `value` 는 감사용이고, PARTIAL 인
+    # child 에서 나온 값은 `effective_value` 가 floor 로 내려가야 한다.
+    ax = rec["capability_axes"]
+    floored = [k for k, v in ax.items() if "CHILD_NOT_MEASURED" in v["floor_reasons"]]
+    check("전 축에 CHILD_NOT_MEASURED floor 가 걸린다", len(floored) == len(ax),
+          f"안 걸린 축 {sorted(set(ax) - set(floored))}")
+    determinate = {k: v["effective_value"] for k, v in ax.items()
+                   if v["effective_value"] not in ("UNDETERMINED", "UNDEFINED")}
+    # floor 로 내려간 값은 남을 수 있다(sql_dialect 의 floor 는 11G 다). 확인할 것은
+    # **관측값이 그대로 실행값이 되지 않는다**는 것이다.
+    same = [k for k, v in ax.items()
+            if v["value"] != "UNDETERMINED" and v["effective_value"] == v["value"]]
+    check("관측값이 그대로 실행값이 되지 않는다", not same,
+          f"floor 가 안 걸린 축 {same} / 확정 실행값 {determinate}")
     check("gate_eligible 은 false", rec["gate_eligible"] is False)
     check("record_type 은 g0_0_evidence", rec["record_type"] == "g0_0_evidence")
     shutil.rmtree(w)
@@ -334,6 +347,58 @@ def t_lock_unset_comment_only() -> None:
     shutil.rmtree(w)
 
 
+# ── 9차 조치 3: A 픽스처는 **실제 87개 probe** 를 낸다 ──────────────────
+# 이전 픽스처는 probe 3건에 `summary{expected:86, emitted:86}` 였고, 그것이 `MEASURED` 로
+# 통과했다. **저장소가 자기 결함을 양성 대조로 고정해 두고 있었다**(9차 P0-01).
+# 목록은 SQL 에서 생성된 계약에서 읽는다 — 여기에 87개를 베껴 적으면 그것도 같이 낡는다.
+A_REQUIRED = json.loads(
+    (ROOT / "g0-child-schemas" / "g0-0a-probe-manifest.json").read_text(encoding="utf-8")
+)["probe_ids"]
+
+# 축 파생이 확정값을 내려면 값이 필요한 probe 들. 나머지는 형태만 맞춘다.
+A_VALUES = {
+    "userenv.DB_UNIQUE_NAME": "ETLSTB",
+    "userenv.DATABASE_ROLE": "PHYSICAL STANDBY",
+    "nls.characterset": "AL32UTF8",
+}
+
+
+def a_log(*, drop: tuple[str, ...] = (), extra: tuple[str, ...] = (),
+          expected: int | None = None, emitted: int | None = None,
+          sentinel: bool = True, values: dict | None = None,
+          failed_ora: int | None = None) -> str:
+    """계약이 요구하는 87개를 그대로 내는 A 로그.
+
+    `drop`/`extra` 로 집합 반례를, `values` 로 특정 probe 의 값을 준다 — 축 파생을
+    시험하려면 값이 필요한데, **그렇다고 87개 집합을 깨서는 안 된다**(9차 조치 3).
+    """
+    vals = dict(A_VALUES)
+    vals.update(values or {})
+    ids = [i for i in A_REQUIRED if i not in set(drop)] + list(extra)
+    lines = []
+    for i in ids:
+        if failed_ora:
+            # 전 probe 가 transient 로 실패한 회차. **TRANSIENT 는 절대 NONE 이 아니므로**
+            # 모든 축이 UNDETERMINED 가 된다 — floor 가 값을 올리지 않는지 보는 데 쓴다.
+            lines.append(json.dumps({"probe": i, "query_ok": False, "ora": -failed_ora,
+                                     "msg": f"ORA-{failed_ora:05d}: test"}, ensure_ascii=False))
+            continue
+        rec = {"probe": i, "query_ok": True}
+        v = vals.get(i)
+        if isinstance(v, dict):
+            rec.update(v)
+        elif v is not None:
+            rec["value"] = v
+        lines.append(json.dumps(rec, ensure_ascii=False))
+    lines.append(json.dumps({"probe_summary": {
+        "expected": len(A_REQUIRED) if expected is None else expected,
+        "emitted": len(ids) if emitted is None else emitted,
+        "manifest_ok": True, "query_failed": 0, "value_mismatch": 0}}))
+    if sentinel:
+        lines.append(json.dumps({"probe_run_end": "G0-0A", "status": "reached_end"}))
+    return "\n".join(lines) + "\n"
+
+
 def full_fixture(w: pathlib.Path, ld: str, **mk) -> dict:
     """다섯 child 가 모두 MEASURED 에 도달하는 산출물 한 벌.
 
@@ -342,15 +407,7 @@ def full_fixture(w: pathlib.Path, ld: str, **mk) -> dict:
     (예: `age_days` 로 측정 시각을 과거로 밀어 stale 을 낸다).
     """
     a_art = w / f"a-{RUN_ID}.log"
-    a_art.write_text(
-        '{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ETLSTB"}\n'
-        '{"probe":"userenv.DATABASE_ROLE","query_ok":true,"value":"PHYSICAL STANDBY"}\n'
-        # 축이 하나라도 확정값을 갖게 하려면 값 probe 가 하나는 있어야 한다.
-        # 전 축이 UNDETERMINED 인 픽스처로는 floor·stale 을 시험할 수 없다(내려갈 곳이 없다).
-        '{"probe":"nls.characterset","query_ok":true,"value":"AL32UTF8"}\n'
-        '{"probe_summary":{"expected":86,"emitted":86,"manifest_ok":true,'
-        '"query_failed":0,"value_mismatch":0}}\n'
-        '{"probe_run_end":"G0-0A","status":"reached_end"}\n', encoding="utf-8")
+    a_art.write_text(a_log(), encoding="utf-8")
     write_manifest(a_art, "G0_0A", lock_digest=ld, **mk)
 
     b0 = w / f"b0-{RUN_ID}.json"
@@ -473,24 +530,23 @@ def t_axes_derived_in_record() -> None:
     print("\n[17] 축 파생이 레코드에 반영된다 (조치 3)")
     w = new_work(); ld = sha(w / "versions.lock")
     a_art = w / f"a-{RUN_ID}.log"
-    a_art.write_text(
-        '{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ETLSTB"}\n'
-        '{"probe":"dbms_flashback.get_scn","query_ok":true,"value":"9912345",'
-        '"value_interpretable":true}\n'
-        '{"probe":"as_of_timestamp.target","query_ok":true,"value":"1"}\n'
-        '{"probe":"feat.standard_hash_sha256","query_ok":true,"value":"ba7816bf",'
-        '"value_interpretable":true}\n'
-        '{"probe":"feat.fetch_first","query_ok":true,"value":"1"}\n'
-        '{"probe":"nls.characterset","query_ok":true,"value":"AL32UTF8"}\n'
-        '{"probe":"nls.nchar_characterset","query_ok":true,"value":"AL16UTF16"}\n'
-        '{"probe":"v$parameter.max_string","query_ok":true,"value":"STANDARD"}\n'
-        '{"probe":"wm_column.type_facts","query_ok":true,"value":"TIMESTAMP(2)|scale=2"}\n'
-        '{"probe":"feat.ora_rowscn_target","query_ok":true,"value":"9912000"}\n'
-        '{"probe":"feat.rowdependencies_target","query_ok":true,"value":"DISABLED"}\n'
-        '{"probe":"alter.STANDBY_MAX_DATA_DELAY.D","query_ok":true,"value":"ok"}\n'
-        '{"probe":"max_delay_zero.touch_target","query_ok":true,"value":"1"}\n'
-        '{"probe_summary":{"expected":13,"emitted":13,"manifest_ok":true}}\n'
-        '{"probe_run_end":"G0-0A","status":"reached_end"}\n', encoding="utf-8")
+    # **87 집합을 지키면서 값만 준다**(9차 조치 3). 이전 판은 13개짜리 로그였고,
+    # 집합 검사가 생긴 뒤로는 그것이 축 파생이 아니라 집합 위반을 시험하게 된다.
+    a_art.write_text(a_log(values={
+        "userenv.DB_UNIQUE_NAME": "ETLSTB",
+        "dbms_flashback.get_scn": {"value": "9912345", "value_interpretable": True},
+        "as_of_timestamp.target": "1",
+        "feat.standard_hash_sha256": {"value": "ba7816bf", "value_interpretable": True},
+        "feat.fetch_first": "1",
+        "nls.characterset": "AL32UTF8",
+        "nls.nchar_characterset": "AL16UTF16",
+        "v$parameter.max_string": "STANDARD",
+        "wm_column.type_facts": "TIMESTAMP(2)|scale=2",
+        "feat.ora_rowscn_target": "9912000",
+        "feat.rowdependencies_target": "DISABLED",
+        "alter.STANDBY_MAX_DATA_DELAY.D": "ok",
+        "max_delay_zero.touch_target": "1",
+    }), encoding="utf-8")
     write_manifest(a_art, "G0_0A", lock_digest=ld)
     rc, out, err = run_norm(w, a=a_art, target_owner="APP", target_table="T1",
                             wm_column="UPDATE_DT")
@@ -694,10 +750,9 @@ def t_m3_effective_floor() -> None:
     # A 만 넣되 sentinel 을 빼서 PARTIAL 로 만든다. value 는 관측대로 남고
     # effective_value 는 내려가야 한다.
     a_art = w / f"a-{RUN_ID}.log"
-    a_art.write_text(
-        '{"probe":"feat.fetch_first","query_ok":true,"value":"1"}\n'
-        '{"probe":"nls.characterset","query_ok":true,"value":"AL32UTF8"}\n'
-        '{"probe_summary":{"expected":2,"emitted":2,"manifest_ok":true}}\n', encoding="utf-8")
+    a_art.write_text(a_log(sentinel=False,
+                           values={"feat.fetch_first": "1",
+                                   "nls.characterset": "AL32UTF8"}), encoding="utf-8")
     write_manifest(a_art, "G0_0A", lock_digest=ld)
     rc, out, _ = run_norm(w, a=a_art)
     check("exit 3(측정 불완전)", rc == 3, f"rc={rc}")
@@ -720,8 +775,9 @@ def t_m3_floor_never_raises() -> None:
     a_art = w / f"a-{RUN_ID}.log"
     # 아무 probe 도 없다 → 전 축 UNDETERMINED. sql_dialect 의 floor 는 11G 지만
     # UNDETERMINED 를 11G 로 올리면 그것은 floor 가 아니라 승격이다.
-    a_art.write_text('{"probe_summary":{"expected":0,"emitted":0,"manifest_ok":true}}\n',
-                     encoding="utf-8")
+    # 87건을 다 내되 **전부 transient 실패**로 만든다(ORA-03135 연결 단절).
+    # 집합 검사는 통과하고 축은 전부 UNDETERMINED 가 된다.
+    a_art.write_text(a_log(failed_ora=3135), encoding="utf-8")
     write_manifest(a_art, "G0_0A", lock_digest=ld)
     rc, out, _ = run_norm(w, a=a_art)
     rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
@@ -795,10 +851,9 @@ def t_m3_composite_follows_input() -> None:
     print("\n[36] M3-3 — 합성 축은 입력이 내려가면 같이 내려간다")
     w = new_work(); ld = sha(w / "versions.lock")
     a_art = w / f"a-{RUN_ID}.log"
-    a_art.write_text(
-        '{"probe":"feat.standard_hash_sha256","query_ok":true,"value":"ba7816bf",'
-        '"value_interpretable":true}\n'
-        '{"probe_summary":{"expected":1,"emitted":1,"manifest_ok":true}}\n', encoding="utf-8")
+    a_art.write_text(a_log(sentinel=False, values={
+        "feat.standard_hash_sha256": {"value": "ba7816bf", "value_interpretable": True},
+    }), encoding="utf-8")
     write_manifest(a_art, "G0_0A", lock_digest=ld)
     rc, out, _ = run_norm(w, a=a_art)          # sentinel 없음 → PARTIAL → floor
     rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
@@ -858,8 +913,9 @@ def t_m3_covered_diff() -> None:
     # 이 필드는 아무것도 말하지 않는다.
     w2 = new_work(); ld2 = sha(w2 / "versions.lock")
     a2 = w2 / f"a-{RUN_ID}.log"
-    a2.write_text('{"probe_summary":{"expected":0,"emitted":0,"manifest_ok":true}}\n'
-                  '{"probe_run_end":"G0-0A","status":"reached_end"}\n', encoding="utf-8")
+    # 87건을 다 내되 전부 transient 실패 — charset 값이 없는 회차를 만든다.
+    # 집합 검사는 통과해야 이 시험이 `covered.present` 를 시험한 것이 된다.
+    a2.write_text(a_log(failed_ora=3135), encoding="utf-8")
     write_manifest(a2, "G0_0A", lock_digest=ld2)
     run_norm(w2, a=a2)
     rec2 = json.loads((w2 / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
@@ -945,9 +1001,99 @@ def t_m3_out_path_rules() -> None:
     shutil.rmtree(w)
 
 
+# ── 9차 조치 3 ───────────────────────────────────────────────────────
+def t_a9_probe_manifest_matches_sql() -> None:
+    print("\n[42] 조치 3 — probe manifest 가 SQL 과 같은가")
+    r = subprocess.run([sys.executable, str(ROOT / "g0-0a-probe-manifest.py")],
+                       capture_output=True, text=True, cwd=str(ROOT))
+    check("manifest 와 SQL 이 일치한다", r.returncode == 0,
+          f"{r.stdout.strip()} {r.stderr.strip()}"[:300])
+    check("87건이다", len(A_REQUIRED) == 87, str(len(A_REQUIRED)))
+    sql = (ROOT / "g0-0a-capability-inventory.sql").read_text(encoding="utf-8")
+    check("SQL 의 c_expected 와 목록 길이가 같다",
+          f":= {len(A_REQUIRED)};" in sql, "c_expected 를 함께 고쳐라")
+
+
+def t_a9_missing_probe() -> None:
+    print("\n[43] 조치 3 — required probe 하나가 빠지면 거부 (9차 §9-1)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(drop=("feat.standard_hash_sha256",)), encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld)
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 '계약에 있는 probe 가 없다'",
+          any("산출물에 없다" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_a9_unknown_probe() -> None:
+    print("\n[44] 조치 3 — 알 수 없는 probe 가 있으면 거부 (9차 §9-2)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(extra=("feat.made_up_probe",)), encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld)
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("사유가 '계약에 없는 probe'",
+          any("계약에 없는 probe" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_a9_lying_summary() -> None:
+    print("\n[45] 조치 3 — probe 3건 + summary 87 → 거부 (9차 §9-3, **저장소가 스스로 통과시키던 것**)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    # 9차가 잡은 실물 반례. 이전 판은 이것을 MEASURED 로 만들었고, 그 픽스처가
+    # full_fixture() 에 양성 대조로 박혀 있었다.
+    art.write_text(
+        '{"probe":"userenv.DB_UNIQUE_NAME","query_ok":true,"value":"ETLSTB"}\n'
+        '{"probe":"userenv.DATABASE_ROLE","query_ok":true,"value":"PHYSICAL STANDBY"}\n'
+        '{"probe":"nls.characterset","query_ok":true,"value":"AL32UTF8"}\n'
+        '{"probe_summary":{"expected":87,"emitted":87,"manifest_ok":true}}\n'
+        '{"probe_run_end":"G0-0A","status":"reached_end"}\n', encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld)
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    v = " ".join(out.get("contract_violations", []))
+    check("빠진 probe 를 지적한다", "산출물에 없다" in v, v[:200])
+    check("자기 신고와 실물이 다름을 지적한다", "자기 신고와 실물이 다르다" in v, v[:300])
+    check("최종 경로에 쓰지 않았다", not (w / f"{RUN_ID}-out.json").exists())
+    shutil.rmtree(w)
+
+
+def t_a9_summary_count_mismatch() -> None:
+    print("\n[46] 조치 3 — 87건을 다 냈어도 summary 가 다른 수를 신고하면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(expected=86, emitted=86), encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld)
+    rc, out, _ = run_norm(w, a=art)
+    check("exit 4(계약 위반)", rc == 4, f"rc={rc}")
+    check("계약 건수와 다름을 지적한다",
+          any("계약은" in v for v in out.get("contract_violations", [])),
+          str(out.get("contract_violations"))[:200])
+    shutil.rmtree(w)
+
+
+def t_a9_positive_control() -> None:
+    print("\n[47] 조치 3 — **양성 대조**: 87건을 정확히 내면 MEASURED")
+    w = new_work(); ld = sha(w / "versions.lock")
+    art = w / f"a-{RUN_ID}.log"
+    art.write_text(a_log(), encoding="utf-8")
+    write_manifest(art, "G0_0A", lock_digest=ld)
+    rc, out, _ = run_norm(w, a=art)
+    check("g0_0a=MEASURED", (out.get("coverage") or {}).get("g0_0a") == "MEASURED",
+          f"{out.get('coverage')} rc={rc}")
+    check("계약 위반 0건", rc == 3, f"rc={rc} — 다른 child 미실행으로 3 이어야 한다")
+    shutil.rmtree(w)
+
+
 def main() -> int:
     print("=" * 70)
-    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3")
+    print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3")
     print("=" * 70)
     for t in (t_jsonschema_present, t_b0_one_line, t_b1_fabricated, t_b1_no_failclosed,
               t_c00_summary_only, t_ce_empty_pass, t_ce_bad_returncode, t_a_no_sentinel,
@@ -965,7 +1111,11 @@ def main() -> int:
               t_m3_floor_never_raises, t_m3_stale, t_m3_no_ttl_declared,
               t_m3_profile_not_authoritative, t_m3_composite_follows_input,
               t_m3_outcome_split, t_m3_covered_diff, t_m3_final_gate_rejects,
-              t_m3_out_path_and_pointer, t_m3_out_path_rules):
+              t_m3_out_path_and_pointer, t_m3_out_path_rules,
+              # 9차 조치 3
+              t_a9_probe_manifest_matches_sql, t_a9_missing_probe,
+              t_a9_unknown_probe, t_a9_lying_summary,
+              t_a9_summary_count_mismatch, t_a9_positive_control):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

@@ -68,13 +68,14 @@ python3 -c "import jsonschema, oracledb; print('ok')"
 Oracle 도 Spark 도 필요 없다. **여기서 실패하면 뒤 단계의 결과를 믿을 수 없다.**
 
 ```bash
-python3 g0-normalize-tests.py      # 147건 — 증거 봉투 fail-closed
+python3 g0-0a-probe-manifest.py    #  A probe 목록이 SQL 과 같은가(9차 조치 3)
+python3 g0-normalize-tests.py      # 163건 — 증거 봉투 fail-closed
 python3 g0-axes-tests.py           # 127건 — capability 축 파생·SQLCODE taxonomy·floor
 python3 g0-b1-analyzer-tests.py    #  43건 — B1 판정기
 python3 g0-m0-safety-tests.py      #  51건 — 실행 안전성(M0)
 python3 g0-0b1-connection-provider/g0-b1-wiring-tests.py   # 16건 — **B1 종단 배선**
 python3 g0-runbook-lint.py         #  19건 — **이 문서를 그대로 실행할 수 있는가**
-# 여섯 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
+# 일곱 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
 # (여기 적힌 숫자가 늘어나 있으면 그건 시험이 늘어난 것이지 실패가 아니다).
 ```
 

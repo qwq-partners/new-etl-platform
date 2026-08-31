@@ -103,6 +103,20 @@
 
 **해석하지 않는다.** 판정은 집계기가 한다.
 
+### 2.1 A probe 목록의 권위 (9차 조치 3)
+
+`g0-child-schemas/g0-0a-probe-manifest.json` 이다. **손으로 적지 않는다** —
+`g0-0a-probe-manifest.py` 가 `g0-0a-capability-inventory.sql` 에서 생성하고, 회귀 시험이
+둘이 어긋났는지 확인한다. SQL 을 고치고 재생성하지 않으면 시험이 실패한다.
+
+목록을 생성하는 이유는 하나다. 이 저장소는 `c_expected` 를 **세 번 틀렸다**(56 → 78 → 86 → 87).
+매번 `grep` 이 어떤 호출 형태를 놓쳤다. 사람이 세는 숫자는 또 틀린다.
+
+9차 P0-01 이 잡은 것: `cov_a()` 가 이 대조를 안 해서 **probe 3건 + `summary{expected:86,
+emitted:86}` 이 `MEASURED`** 가 됐다. `cov_b0` 는 step 차집합을, `cov_c00` 은 probe id 집합을
+보는데 **A 만 안 봤다** — 87 probe 를 내는 가장 큰 child 가 가장 약한 검사를 받고 있었다.
+그리고 그 반례가 시험 픽스처에 **양성 대조로 박혀 있었다.**
+
 ---
 
 ## 3. 집계기가 강제하는 것
@@ -136,7 +150,7 @@ manifest 만으로는 B0 한 줄이 `MEASURED` 가 되는 것을 막지 못한�
 
 | child | 완결 조건 |
 |---|---|
-| `G0_0A` | `probe_run_end` sentinel ∧ `manifest_ok=true` ∧ `emitted == expected` ∧ probe id 중복 0 ∧ `probe_summary` 정확히 1개 |
+| `G0_0A` | `probe_run_end` sentinel ∧ `manifest_ok=true` ∧ probe id 중복 0 ∧ `probe_summary` 정확히 1개 ∧ **probe 집합이 계약과 정확히 같음**(9차 조치 3 — 빠짐 0 · 알 수 없는 것 0) ∧ `expected == emitted == 계약 건수 == 실제 파싱 수` |
 | `G0_0B0` | `S*_summary` sentinel ∧ 선언된 step 이 전부 출력됨 |
 | `G0_0B1` | `verdict` ∧ `by_path` ∧ `preamble_ok_by_path` ∧ `runs_seen` 이 **모두** 있고, `runs_seen` 에 `coverage` 와 **`failclosed` 로 시작하는 회차**가 하나 이상 있음(조치 5 로 `failclosed_schema`·`failclosed_task` 로 갈렸다) |
 | `G0_0C00` | `fence.summary` ∧ 선언된 probe 가 전부 출력됨(skipped 도 출력이다) |

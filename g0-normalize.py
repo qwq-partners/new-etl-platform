@@ -79,6 +79,20 @@ CHILD_CONSTS = [k for k, _c, _a in CHILD_KEYS]
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
+# ── 9차 조치 3: A probe 목록 계약 ────────────────────────────────────
+A_PROBE_MANIFEST = pathlib.Path(__file__).resolve().parent / "g0-child-schemas" \
+    / "g0-0a-probe-manifest.json"
+
+
+def _load_a_required_ids() -> list[str] | None:
+    """계약이 요구하는 A probe id 목록. 읽지 못하면 None — 그것은 위반이다."""
+    try:
+        doc = json.loads(A_PROBE_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    ids = doc.get("probe_ids")
+    return list(ids) if isinstance(ids, list) and ids else None
+
 
 def sha(p: pathlib.Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "MISSING"
@@ -355,7 +369,14 @@ def check_run_set(children: dict[str, dict]) -> list[str]:
 
 # ── child 별 완결 판정 ────────────────────────────────────────────────
 def cov_a(path: pathlib.Path | None) -> tuple[dict, dict[str, dict], list[str]]:
-    """G0-0A. 완결 조건: sentinel ∧ manifest_ok ∧ 중복 0 ∧ summary 정확히 1개."""
+    """G0-0A. 완결 조건: sentinel ∧ manifest_ok ∧ 중복 0 ∧ summary 정확히 1개
+    ∧ **probe 집합이 계약과 정확히 같음**(9차 조치 3).
+
+    9차 P0-01 — 마지막 항이 없었다. `cov_b0` 는 `expected_steps` 와 `emitted_steps` 의
+    차집합을 보고 `cov_c00` 은 `expected_probe_ids` 를 id 집합으로 대조하는데 **A 만
+    안 봤다.** 87 probe 를 내는 가장 큰 child 가 가장 약한 검사를 받고 있었고, 그래서
+    **probe 3건 + `summary{expected:86, emitted:86}` 이 `MEASURED`** 가 됐다.
+    """
     if path is None:
         return {"status": "NOT_RUN"}, {}, []
     recs = jsonl(path)
@@ -372,6 +393,40 @@ def cov_a(path: pathlib.Path | None) -> tuple[dict, dict[str, dict], list[str]]:
                  f"있다. 마지막 값이 이기는 조립은 증거가 아니다")
     if len(summaries) > 1:
         V.append(f"G0_0A: probe_summary 가 {len(summaries)}개다 — 한 파일에 한 회차만 있어야 한다")
+
+    # ── 9차 조치 3: probe 집합을 계약과 정확히 대조한다 ─────────────
+    # 목록의 권위는 `g0-child-schemas/g0-0a-probe-manifest.json` 이고, 그것은 SQL 에서
+    # 생성된다(`g0-0a-probe-manifest.py`). **손으로 센 숫자를 쓰지 않는다** — 이 저장소는
+    # `c_expected` 를 세 번 틀렸다.
+    req = _load_a_required_ids()
+    if req is None:
+        V.append("G0_0A: probe manifest 를 읽지 못했다"
+                 f"({A_PROBE_MANIFEST.name}) — **검증하지 못한 것은 통과가 아니다**. "
+                 f"`python3 g0-0a-probe-manifest.py --write` 로 생성하라(9차 조치 3)")
+    else:
+        got, want = set(ids), set(req)
+        missing, unknown = sorted(want - got), sorted(got - want)
+        if missing:
+            V.append(f"G0_0A: 계약에 있는 probe {len(missing)}건이 산출물에 없다 "
+                     f"{missing[:5]}{'…' if len(missing) > 5 else ''} — 블록이 중간에 끊겼거나 "
+                     f"다른 판본의 SQL 로 돌렸다(9차 P0-01)")
+        if unknown:
+            V.append(f"G0_0A: 계약에 없는 probe {len(unknown)}건이 있다 "
+                     f"{unknown[:5]}{'…' if len(unknown) > 5 else ''} — 이 산출물을 만든 SQL 이 "
+                     f"manifest 와 다르다. `g0-0a-probe-manifest.py` 를 재생성했는가")
+        # summary 가 스스로 신고한 수도 대조한다. **자기 신고를 그대로 믿지 않는다** —
+        # 3건짜리 로그가 "86건 냈다" 고 적어도 통과하던 것이 P0-01 이다.
+        if summaries:
+            s0 = summaries[0]
+            for key in ("expected", "emitted"):
+                v = s0.get(key)
+                if isinstance(v, int) and v != len(req):
+                    V.append(f"G0_0A: probe_summary.{key}={v} 인데 계약은 {len(req)}건이다 — "
+                             f"산출물이 스스로 다른 수를 신고했다")
+            emitted = s0.get("emitted")
+            if isinstance(emitted, int) and emitted != len(ids):
+                V.append(f"G0_0A: probe_summary.emitted={emitted} 인데 실제 파싱된 probe 는 "
+                         f"{len(ids)}건이다 — **자기 신고와 실물이 다르다**")
 
     P = {r["probe"]: r for r in probes}
     if not summaries:

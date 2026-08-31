@@ -151,11 +151,15 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 - **exit 코드 분리**(8차 M3): exit 3 은 **측정 완결성만** 말한다. capability 등급은
   레코드의 `outcome.capability` 로 따로 낸다 — 측정이 완결돼도 `UNGRADED` 일 수 있고
   그것은 실패가 아니라 결과다
-- 회귀 시험: `g0-normalize-tests.py`(147) · `g0-axes-tests.py`(127) ·
+- **A probe 집합 계약**(9차 조치 3): `g0-child-schemas/g0-0a-probe-manifest.json` 은
+  SQL 에서 **생성**된다(`g0-0a-probe-manifest.py`). 집계기가 그 87개 집합과 산출물을 정확히
+  대조하고, 빠짐·알 수 없는 것·자기 신고 불일치를 전부 exit 4 로 거부한다 — 그 전에는
+  probe 3건에 `summary{86}` 이 `MEASURED` 였다
+- 회귀 시험: `g0-normalize-tests.py`(163) · `g0-axes-tests.py`(127) ·
   `g0-b1-analyzer-tests.py`(43) · `g0-m0-safety-tests.py`(51) ·
   `g0-0b1-connection-provider/g0-b1-wiring-tests.py`(16, **종단 배선**) ·
   `g0-runbook-lint.py`(19, **절차서 dry-run**) ·
-  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 432건**
+  `g0-0b1-connection-provider/run-tests.sh`(29, Java) — **합계 448건**
 - **종단 배선 시험**(9차 조치 1): 나머지는 판정기에 합성 입력을 넣지만 이것은 **실물
   `run.sh` 를 돌려 실물 `analyze-trace.py` 에 넣는다.** 그리고 배선을 일부러 P0-03 상태로
   되돌리면 **실패하는지**까지 확인한다 — 음성 대조가 없으면 "무조건 통과하는 시험"과
