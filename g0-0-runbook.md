@@ -460,8 +460,13 @@ python3 g0-normalize.py \
   --c-suite "$EVID/ce-evidence.json" \
   --target-owner "$TGT_OWNER" --target-table "$TGT_TABLE" --wm-column "$WM" \
   --source-id "$DB_UNIQUE_NAME" \
+  --capability-ttl-days 30 \
   --out "$EVID/g0-0-evidence.json"
 ```
+
+**`--capability-ttl-days` 는 지워도 되는 줄이 아니다**(9차 조치 8). 이 인자에는 기본값이
+없으므로 빼고 돌리면 모든 확정값이 floor 로 내려간다. 여기 적힌 `30` 은 측정값이 아니라
+**이 명령을 실행하는 사람이 그 자리에서 하는 선언**이다 — 근거가 있으면 바꿔 적어라.
 
 `--target-*` 를 주지 않으면 **테이블 단위 축 4개가 전부 `UNDETERMINED`** 가 된다. 묶이지 않은
 확정값을 만들지 않는 것이 계약이다.
@@ -494,10 +499,11 @@ python3 g0-normalize.py \
   내려가 있다. 사유는 child 미완결·unbound·stale·신선도 근거 부재·비권위 profile 이며,
   뜻은 `g0_axes.FLOOR_REASONS` 가 권위다.
 
-`--capability-ttl-days`(기본 30)가 신선도 기준이다. **측정 분포로 정한 값이 아니라 운영자
-선언값**이며 레코드의 `freshness.basis` 가 그렇게 적는다. `0` 을 주면 TTL 미선언이 되고,
-그러면 신선도를 판정할 수 없으므로 모든 확정값이 floor 로 내려간다 — 모르는 것을
-신선하다고 가정하지 않는다.
+`--capability-ttl-days` 가 신선도 기준이며 **기본값이 없다**(9차 조치 8 / P1-03). 주지
+않거나 `0` 을 주면 TTL 미선언이 되고, 그러면 신선도를 판정할 수 없으므로 모든 확정값이
+floor 로 내려간다 — 모르는 것을 신선하다고 가정하지 않는다. 양수를 주면 **측정 분포로 정한
+값이 아니라 운영자 선언값**이며 레코드의 `freshness.basis` 가 그렇게 적는다. 이전 판은
+30일을 자동 적용하면서 그것을 운영자 선언값이라고 적었다 — 그 기록이 거짓이었다.
 
 ### 이 레코드는 G0 게이트에 못 들어간다
 

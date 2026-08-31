@@ -809,7 +809,9 @@ def t_m3_stale() -> None:
     print("\n[33] M3-3 — TTL 이 지난 측정은 stale 이고 floor 로 내려간다")
     w = new_work(); ld = sha(w / "versions.lock")
     f = full_fixture(w, ld, age_days=400)          # 400일 전 측정
-    rc, out, _ = run_norm(w, target_owner="APP", target_table="T1", **f)
+    # TTL 을 **명시로** 준다. 9차 조치 8 전에는 이 줄이 없어도 기본값 30일이 자동으로
+    # 붙어 stale 이 만들어졌다 — 이 시험이 시험하려는 것은 만료 판정이지 기본값이 아니다.
+    rc, out, _ = run_norm(w, capability_ttl_days=30, target_owner="APP", target_table="T1", **f)
     check("exit 0(측정 자체는 완결)", rc == 0, f"rc={rc}")
     rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
     ax = rec["capability_axes"]["db_charset"]
@@ -1397,6 +1399,64 @@ def t_a9_undeclared_file_fails() -> None:
     check("지우면 다시 통과한다", r2.returncode == 0, r2.stderr[:200])
 
 
+def t_a9_ttl_undeclared_by_default() -> None:
+    print("\n[62] 조치 8 — TTL 을 주지 않으면 미선언이고 전 축이 floor 로 내려간다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    f = full_fixture(w, ld)
+    # **--capability-ttl-days 를 주지 않는다.** 9차 조치 8 전에는 여기서 조용히 30일이
+    # 적용되고 레코드에 `OPERATOR_DECLARED_TTL` 이 박혔다 — 운영자는 선언한 적이 없다.
+    rc, out, _ = run_norm(w, target_owner="APP", target_table="T1", **f)
+    rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
+    check("freshness.basis=NO_TTL_DECLARED", rec["freshness"]["basis"] == "NO_TTL_DECLARED",
+          str(rec["freshness"]))
+    check("ttl_seconds 가 비어 있다", rec["freshness"]["ttl_seconds"] is None,
+          str(rec["freshness"]["ttl_seconds"]))
+    check("미선언이라고 경고한다",
+          any("capability-ttl-days 미선언" in x for x in rec["warnings"]),
+          str(rec["warnings"])[:200])
+    # note 도 basis 와 같은 말을 해야 한다 — 미선언인데 "운영자가 선언한 상한" 이라고
+    # 적으면 P1-03 이 지적한 것과 같은 종류의 거짓이 레코드에 남는다.
+    check("note 가 선언했다고 말하지 않는다",
+          "선언되지 않았다" in rec["freshness"]["note"], rec["freshness"]["note"][:120])
+    ax = rec["capability_axes"]
+    det = [k for k, v in ax.items() if v["value"] not in ("UNDETERMINED", "UNDEFINED")]
+    # **빈 집합으로 통과하지 않는다.** 확정값이 하나도 없으면 "전 축 floor" 는 공허하다.
+    check("확정값 축이 실제로 있다", len(det) > 0, f"determinate={len(det)}")
+    missing = [k for k in det if "NO_FRESHNESS_BASIS" not in ax[k]["floor_reasons"]]
+    check("확정값 축 전부가 NO_FRESHNESS_BASIS 로 내려갔다", not missing, str(missing))
+    unfloored = [k for k in det if not ax[k]["floor_reasons"]]
+    check("floor 사유가 빈 확정값 축이 없다", not unfloored, str(unfloored))
+    shutil.rmtree(w)
+
+
+def t_a9_ttl_declared_positive_control() -> None:
+    print("\n[63] 조치 8 — 양성 대조: 명시로 선언하면 그 축은 내려가지 않는다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    f = full_fixture(w, ld)
+    # [62] 와 **같은 픽스처**다. 달라지는 것은 운영자의 선언 하나뿐이다 — 그래야
+    # [62] 의 floor 가 TTL 미선언 때문이지 픽스처가 원래 못 쓸 것이어서가 아님이 선다.
+    rc, out, _ = run_norm(w, capability_ttl_days=30, target_owner="APP", target_table="T1", **f)
+    rec = json.loads((w / f"{RUN_ID}-out.json").read_text(encoding="utf-8"))
+    check("freshness.basis=OPERATOR_DECLARED_TTL",
+          rec["freshness"]["basis"] == "OPERATOR_DECLARED_TTL", str(rec["freshness"]))
+    check("ttl_seconds 가 선언대로다", rec["freshness"]["ttl_seconds"] == 30 * 86400,
+          str(rec["freshness"]["ttl_seconds"]))
+    check("미선언 경고가 없다",
+          not any("capability-ttl-days 미선언" in x for x in rec["warnings"]),
+          str(rec["warnings"])[:200])
+    check("note 가 운영자 선언값이라고 적는다",
+          "운영자가 선언한 상한" in rec["freshness"]["note"], rec["freshness"]["note"][:120])
+    ax = rec["capability_axes"]
+    det = [k for k, v in ax.items() if v["value"] not in ("UNDETERMINED", "UNDEFINED")]
+    fresh = [k for k in det if not ax[k]["floor_reasons"]]
+    check("내려가지 않은 확정값 축이 있다", len(fresh) > 0,
+          f"determinate={len(det)} unfloored={len(fresh)}")
+    check("어느 축에도 NO_FRESHNESS_BASIS 가 없다",
+          not [k for k in det if "NO_FRESHNESS_BASIS" in ax[k]["floor_reasons"]],
+          str([k for k in det if "NO_FRESHNESS_BASIS" in ax[k]["floor_reasons"]]))
+    shutil.rmtree(w)
+
+
 def main() -> int:
     print("=" * 70)
     print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3·4·5")
@@ -1432,7 +1492,9 @@ def main() -> int:
               # 9차 조치 7
               t_a9_scope_allows_two_environments, t_a9_scope_recorded_in_record,
               t_a9_ce_same_source_rejected, t_a9_ce_identity_bound_to_own_server,
-              t_a9_scope_is_derived_not_declared, t_a9_ce_raises_no_axis):
+              t_a9_scope_is_derived_not_declared, t_a9_ce_raises_no_axis,
+              # 9차 조치 8
+              t_a9_ttl_undeclared_by_default, t_a9_ttl_declared_positive_control):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

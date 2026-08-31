@@ -68,9 +68,13 @@ SCHEMA_FILE = "g0-0-evidence.schema.json"
 SCHEMA_VERSION = "2.2.0"
 FINAL_CONTRACT_FILE = "g0-final-contract.json"
 
-# capability 값의 기본 유효기간. **측정 분포로 정한 값이 아니다** — 그것은 M5 의 몫이며,
-# 그 전까지는 운영자가 선언한 상한이라는 사실을 `freshness.basis` 에 그대로 적는다.
-DEFAULT_TTL_DAYS = 30
+# capability 값의 유효기간에는 **기본값이 없다**(9차 조치 8 / P1-03).
+# 이전 판은 30일을 자동으로 적용하면서 `freshness.basis` 에 `OPERATOR_DECLARED_TTL` 이라고
+# 적었다. 운영자가 선언한 적이 없는데 선언했다고 기록하는 것이다 — 확인되지 않은 것을
+# 확인된 것처럼 쓰는 문장을, 그것도 기계가 자동으로 쓰고 있었다.
+# 미선언이면 신선도를 판정할 수 없고, 그러면 모든 확정값이 floor 로 내려간다.
+# 얼마가 옳은 유효기간인지는 측정 분포가 나와야 답할 수 있다(M5).
+DEFAULT_TTL_DAYS = 0
 
 CHILD_KEYS = [("g0_0a", "G0_0A", "a"), ("g0_0b0", "G0_0B0", "b0"), ("g0_0b1", "G0_0B1", "b1"),
               ("g0_0c00", "G0_0C00", "c00"), ("g0_0c_suite", "G0_0C_SUITE", "c_suite")]
@@ -838,10 +842,12 @@ def main() -> int:
                          "**증거 생성에 쓰지 마라**(8차 M1-4 와 같은 이유).")
     # ── 8차 M3-3: 신선도 ───────────────────────────────────────────
     ap.add_argument("--capability-ttl-days", type=int, default=DEFAULT_TTL_DAYS,
-                    help=f"capability 값의 유효기간(일, 기본 {DEFAULT_TTL_DAYS}). 지나면 그 축은 "
-                         f"stale 이고 effective_value 가 floor 로 내려간다. 0 이면 TTL 미선언 "
-                         f"— 그때는 신선도를 판정할 수 없으므로 **모든 확정값이 floor 로 "
-                         f"내려간다**(모르는 것을 신선하다고 가정하지 않는다).")
+                    help="capability 값의 유효기간(일). **기본값이 없다**(9차 조치 8) — 주지 "
+                         "않거나 0 을 주면 TTL 미선언이고, 그러면 신선도를 판정할 수 없으므로 "
+                         "**모든 확정값의 effective_value 가 floor 로 내려간다**(모르는 것을 "
+                         "신선하다고 가정하지 않는다). 양수를 주면 그 값이 운영자 선언값으로 "
+                         "레코드에 남고, measured_at + TTL 이 지난 축은 stale 이 되어 역시 "
+                         "floor 로 내려간다.")
     a = ap.parse_args()
 
     V: list[str] = []   # contract_violations — 하나라도 있으면 exit 4
@@ -1075,8 +1081,9 @@ def main() -> int:
                  f"적지 않은 이름은 쓰지 않는다")
     ttl_seconds = a.capability_ttl_days * 86400 if a.capability_ttl_days > 0 else None
     if ttl_seconds is None:
-        W.append("--capability-ttl-days 0 — TTL 미선언이므로 신선도를 판정할 수 없다. "
-                 "모든 확정값의 effective_value 가 floor 로 내려간다")
+        W.append("--capability-ttl-days 미선언 — 이 인자에는 기본값이 없다(9차 조치 8). "
+                 "신선도를 판정할 수 없으므로 모든 확정값의 effective_value 가 floor 로 "
+                 "내려간다. 유효기간을 주장하려면 운영자가 일수를 명시해야 한다")
     evaluated_at = now_iso()
 
     axes = g0_axes.derive_axes(
@@ -1114,8 +1121,14 @@ def main() -> int:
             "basis": "OPERATOR_DECLARED_TTL" if ttl_seconds else "NO_TTL_DECLARED",
             "ttl_seconds": ttl_seconds,
             "evaluated_at": evaluated_at,
-            "note": "**측정 분포로 정한 값이 아니다.** capability 값이 얼마나 오래 유효한지는 "
-                    "실측을 모아야 알 수 있고(M5), 그 전까지 이것은 운영자가 선언한 상한이다.",
+            # 미선언일 때 "운영자가 선언한 상한" 이라고 적으면 basis 와 어긋난다 —
+            # P1-03 이 지적한 것과 같은 종류의 거짓이므로 basis 별로 나눈다(9차 조치 8).
+            "note": ("**측정 분포로 정한 값이 아니다.** capability 값이 얼마나 오래 유효한지는 "
+                     "실측을 모아야 알 수 있고(M5), 그 전까지 이것은 운영자가 선언한 상한이다."
+                     if ttl_seconds else
+                     "**유효기간이 선언되지 않았다.** 운영자가 --capability-ttl-days 를 주지 "
+                     "않았으므로 이 회차는 신선도를 판정하지 못했고, 확정값은 전부 floor 로 "
+                     "내려가 있다. 얼마가 옳은 값인지는 측정 분포가 나와야 답할 수 있다(M5)."),
         },
         "outcome": {
             # 네 값을 분리한다(8차 P0-04 권고). 이전 판은 exit 3 하나에 "정상 측정 결과로

@@ -193,8 +193,11 @@ M1 수정 뒤 로그에서 `{"probe":...}` / `PROBE {...}`와 child completion �
 python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile CORP_POC \
     --a g0-0a.log --b0 b0.json --b1 g0-0b1-connection-provider/g0-0b1-evidence.json \
     --c00 c00.log --c-suite g0-0c-counterexamples/evidence.json \
-    --versions-lock versions.lock --out g0-0-evidence.json
+    --versions-lock versions.lock --capability-ttl-days 30 --out g0-0-evidence.json
 ```
+
+`--capability-ttl-days` 에는 기본값이 없다(9차 조치 8). 빼면 TTL 미선언이라 모든 확정값이
+floor 로 내려간다. `30` 은 측정값이 아니라 실행자의 선언이다.
 
 계약은 `g0-0-evidence.schema.json` 이고 도구가 자기 출력을 그것으로 검증한다. **검증에 실패하면 최종 경로에 쓰지 않고 exit 4 로 끝난다**(7차 리뷰 P0-02 조치). child 산출물은 `g0-run-child.sh` 로 실행해 manifest 사이드카를 남겨야 한다 — `g0-child-contract.md` 참조.
 `--report-id` 는 **회차마다 달라야 한다** — F-13(유휴 정지)과 ORA-03172 양성 대조처럼
