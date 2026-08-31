@@ -53,7 +53,7 @@ Spark 전파  같은 anchor 리터럴이 **모든 물리 connection** 에 실제
 | 우리가 쓰려던 것 | 실제 |
 |---|---|
 | `GRANT SELECT ON V$DATAGUARD_STATS` | **ORA-02030 으로 실패한다.** `V$` 는 public synonym 이다. `SYS.V_$DATAGUARD_STATS` 에 grant 해야 한다 |
-| "영향 범위 0" | **모든 GRANT 는 primary 에서 실행해야 한다.** standby 는 read-only 라 `ORA-16000` 으로 거부된다. 딕셔너리 row + redo 가 발생한다(1회성이지만 0 은 아니다) |
+| "영향 범위 0" | **모든 GRANT 는 primary 에서 실행해야 한다.** standby 는 read-only 라 `ORA-16000` 으로 거부된다. metadata 변경 + redo + audit row 가 발생하고 의존 객체 invalidation 도 따라올 수 있다(1회성이지만 0 은 아니며, **양은 측정하지 않았다** — 9차 §5.2) |
 | "`STANDBY_MAX_DATA_DELAY` 가 우리를 자동으로 막아 준다" | **쿼리 시작 시점에만 평가된다.** 정각에 깨끗하게 시작해 20분 동안 apply 를 굶기는 Full 추출은 **절대 self-fail 하지 않는다**. 우리가 걱정하는 바로 그 시나리오를 fence 가 가장 못 잡는다 |
 | "`ORA-03172` 가 나면 우리가 원인이다" | `ORA-03172` 는 **apply lag 의 함수이지 우리가 원인인지의 함수가 아니다.** lag 은 end-to-end 라 primary 의 redo 폭증만으로도 뜬다. fence 는 **자기 보호 장치로는 유효하나 자기 유해성 탐지기로는 무효**다 |
 | "primary 로 가는 경로는 없다" | **자동 블록 손상 복구(ABMR)** — standby 의 read-only 쿼리가 손상 블록을 만나면 **primary 에 정상 블록을 요청한다**. Full 60% 의 대규모 스캔은 조우 확률이 구조적으로 높다 |
@@ -66,7 +66,12 @@ Spark 전파  같은 anchor 리터럴이 **모든 물리 connection** 에 실제
 1순위로 걸었던 요청이다. 검증 결과 **되살아난다고 주장한 5개 중 깨끗한 것은 1개**뿐이었다.
 아래는 그 뒤 8차 리뷰가 정정한 판을 반영한 것이다.
 
-### 3-0. 먼저, 빠져 있던 이득 — **cross-connection 공통 anchor**
+### 3-0. 먼저, 빠져 있던 **잠재** 이득 — **cross-connection 공통 anchor**
+
+> **2026-08-31(9차 §5.2) 정정** — 이 항을 "이득"이라고 쓴 것은 과하다. **검증할 잠재
+> 이득이지 확인된 이득이 아니다.** 아래 세 조건 중 마지막(모든 물리 connection 에
+> 리터럴이 실제로 실리는가)은 G0-0B1 이 아직 답하지 않았다. 본문 마지막 줄이 그렇게
+> 적고 있었는데 제목과 인용처가 따라오지 않았다.
 
 **이전 판은 이 항을 세지 않았다.** SCN 출처가 없다는 사실에서 곧바로 "순이익 없음"으로 갔는데,
 그 사이에 있는 것을 건너뛰었다.

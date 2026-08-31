@@ -192,7 +192,8 @@ Job 은 `(source_db, table)` 쌍의 capability 를 상속한다. **DB 단위 축
    단 그것은 **overlay 를 실제로 쓸 때(runtime)** 생기지, grant 를 받아 두는 것(passive)만으로
    생기지 않는다.
 
-   **이전 판이 세지 않은 이득 하나**: 같은 timestamp 리터럴을 모든 partition 쿼리에 bind 하면
+   **이전 판이 세지 않은 잠재 이득 하나**(검증 전이며 확인된 이득이 아니다 — 9차 §5.2):
+   같은 timestamp 리터럴을 모든 partition 쿼리에 bind 하면
    여러 물리 connection 이 **같은 flashback anchor** 에 묶인다. 현 코어의 `SET TRANSACTION
    READ ONLY` 는 connection scope 라 그것을 낼 수 없다. 3초 이전 매핑은 anchor **정밀도** 문제
    이지 공통 anchor 가 사라지는 문제가 아니다. 그래도 `snapshot_scope = JOB` 은 공통 anchor ∧

@@ -20,7 +20,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
 | **G0-0 실측** | **사내 원천에 대해서는, 그리고 full G0-0 sequence 로는 한 번도 실행되지 않았다.** 돈 것은 Oracle 없는 회차의 S1~S3(하네스 빌드·SPI 배선)뿐이다. **9차 리뷰가 M0~M4 를 PARTIAL·OPEN 으로 재판정했다**(2026-08-31) — 사내 원천 실행은 **NO-GO** 이며 M5 는 M5a~M5e 로 쪼갠다 |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
-| DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. **근거는 정정됐다**(2026-08-30, M4-4): '받아도 순이익이 아니다'가 아니라 **'G0·object 수·DDL·LOB·retention·Spark 전파를 실증하기 전에는 활성화·요청하지 않는다'**. 이전 판이 세지 않은 이득이 하나 있다 — 같은 timestamp 리터럴에 의한 cross-connection 공통 anchor |
+| DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. **근거는 정정됐다**(2026-08-30, M4-4): '받아도 순이익이 아니다'가 아니라 **'G0·object 수·DDL·LOB·retention·Spark 전파를 실증하기 전에는 활성화·요청하지 않는다'**. 이전 판이 세지 않은 **잠재** 이득이 하나 있다 — 같은 timestamp 리터럴에 의한 cross-connection 공통 anchor. **검증 전이며 확인된 이득이 아니다**(9차 §5.2): 모든 물리 connection 에 리터럴이 실리는지는 G0-0B1 이 아직 답하지 않았다 |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
 | **S1~S3 실행 결과**(2026-08-27, `SANDBOX_CONTAINER`) | `g0-0-s1-s3-results.md` — **전체 배포판 3판본**(spark-4.2.0/3.5.9×2, `*-bin-hadoop3`)에서 B1 을 컴파일하고 `spark-submit` 으로 SPI 배선까지 **실행**했다. Oracle 이 없어 URL 은 도달 불가였다 — 즉 **provider 선택·ServiceLoader 도달까지가 관측 범위**이고 프리앰블·fail-closed·business SQL 은 그 회차에도 미실행이다. 정정 2건 |
 | **B1 부분 검증**(2026-08-28) | **다른 회차다.** partial Maven classpath 에서 compile·SPI linkage 만 확인했다(spark-submit 없음). **이 회차에 한해** full distribution runtime 미실행이며, 앞 행의 2026-08-27 회차를 무효화하지 않는다 — 두 줄이 서로를 부정하는 것처럼 읽히던 것이 8차 §10-2 였다 |
@@ -30,7 +30,8 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 8차 M1(child 증거 계약) | ~~완료~~ → **9차 재판정 OPEN**. manifest `source_id` 를 서버가 밝힌 `DB_UNIQUE_NAME` 과 대조하지 않고, A probe 집합을 검증하지 않는다 |
 | 8차 M2(B1 재작성) | ~~완료~~ → **9차 재판정 OPEN**. run 식별자가 세 이름으로 갈려 **실물 launcher 에서 `PROVEN` 이 도달 불가능**하다 |
 | 8차 M3(normalizer) | ~~완료~~ → **9차 재판정 PARTIAL**. taxonomy·floor 방향은 GO, 입력 결속과 기본 TTL·final gate 가 fail-open |
-| 8차 M4(사실·규범 문서 정정) | ~~완료~~ → **9차 재판정 PARTIAL**. Oracle·Spark 사실 정정 7건은 전부 맞다고 확인됐고, 과대 문구와 stale runbook 이 남았다 |
+| 8차 M4(사실·규범 문서 정정) | ~~완료~~ → **9차 재판정 PARTIAL**. Oracle·Spark 사실 정정 7건은 전부 맞다고 확인됐고, 과대 문구와 stale runbook 이 남았다. **잔여는 9차 조치 11 에서 처리**(2026-08-31) — 등급 재판정은 10차의 몫 |
+| **9차 조치 1~11** | **완료**(2026-08-31). 회귀 397 → **571건**(Python 542 + Java 29). 다음은 M5a~M5e 단계별 해제이며, **조치를 다 했다는 것이 M5 GO 를 뜻하지 않는다** |
 | **9차 교차 리뷰**(2026-08-31) | 완료 — **M5 NO-GO**. 판정서 `etl-platform-v2.0-codex-ninth-review-assessment.md`(기각 0건, P0 7 · P1 7 전부 확정) |
 | 9차 조치 1~11 | 진행 중 ← **지금 여기**. 중심은 **시험의 경계를 producer 뒤로 미는 것** |
 | A v2.0 / P v2.0 규범 개정 | raw G0-0 수집 → 축/composition 확정 후 착수 |

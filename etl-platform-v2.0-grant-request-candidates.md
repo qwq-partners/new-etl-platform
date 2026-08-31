@@ -790,7 +790,7 @@ v2.0 §2.2 가 V$ 를 사망 처리한 근거는 Reference 의 *기본 접근권
 
 부수적이지만 이름 정확성에서 이 항목이 놓친 두 가지 (다른 항목에도 전염되는 오류):
 - `GRANT SELECT ON V$DATAGUARD_STATS` 는 **실패한다** (V$ 는 public synonym → ORA-02030). `V_$` 뷰에 grant 해야 한다.
-- **모든 grant 는 primary 에서 실행해야 한다.** standby 는 read-only 라 GRANT 가 ORA-16000 으로 거부된다. 따라서 "영향 범위 0" 은 grant 형태 요청에는 성립하지 않는다(딕셔너리 row + redo 수백 바이트, 1회성).
+- **모든 grant 는 primary 에서 실행해야 한다.** standby 는 read-only 라 GRANT 가 ORA-16000 으로 거부된다. 따라서 "영향 범위 0" 은 grant 형태 요청에는 성립하지 않는다(metadata 변경 + redo + audit row, 1회성. **양은 측정하지 않았다** — '수백 바이트'라고 적었던 것은 근거 없는 수치다, 9차 §5.2).
 
 ### ③ (A) 요청한 데이터가 요청한 창을 해상하지 못한다 — 설계 결함
 `V$STANDBY_EVENT_HISTOGRAM` 은 **인스턴스 기동 이후 누적**이고, Oracle 은 "구간 평가는 양 끝 스냅샷을 떠서 비교하라" 고 명시한다. 주 1회 단발 누적 조회로는 매시 10분 창(전체의 16.7%)을 83.3% 의 배경에서 분리할 수 없다. 지정된 사용법을 지키려면 DBA 가 하루 48회 조회해야 하므로, **"정시 창 전후" 와 "주 1회 회신" 은 양립 불가**다 — 요청서 자체가 내부 모순이다. `V$DATAGUARD_STATS` 는 순간값 + DATUM_TIME 기준 최대 30초 staleness 를 문서가 인정하므로, 주 1회 1표본은 정보량 0 이다. 게다가 apply lag 정의가 **transport 포함 end-to-end** 이므로, 정각에 값이 나빠져도 그것이 우리 읽기 때문인지 primary 정각 배치의 redo 폭증 때문인지 **원리적으로 분리 불가**다 — 하필 생산라인 배치와 우리 burst 가 같은 정각에 겹친다.

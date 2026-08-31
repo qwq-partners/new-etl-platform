@@ -395,6 +395,48 @@ rd = (HERE / "README.md").read_text(encoding="utf-8")
 check("README 가 87 probe 로 적혀 있다", "87 probe" in rd)
 check("README 에 86 probe 표기가 남아 있지 않다", "86 probe" not in rd)
 
+print("\n[12] 9차 P2-1 — A SQL 의 '대상 테이블 접촉' 목록이 실제와 같은가")
+
+# 이 저장소는 **손으로 센 숫자를 세 번 틀렸다**(HANDOFF §2 의 c_expected 표). 접촉
+# 건수도 같은 종류다 — 8차까지 "네 건" 이라고 적혀 있었고 실제로는 다섯 건이었다.
+# 그래서 숫자를 고치는 데서 멈추지 않고 **다시 어긋나면 시험이 실패하게** 만든다.
+import re as _re
+
+_asql = (HERE / "g0-0a-capability-inventory.sql").read_text(encoding="utf-8")
+_body = _asql.split("-- 안전 규칙", 1)[1] if "-- 안전 규칙" in _asql else _asql
+_head = _asql.split("-- 안전 규칙", 1)[0]
+
+_TARGET = "&TARGET_OWNER..&TARGET_TABLE"
+_actual = {}
+for m in _re.finditer(r"p_(?:scalar|stmt)\s*\(\s*'([^']+)'\s*,(.*?)\);", _body, _re.S):
+    name, sql = m.group(1), m.group(2)
+    if _TARGET in sql:
+        bounds = [int(x) for x in _re.findall(r"ROWNUM\s*<?=\s*(\d+)", sql)]
+        _actual[name] = max(bounds) if bounds else None
+
+# 머리말이 선언한 목록 — `--         · 이름   설명` 꼴
+# 이름은 백틱으로 감싸여 있고, 행 수 표기에 굵게(`**`)가 붙기도 한다.
+_declared = dict(_re.findall(r"^--\s+·\s+`?([^`\s]+)`?\s+.*?최대 (\d+)행", _head, _re.M))
+_declared = {k: int(v) for k, v in _declared.items()}
+
+check("머리말이 접촉 문장을 하나도 빠짐없이 적는다",
+      set(_declared) == set(_actual),
+      f"머리말만={sorted(set(_declared) - set(_actual))} 실제만={sorted(set(_actual) - set(_declared))}")
+check("건수 표기가 실제와 같다", f"**{'다섯' if len(_actual) == 5 else len(_actual)} 건**" in _head
+      or f"**다섯 건**" in _head and len(_actual) == 5,
+      f"실제 {len(_actual)}건")
+check("문장별 최대 행 수가 머리말과 같다",
+      all(_declared.get(k) == v for k, v in _actual.items()),
+      str({k: (v, _declared.get(k)) for k, v in _actual.items() if _declared.get(k) != v}))
+check("합계 최대 행 수 표기가 맞다",
+      f"최대 {sum(v for v in _actual.values() if v)}행" in _head,
+      f"실제 합계 {sum(v for v in _actual.values() if v)}행")
+# **빈 집합으로 통과하지 않는다.**
+check("접촉 문장이 실제로 있다", len(_actual) > 0, str(len(_actual)))
+# 옛 표기가 남아 있지 않은가 (M0-6 과 같은 형태의 잔존 검사)
+check("'한 건뿐' 이라는 옛 표기가 남아 있지 않다",
+      "ROWNUM = 1 한 건뿐" not in _asql)
+
 print("\n" + "=" * 70)
 print(f"통과 {PASS}건 · 실패 {FAIL}건")
 sys.exit(1 if FAIL else 0)

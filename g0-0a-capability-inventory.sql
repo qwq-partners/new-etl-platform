@@ -8,7 +8,16 @@
 --
 -- 범위: **대상 테이블을 스캔하지 않는다.** 데이터 사실 측정(fence 반례)은
 --       G0-0C(`g0-0c-fence-facts.sql`)로 분리했다. 여기서 대상 테이블에
---       닿는 것은 `WHERE ROWNUM = 1` 세 건과 `AS OF` 권한 확인 한 건뿐이다.
+--       닿는 문장은 **다섯 건**이다(9차 P2-1 정정 — 이전 판은 네 건이라고 적었고
+--       `txn.select_inside` 를 빠뜨렸다):
+--         · `after_D.touch_target`          ROWNUM = 1   (최대 1행)
+--         · `as_of_timestamp.target`        AS OF + ROWNUM = 1 (최대 1행)
+--         · `txn.select_inside`             ROWNUM <= 10 (**최대 10행**)
+--         · `max_delay_zero.touch_target`   ROWNUM = 1   (최대 1행)
+--         · `feat.ora_rowscn_target`        ROWNUM = 1   (최대 1행)
+--       합쳐 최대 14행이며 어느 것도 스캔이 아니다. **이 목록과 실제 문장이
+--       어긋나면 `g0-m0-safety-tests.py` 가 실패한다** — 손으로 센 숫자를
+--       주석에 남겨 두면 다시 틀린다.
 --
 -- **이기종 원천 대응(§8)**: 원천 Oracle 은 버전·charset·옵션이 제각각이다.
 --       그래서 이 프로브는 **버전을 보고 기능을 추정하지 않는다**. 기능을 직접
@@ -146,7 +155,8 @@ BEGIN
 
   DBMS_OUTPUT.PUT_LINE('--- 2. SESSION ASSERTION ---');
   p_stmt  ('alter.STANDBY_MAX_DATA_DELAY.D', 'ALTER SESSION SET STANDBY_MAX_DATA_DELAY = &MAX_DELAY_SEC');
-  -- 대상 테이블 접촉은 ROWNUM = 1 한 건뿐이다(스캔 아님).
+  -- **이 절에서** 대상 테이블에 닿는 것은 아래 한 건이다(스캔 아님).
+  -- 파일 전체로는 다섯 건이며 목록은 머리말에 있다(9차 P2-1).
   p_scalar('after_D.touch_target',           q'[SELECT TO_CHAR(COUNT(*)) FROM (SELECT 1 FROM &TARGET_OWNER..&TARGET_TABLE WHERE ROWNUM = 1)]');
   p_stmt  ('alter.NLS_NUMERIC_CHARACTERS',   q'[ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,']');
   p_stmt  ('alter.TIME_ZONE_UTC',            q'[ALTER SESSION SET TIME_ZONE = '+00:00']');
