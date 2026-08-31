@@ -198,6 +198,47 @@ failclosed 로 변질돼 fail-closed 실험과 구분이 안 된다.
 2. **sqlplus** — instantclient. `sqlplus -v`
 3. **fixture 테이블** — `TARGET_OWNER.TARGET_TABLE` 과 watermark 컬럼
 
+### S4.6 — ★ 원천 안전 봉투 (9차 조치 6)
+
+**B0·B1 은 봉투 없이는 원천에 붙지 않는다.** `g0-source-envelope.json` 의 `default` 는
+`approved_by = UNAPPROVED` 이고 `target_touch_allowed = false` 이므로, 그대로 두면 두
+스크립트가 **spark-submit 직후 exit 2 로 죽는다.** 이것은 결함이 아니라 9차 리뷰 §7 의
+단계적 해제(M5c)다 — 대상 테이블 질의는 원천 소유자 승인이 있어야 열린다.
+
+```bash
+# 승인값은 **저장소 밖**에 둔다. M0-5 가 CE allowlist 를 /etc/g0/ 에 둔 것과 같은 이유로,
+# 원천 소유자의 승인은 사이트 정책이지 저장소 내용이 아니다. 저장소에 커밋하면 복제한
+# 누구나 그 승인을 들고 다닌다.
+sudo install -d -m 0755 /etc/g0
+sudo cp g0-source-envelope.json /etc/g0/source-envelope.json
+sudo $EDITOR /etc/g0/source-envelope.json   # envelopes 에 대상 DB_UNIQUE_NAME 항목을 추가
+export G0_SOURCE_ENVELOPE=/etc/g0/source-envelope.json
+```
+
+지정하지 않으면 저장소에 번들된 파일을 쓰고, 그 `default` 는 미승인이라 아무것도 통과하지
+않는다. 어느 파일이 실제로 적용됐는지는 **산출물에 남는다**(B0 의 `envelope` step, B1 의
+`envelope` 필드에 경로와 `sha256`). `harness_digest` 는 번들 파일만 세므로, 저장소 밖 봉투를
+쓰면 적용된 정책이 그 digest 밖에 있다는 사실도 같이 적힌다.
+
+넣어야 하는 것.
+
+| 키 | 뜻 | 승인 없이는 |
+|---|---|---|
+| `max_partitions` | 이 원천에 동시에 열 수 있는 executor connection 수 | 1 |
+| `max_concurrent_sessions` | 위 + driver. **`max_partitions + 1` 보다 크면 거부한다** | 2 |
+| `max_active_runs` | 같은 원천에 동시에 붙는 G0-0 회차 수 | 1 |
+| `statement_timeout_seconds` | 쿼리 하나의 벽시계 상한 | 30 |
+| `target_touch_allowed` | 대상 테이블 질의 허용 여부 | `false` |
+| `approved_by` | 승인한 사람. `UNAPPROVED` 로 시작하면 거부한다 | — |
+
+`max_concurrent_sessions > max_partitions + 1` 인 봉투는 **봉투 자신이 모순**이라고 거부한다.
+그런 값에서는 세션 검사가 어떤 입력에서도 걸리지 않기 때문이다 — 걸리지 않는 상한을
+안전장치라고 부르지 않는다(9차 P0-04).
+
+**동시 회차는 lease 가 막는다.** 파일 기반(`$G0_LEASE_DIR`, 기본 `/tmp/g0-source-lease`)이라
+**한 호스트 안에서만** 유효하다. 다른 호스트에서 같은 원천에 붙는 회차는 막지 못하며,
+그때는 DB 측 profile resource limit 이나 조직 절차가 유일한 방어다. 이 한계를 숨기지 않는다.
+
 ### ★ lock 확정
 
 ```bash
@@ -259,6 +300,14 @@ export EVID=~/g0/evidence/$RUN_ID && mkdir -p "$EVID"
 ```bash
 export ORA_DSN="//localhost:1521/FREEPDB1"     # jdbc: 접두사 없는 형태
 
+# ★ 신원 preflight 를 **먼저** 돌린다(9차 조치 6 · P0-05). DUAL 만 읽으며,
+#   붙은 DB 가 대상이 아니면 **대상에 아무 질의도 하지 않고** 비영 종료한다.
+sed -e "s/^DEFINE EXPECT_DBUNAME .*/DEFINE EXPECT_DBUNAME = '$DB_UNIQUE_NAME'/" \
+    -e "s/^DEFINE EXPECT_ROLE .*/DEFINE EXPECT_ROLE    = 'PHYSICAL STANDBY'/" \
+    g0-0a-preflight.sql > "$EVID/g0-0a-preflight-run.sql"
+./g0-sqlplus.sh "$EVID/g0-0a-preflight-run.sql" "$EVID/g0-0a-preflight.log" \
+  || { echo "preflight 실패 — 본 probe 를 돌리지 않는다" >&2; exit 1; }
+
 ./g0-run-child.sh G0_0A "$RUN_ID" "$PROFILE" "$EVID/g0-0a.log" -- \
   ./g0-sqlplus.sh "$EVID/g0-0a-run.sql" "$EVID/g0-0a.log"
 ```
@@ -290,6 +339,11 @@ export ORA_DSN="//localhost:1521/FREEPDB1"     # jdbc: 접두사 없는 형태
 > **이것은 임시 방편이다.** 변수 전달을 제대로 고치는 것은 9차 조치 6(identity fail-fast)에서
 > 한다 — 그때 이 헤더를 어차피 다시 쓴다. Oracle 없이 SQL 변경을 검증할 수 없으므로
 > **지금 고치지 않는다**(검증 못 한 SQL 을 절차서에 넣는 것이 이 리뷰가 잡은 병이다).
+
+> **preflight 를 래퍼로 감싸지 않는 이유.** 이것은 증거가 아니라 **게이트**다. 통과하면
+> 본 probe 회차가 증거를 만들고, 실패하면 그 회차는 시작되지 않는다. 증거 회차에 게이트
+> 산출물을 섞으면 집계기가 "계약에 없는 child" 로 거부한다(M1-3). 로그는 `$EVID` 에 남긴다 —
+> **무엇을 확인하고 들어갔는지**는 회차의 일부다.
 
 **네 조건이 다 서야 통과다** — `exit 0` ∧ `probe_run_end` sentinel ∧ `manifest_ok=true` ∧
 `emitted == expected`. 하나라도 빠지면 집계기가 `PARTIAL` 이상으로 두지 않는다.

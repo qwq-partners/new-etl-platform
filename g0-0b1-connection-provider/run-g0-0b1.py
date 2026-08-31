@@ -17,6 +17,7 @@
   · 비밀번호는 argv 가 아니라 환경변수로만 받는다.
 """
 import argparse
+import atexit
 import json
 import os
 import re
@@ -27,7 +28,11 @@ import sys
 MAX_LIMIT = 100_000
 # **파티션 하나가 원천 세션 하나다**(8차 M0-3). b0 와 같은 상한을 건다.
 MAX_PARTITIONS = 8
-MAX_CONCURRENT_SESSIONS = 12
+# 동시 세션 상한은 **여기에 두지 않는다**. 이전 값 12 는 partitions ≤ 8 이라 도달 불가능한
+# 죽은 분기였고, 그것을 `MAX_PARTITIONS + 1` 로 바꾸는 것도 고침이 아니다 — 상한이 파티션
+# 상한에서 산술적으로 유도되면 파티션 검사를 통과한 입력에서 세션 검사는 **항상** 참이다.
+# 살아 있는 검사는 두 값이 서로 독립인 데이터일 때만 가능하므로 `g0-source-envelope.json`
+# 이 둘을 따로 선언하고 `g0_source_envelope.check_request()` 가 관계까지 본다(9차 P0-04).
 
 
 def emit(rec):
@@ -41,7 +46,8 @@ def main():
     ap.add_argument("--password-env", default="ORA_PW",
                     help="비밀번호가 담긴 환경변수 이름. 비밀번호 자체를 argv 로 넘기지 마라.")
     ap.add_argument("--table", required=True, help="SCHEMA.TABLE")
-    ap.add_argument("--num-partitions", type=int, default=4,
+    # **기본은 1이다**(9차 P0-04). b0 와 같다.
+    ap.add_argument("--num-partitions", type=int, default=1,
                     help="1~%d 만 허용한다 — 파티션 하나가 원천 세션 하나다(8차 M0-3)" % MAX_PARTITIONS)
     ap.add_argument("--limit", type=int, default=1000,
                     help="읽을 행 수 상한. 1~%d 만 허용한다 — production-safe 표시를 "
@@ -80,6 +86,17 @@ def main():
                          "않는다 — disabledJdbcConnProviderList 전역 비활성화에 의존하는 옛 경로다.")
     ap.add_argument("--trace-dir", default=None,
                     help="추적 디렉터리. step 경계 마커를 여기에 남겨 connection 을 step 에 귀속시킨다.")
+    # ── 9차 조치 6: 원천 신원과 회차 신원 ───────────────────────────────
+    # 봉투를 찾으려면 **어느 원천인가**를 알아야 하고, lease 를 적으려면 **어느 회차인가**를
+    # 알아야 한다. 둘 다 g0-run-child.sh 가 환경으로 넘긴다 — 호출부마다 인자를 붙이면
+    # manifest 의 값과 갈릴 수 있고, 그것이 P0-03 이 만들어진 방식이다.
+    ap.add_argument("--source-id", default=os.environ.get("G0_SOURCE_ID", ""),
+                    help="대상 원천의 DB_UNIQUE_NAME. 기본값은 $G0_SOURCE_ID 다. "
+                         "이 이름으로 g0-source-envelope.json 에서 봉투를 찾는다.")
+    ap.add_argument("--run-id", default=os.environ.get("G0_RUN_ID", ""),
+                    help="이 회차의 신원(래퍼의 RUN_ID). 기본값은 $G0_RUN_ID 다. "
+                         "`--run` 과 다른 것이다 — `--run` 은 이 JVM 실행 하나를 가리키고 "
+                         "`--run-id` 는 그것을 담은 G0-0 회차를 가리킨다.")
     a = ap.parse_args()
 
     # run 을 주지 않으면 mode 로 떨어진다. **한 mode 에 회차가 하나뿐일 때만 맞다.**
@@ -102,10 +119,45 @@ def main():
                         "**파티션 하나가 원천 세션 하나다** — 상한이 없으면 이 인자 하나로 "
                         "원천 세션 예산을 넘길 수 있다(8차 M0-3)."})
         return 2
-    est_sessions = a.num_partitions + 1
-    if est_sessions > MAX_CONCURRENT_SESSIONS:
+
+    # ── 9차 조치 6: 원천 안전 봉투 + 회차 lease ─────────────────────────
+    if not a.source_id:
         emit({"mode": a.mode, "status": "ABORT",
-              "reason": f"예상 동시 세션 {est_sessions} 가 상한 {MAX_CONCURRENT_SESSIONS} 를 넘는다."})
+              "reason": "--source-id 가 비어 있고 $G0_SOURCE_ID 도 없다. 어느 원천의 봉투를 "
+                        "적용해야 하는지 알 수 없으면 붙지 않는다. g0-run-child.sh 를 통해 "
+                        "돌려라(9차 조치 6)."})
+        return 2
+    if not a.run_id:
+        emit({"mode": a.mode, "status": "ABORT",
+              "reason": "--run-id 가 비어 있고 $G0_RUN_ID 도 없다. lease 를 쥔 회차를 이름으로 "
+                        "부를 수 없으면 동시 회차 진단이 불가능하다."})
+        return 2
+
+    # `metadata_only` 는 **아무 connection 도 열지 않는다**(아래 ④ 참조 — 유발하지 못한다는
+    # 사실만 기록한다). 그 회차에까지 대상 질의 승인을 요구하면, 승인 없이 돌릴 수 있는
+    # 유일한 음성 대조군을 막게 된다. 실제로 대상에 붙는 시나리오에만 승인을 요구한다.
+    wants_touch = a.scenario != "metadata_only"
+    lease = None
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import g0_source_envelope as envl
+        viol = envl.check_request(a.source_id, partitions=a.num_partitions,
+                                  wants_target_touch=wants_touch)
+        if viol:
+            emit({"mode": a.mode, "status": "ABORT",
+                  "reason": "원천 안전 봉투 위반 — 원천에 붙지 않는다: " + " | ".join(viol)})
+            return 2
+        lease = envl.acquire(a.source_id, a.run_id)
+        rec_envelope = envl.provenance()
+        # 어떻게 끝나든 놓는다. SIGKILL 은 놓지 못하지만 `acquire()` 의 pid 확인이 치운다.
+        atexit.register(envl.release, lease)
+    except ImportError as e:
+        emit({"mode": a.mode, "status": "ABORT",
+              "reason": f"g0_source_envelope 를 읽지 못했다({e}) — **검증하지 못한 것은 통과가 "
+                        f"아니다**. 원천에 붙지 않는다"})
+        return 2
+    except Exception as e:  # noqa: BLE001  (EnvelopeError 포함)
+        emit({"mode": a.mode, "status": "ABORT", "reason": f"{type(e).__name__}: {e}"})
         return 2
 
     pw = os.environ.get(a.password_env)
@@ -156,6 +208,12 @@ def main():
         "scenario": a.scenario,
         "disabled_providers": conf.get("spark.sql.sources.disabledJdbcConnProviderList", None),
         "num_partitions_requested": a.num_partitions,
+        # **어느 봉투가 이 회차를 지배했는가**(9차 조치 6). harness_digest 는 번들 봉투만
+        # 센다 — $G0_SOURCE_ENVELOPE 로 덮으면 적용된 정책이 그 digest 밖에 있으므로,
+        # 실제로 읽은 파일의 경로와 sha256 을 산출물에 남긴다.
+        "source_id": a.source_id,
+        "run_id": a.run_id,
+        "envelope": rec_envelope,
         "steps": [],
         # M2-5 — **업무 SQL 이 원천에 몇 번 갔는가.** 주입 회차에서 이 값이 0 이어야
         # "fence 밖 읽기가 없었다" 를 추정이 아니라 사실로 말할 수 있다.

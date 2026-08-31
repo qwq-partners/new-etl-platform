@@ -340,7 +340,25 @@ def make_stub(root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     return spark_home, stub
 
 
-def run_real_runsh(root: pathlib.Path, *, break_wiring: bool = False):
+def approved_envelope(root: pathlib.Path, source_id: str = "ETLSTB") -> pathlib.Path:
+    """이 시험용 **승인된 봉투**(9차 조치 6).
+
+    B1 은 봉투 없이 원천에 붙지 않는다. 저장소에 번들된 `default` 는 미승인이라
+    `run.sh` 가 spark-submit 직전에 죽는다 — 그것이 정상 동작이다. 여기서는 배선을
+    시험하려는 것이므로 승인된 봉투를 만들어 준다. 봉투가 **없을 때** 죽는 것은
+    `t_envelope_gate()` 가 따로 본다.
+    """
+    p = root / "approved-envelope.json"
+    p.write_text(json.dumps({"envelopes": {source_id: {
+        "approved_by": "g0-b1-wiring-tests", "max_partitions": 1,
+        "max_concurrent_sessions": 2, "max_active_runs": 1,
+        "statement_timeout_seconds": 30, "target_touch_allowed": True}}},
+        ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def run_real_runsh(root: pathlib.Path, *, break_wiring: bool = False,
+                   envelope: pathlib.Path | None = None):
     """**실물 `run.sh` 를 돌린다.**
 
     `break_wiring=True` 면 `--run` 전달을 지운 판으로 돌린다 — 음성 대조다.
@@ -364,6 +382,15 @@ def run_real_runsh(root: pathlib.Path, *, break_wiring: bool = False):
         "G0B1_STUB_DIR": str(stub),
         "ORA_PW": "unused-stub",
         "OJDBC_JAR": str(root / "ojdbc-stub.jar"),
+        # ── 9차 조치 6 ────────────────────────────────────────────────
+        # `work` 는 저장소 밖으로 복사된 사본이라 B1 의 `dirname(dirname(__file__))`
+        # 로는 `g0_source_envelope` 를 찾지 못한다. 실제 저장소 루트를 PYTHONPATH 로 준다.
+        "PYTHONPATH": str(HERE.parent) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        "G0_SOURCE_ID": "ETLSTB",
+        "G0_RUN_ID": "wiring-test",
+        "G0_LEASE_DIR": str(root / "lease"),
+        "G0_SOURCE_ENVELOPE": str(envelope) if envelope else
+                              str(approved_envelope(root)),
     })
     (root / "ojdbc-stub.jar").write_text("stub", encoding="utf-8")
     r = subprocess.run(
@@ -458,11 +485,41 @@ def t_negative_control() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def t_envelope_gate() -> None:
+    """**봉투 게이트가 실물 경로에서 실제로 막는가**(9차 조치 6 · P0-04).
+
+    앞의 시험들은 승인된 봉투를 만들어 준다. 그러면 "봉투가 있으면 돈다" 만 알고
+    "없으면 안 돈다" 는 모른다 — 9차가 지적한 시험 경계 문제와 같은 모양이다.
+    여기서는 **미승인 봉투**로 실물 `run.sh` 를 돌려 원천에 붙기 전에 죽는지 본다.
+    """
+    print("\n[4] 봉투 게이트 — 미승인 봉투에서 실물 run.sh 가 붙지 않는가")
+    root = pathlib.Path(tempfile.mkdtemp(prefix="g0b1wire-env-"))
+    try:
+        # 저장소에 번들된 봉투 그대로다. `default` 는 UNAPPROVED 이고
+        # target_touch_allowed=false 다.
+        bundled = HERE.parent / "g0-source-envelope.json"
+        r, ev, work = run_real_runsh(root, envelope=bundled)
+        out = r.stdout + r.stderr
+        check("미승인 봉투에서 run.sh 가 실패한다", r.returncode != 0,
+              f"rc={r.returncode}")
+        check("사유가 봉투 위반이다", "봉투" in out, out[-400:])
+        check("미승인이라는 사실을 말한다",
+              "UNAPPROVED" in out or "미승인" in out or "전용 봉투가 없어" in out,
+              out[-400:])
+        # 대상 질의 승인이 없으면 **spark-submit 이 실제 읽기를 하기 전에** 죽어야 한다.
+        check("대상 질의 미승인을 사유로 든다", "target_touch_allowed" in out, out[-400:])
+        check("terminal token 이 하나도 없다 — 원천에 붙지 않았다",
+              not ev.get("terminal_tokens"), str(ev.get("terminal_tokens"))[:200])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> int:
     print("=" * 70)
     print("B1 종단 배선 시험 — 9차 조치 1 (실물 run.sh 를 돈다)")
     print("=" * 70)
-    for t in (t_java_rule_matches_source, t_end_to_end, t_negative_control):
+    for t in (t_java_rule_matches_source, t_end_to_end, t_negative_control,
+              t_envelope_gate):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

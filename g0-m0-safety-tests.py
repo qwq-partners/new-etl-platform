@@ -10,8 +10,10 @@ Oracle·Spark 없이 돈다 — 인자 검증과 종료 코드 전파만 시험�
 """
 from __future__ import annotations
 import os
+import re
 import subprocess
 import sys
+import json as _json_mod
 import tempfile
 from pathlib import Path
 
@@ -59,13 +61,26 @@ r = run([sys.executable, str(B0), *BASE, "--partitions", "9"], env={"ORA_PW": "x
 check("partitions=9 (상한 8 초과) → exit 2", r.returncode == 2, f"returncode={r.returncode}")
 check("파티션=세션이라는 이유를 적는다", "세션" in (r.stdout + r.stderr))
 
-r = run([sys.executable, str(B0), *BASE, "--partitions", "8"], env={"ORA_PW": "x"})
-check("partitions=8 (경계값)은 인자 검증을 통과한다 — 이후 pyspark 부재로 실패해도 2 가 아니다",
-      r.returncode != 2, f"returncode={r.returncode}")
+# partitions=8 은 **하네스 상한**은 통과하지만 봉투가 승인하지 않으면 여전히 죽는다.
+# 승인된 봉투를 주면 인자 검증을 지나 pyspark 부재로 실패해야 한다 — 통과가 불가능한
+# 경로만 시험하면 "거부한다" 는 것만 알고 "허용한다" 는 것은 모른다.
+with tempfile.TemporaryDirectory() as _td:
+    _ep = Path(_td) / "env.json"
+    _ep.write_text(_json_mod.dumps({"envelopes": {"DBX": {
+        "approved_by": "test", "max_partitions": 8, "max_concurrent_sessions": 9,
+        "max_active_runs": 1, "target_touch_allowed": True}}}), encoding="utf-8")
+    _EA = {"ORA_PW": "x", "G0_RUN_ID": "rid-b", "G0_SOURCE_ENVELOPE": str(_ep),
+           "G0_LEASE_DIR": str(Path(_td) / "lease")}
+    r = run([sys.executable, str(B0), *BASE, "--partitions", "8"], env=_EA)
+    check("승인된 봉투에서 partitions=8 은 인자·봉투 검증을 통과한다 "
+          "(이후 pyspark 부재로 실패해도 2 가 아니다)",
+          r.returncode != 2, f"returncode={r.returncode} {(r.stdout + r.stderr)[-300:]}")
+    r = run([sys.executable, str(B0), *BASE, "--partitions", "9"], env=_EA)
+    check("승인된 봉투여도 하네스 상한 8 은 넘지 못한다", r.returncode == 2,
+          f"returncode={r.returncode}")
 
 src = B0.read_text(encoding="utf-8")
 check("MAX_PARTITIONS 가 코드에 있다", "MAX_PARTITIONS = 8" in src)
-check("MAX_CONCURRENT_SESSIONS 가 코드에 있다", "MAX_CONCURRENT_SESSIONS" in src)
 check("`sys.exit(main())` 이다 — 반환값을 버리지 않는다", "sys.exit(main())" in src)
 
 print("\n[3] M0-4 — 신원 preflight 는 필수 인자이고 대상 접촉 전에 온다")
@@ -248,6 +263,98 @@ with tempfile.TemporaryDirectory() as td:
         check("manifest 에 overwrote_existing 이 있다", "overwrote_existing" in d)
     else:
         check("manifest 가 생성된다(M1 필드 확인)", False, r.stderr[-300:])
+
+print("\n[10] 9차 조치 6 — 원천 안전 봉투 (P0-04)")
+
+sys.path.insert(0, str(HERE))
+import g0_source_envelope as _envl  # noqa: E402
+
+_DEF = _envl.load()
+check("기본 봉투의 max_partitions 는 1이다",
+      _DEF["envelopes"]["default"]["max_partitions"] == 1,
+      str(_DEF["envelopes"]["default"].get("max_partitions")))
+check("기본 봉투는 대상 질의를 허용하지 않는다",
+      _DEF["envelopes"]["default"]["target_touch_allowed"] is False)
+check("기본 봉투는 미승인으로 표시된다",
+      str(_DEF["envelopes"]["default"]["approved_by"]).startswith("UNAPPROVED"))
+
+# **핵심 회귀**: 세션 상한이 파티션 상한에서 유도되면 그 검사는 죽은 코드다.
+# 두 값이 독립인 봉투에서만 세션 검사가 파티션 검사와 **따로** 걸린다.
+_INDEP = {"envelopes": {"S": {"approved_by": "owner", "max_partitions": 4,
+                             "max_concurrent_sessions": 2, "max_active_runs": 1,
+                             "target_touch_allowed": True}}}
+_v = _envl.check_request("S", partitions=3, wants_target_touch=True, doc=_INDEP)
+check("세션 검사가 파티션 검사와 독립으로 걸린다(죽은 분기가 아니다)",
+      any("동시 세션" in x for x in _v) and not any("승인 상한" in x and "num-partitions" in x
+                                                   for x in _v),
+      str(_v))
+
+# 모순된 봉투 자체를 거부한다 — 이것이 P0-04 가 잡은 `MAX_CONCURRENT_SESSIONS=12` 다.
+_DEAD = {"envelopes": {"S": {"approved_by": "owner", "max_partitions": 8,
+                            "max_concurrent_sessions": 12, "max_active_runs": 1,
+                            "target_touch_allowed": True}}}
+check("max_concurrent_sessions=12 · max_partitions=8 봉투를 모순으로 거부한다",
+      any("스스로 모순" in x for x in
+          _envl.check_request("S", partitions=1, wants_target_touch=True, doc=_DEAD)))
+
+# 봉투가 허용하는 요청은 통과한다 — 통과가 불가능한 검사는 검사가 아니다.
+_OK = {"envelopes": {"S": {"approved_by": "owner", "max_partitions": 2,
+                          "max_concurrent_sessions": 3, "max_active_runs": 1,
+                          "target_touch_allowed": True}}}
+check("승인된 봉투 안의 요청은 위반이 없다",
+      _envl.check_request("S", partitions=2, wants_target_touch=True, doc=_OK) == [],
+      str(_envl.check_request("S", partitions=2, wants_target_touch=True, doc=_OK)))
+check("전용 봉투가 없으면 default 로 떨어졌다는 사실을 위반으로 적는다",
+      any("전용 봉투가 없어" in x for x in
+          _envl.check_request("UNKNOWN_SRC", partitions=1, wants_target_touch=False)))
+
+with tempfile.TemporaryDirectory() as td:
+    _ld = Path(td)
+    _l1 = _envl.acquire("S", "run-1", doc=_OK, lease_dir=_ld)
+    try:
+        _envl.acquire("S", "run-2", doc=_OK, lease_dir=_ld)
+        check("같은 원천에 두 번째 회차가 붙지 못한다", False, "두 번째 acquire 가 통과했다")
+    except _envl.EnvelopeError as e:
+        check("같은 원천에 두 번째 회차가 붙지 못한다", "run-1" in str(e), str(e)[:120])
+    _envl.release(_l1)
+    try:
+        _l2 = _envl.acquire("S", "run-2", doc=_OK, lease_dir=_ld)
+        check("앞 회차가 놓으면 다음 회차가 붙는다", True)
+        _envl.release(_l2)
+    except _envl.EnvelopeError as e:
+        check("앞 회차가 놓으면 다음 회차가 붙는다", False, str(e)[:120])
+
+print("\n[11] 9차 조치 6 — B0·B1 이 봉투 없이 붙지 않는다")
+
+# B0 는 봉투 위반에서 **spark 를 띄우기 전에** 죽어야 한다.
+r = run([sys.executable, str(B0), *BASE], env={"ORA_PW": "x", "G0_RUN_ID": "rid-1"})
+check("B0 가 미승인 봉투에서 exit 2 로 죽는다", r.returncode == 2, f"rc={r.returncode}")
+check("B0 가 봉투 위반이라고 말한다", "봉투" in (r.stdout + r.stderr),
+      (r.stdout + r.stderr)[-300:])
+check("B0 가 pyspark 를 부르기 전에 죽는다", "pyspark" not in (r.stdout + r.stderr).lower(),
+      (r.stdout + r.stderr)[-300:])
+
+# run-id 가 없으면 봉투 이전에 죽는다 — lease 를 익명으로 쥐지 않는다.
+r = run([sys.executable, str(B0), *BASE], env={"ORA_PW": "x", "G0_RUN_ID": ""})
+check("B0 가 run-id 없이 붙지 않는다", r.returncode == 2 and "run_id" in r.stdout,
+      (r.stdout + r.stderr)[-300:])
+
+# 래퍼의 source_id 와 스크립트의 기대 신원이 다르면 죽는다.
+r = run([sys.executable, str(B0), *BASE],
+        env={"ORA_PW": "x", "G0_RUN_ID": "rid-1", "G0_SOURCE_ID": "OTHER"})
+check("B0 가 G0_SOURCE_ID 불일치를 거부한다",
+      r.returncode == 2 and "source_id" in r.stdout, (r.stdout + r.stderr)[-300:])
+
+# 래퍼가 회차·원천 신원을 환경으로 넘긴다.
+_w = (HERE / "g0-run-child.sh").read_text(encoding="utf-8")
+check("래퍼가 G0_RUN_ID 를 export 한다", 'export G0_RUN_ID="$RUN_ID"' in _w)
+
+# 도달 불가능한 세션 상한 상수를 코드에서 없앴다.
+for _f in ("g0-0b0-spark-smoke.py", "g0-0b1-connection-provider/run-g0-0b1.py"):
+    _src = (HERE / _f).read_text(encoding="utf-8")
+    # **상수 선언**이 없어야 한다. 주석 안의 언급(왜 없앴는지 설명)은 세지 않는다.
+    check(f"{_f} 에 MAX_CONCURRENT_SESSIONS 상수 선언이 없다",
+          not re.search(r"(?m)^MAX_CONCURRENT_SESSIONS\s*=", _src))
 
 print("\n[9] M0-6 — README 의 probe 수와 실행 명령")
 

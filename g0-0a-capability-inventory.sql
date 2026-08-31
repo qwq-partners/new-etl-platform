@@ -111,6 +111,22 @@ DECLARE
   END p_stmt;
 
 BEGIN
+  -- ── 9차 조치 6: 자리표시자로는 돌지 않는다 (P0-05 · P0-06-8) ───────
+  -- 위 DEFINE 블록은 **자리표시자**다. 채우지 않고 돌리면 존재하지 않는
+  -- SCHEMA_NAME.TABLE_NAME 을 질의하고 DBUNIQUENAME 과 신원을 대조한다.
+  -- 생산라인과 밀접한 원천에서 그것은 그냥 사고다.
+  --
+  -- **이것은 심층 방어이지 주 방어가 아니다.** 주 방어는 `g0-0a-preflight.sql` —
+  -- DUAL 만 읽는 별도 connection 이며 대상 이름이 SQL 에 등장조차 하지 않는다.
+  -- 여기 검사는 preflight 를 건너뛴 실행을 막는다.
+  IF '&TARGET_OWNER' = 'SCHEMA_NAME' OR '&TARGET_TABLE' = 'TABLE_NAME'
+     OR '&EXPECT_DBUNAME' = 'DBUNIQUENAME' THEN
+    RAISE_APPLICATION_ERROR(-20051,
+      'G0-0A ABORT: DEFINE 블록이 자리표시자 그대로다 (TARGET_OWNER=&TARGET_OWNER, '
+      ||'TARGET_TABLE=&TARGET_TABLE, EXPECT_DBUNAME=&EXPECT_DBUNAME). '
+      ||'g0-0-runbook.md §4 S5 대로 값을 채운 사본을 만들어라. 대상에 아무 질의도 하지 않았다');
+  END IF;
+
   DBMS_OUTPUT.PUT_LINE('--- 1. IDENTITY / ROLE ---');
   p_scalar('userenv.DATABASE_ROLE',        q'[SELECT SYS_CONTEXT('USERENV','DATABASE_ROLE') FROM DUAL]', '&EXPECT_ROLE');
   p_scalar('userenv.DB_NAME',              q'[SELECT SYS_CONTEXT('USERENV','DB_NAME') FROM DUAL]');

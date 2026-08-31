@@ -1,7 +1,7 @@
 {
  "$comment": "**손으로 고치지 마라.** g0-0a-probe-manifest.py 가 SQL 에서 생성한다. SQL 을 고쳤으면 --write 로 재생성하고, 그 diff 를 리뷰에 함께 올린다. 집계기(cov_a)가 이 목록을 계약으로 읽어 산출물의 probe 집합을 대조한다(9차 조치 3 · P0-01).",
  "generated_from": "g0-0a-capability-inventory.sql",
- "source_sha256": "5c5e46e3d9ff02bcfa39e31b95358316ca5133ee356bb8fc7eeec656837af4b7",
+ "source_sha256": "1d9af7cfe84b067a39d3a7aea8aa7d34d509444960f9f534d2f6d1b96739a657",
  "c_expected_in_sql": 87,
  "probe_count": 87,
  "duplicate_ids_in_sql": [],

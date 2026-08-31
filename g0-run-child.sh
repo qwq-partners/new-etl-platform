@@ -137,6 +137,14 @@ echo "[child] versions_lock_digest=$LOCK_DIGEST"
 echo "[child] harness_digest=$HARNESS_DIGEST"
 echo "[child] 명령: $*"
 
+# ── 9차 조치 6: 회차 신원을 자식에게 넘긴다 ──────────────────────────
+# 원천 lease(`g0_source_envelope.acquire`)는 **누가 쥐었는가**를 적어야 진단에 쓸모가
+# 있다. RUN_ID 는 여기에만 있었고 자식은 그것을 볼 길이 없었다 — B0 는 lease 를
+# `UNSPECIFIED` 로 쥘 뻔했다. 호출부마다 인자를 하나씩 더 붙이는 대신 환경으로 넘긴다.
+# 그래야 manifest 의 `run_id` 와 lease 의 `run_id` 가 **구조적으로 같은 값**이 된다.
+export G0_RUN_ID="$RUN_ID"
+export G0_SOURCE_ID="$SOURCE_ID"
+
 "$@"
 RC=$?
 
