@@ -170,11 +170,103 @@ def preflight(suite: dict) -> dict:
 
 
 # ── 1. 환경 가드 ─────────────────────────────────────────────────────
-def enforce_guard(suite: dict, observed: dict) -> list[str]:
+#: allowlist 가 **증명하지 못하는 것**. 증거에 그대로 실어 보낸다(9차 조치 7 · P0-07).
+ALLOWLIST_LIMITS = (
+    "이 allowlist 는 **'승인 목록이 패키지 밖에 있다'와 '그 파일의 내용이 이것이었다'**만 "
+    "보인다. 다음은 보이지 않는다 — (1) 그 파일을 **누가** 두었는지(파일시스템 권한은 "
+    "runner 가 확인하지 않는다), (2) 아래 attestation 에 적힌 승인자가 **실제로 승인했는지** "
+    "(서명이 아니라 자가기재다), (3) 그 DB 가 **정말 폐기용인지**. 마지막은 어떤 코드도 "
+    "확인할 수 없다 — 조직 절차만 할 수 있다."
+)
+
+#: attestation 에 반드시 있어야 하는 키. 없으면 실행하지 않는다.
+ATTEST_REQUIRED = ("approved_by", "approved_at", "contact", "environment_is")
+
+
+def load_external_allowlist(root: Path) -> tuple[list[str], str, dict]:
+    """**패키지 밖**의 allowlist 를 읽는다 (8차 M0-5 · 9차 조치 7).
+
+    왜 밖이어야 하는가 — v1 은 `environment_guard.expected_*` 를 `suite.yaml` 에서만
+    읽었다. suite.yaml 은 이 패키지 안에 있으므로, **그 파일을 고치면 어떤 DB 든
+    파괴적 시나리오의 대상이 될 수 있다.** `suite_config_sha256` 은 그 변경을
+    기록할 뿐 막지 못한다. 이 하네스는 쓰기·DDL 을 하므로 그 차이가 사고의 크기다.
+
+    **9차 P0-07 이 지적한 한계.** 파일이 밖에 있다는 것은 *위치*를 보일 뿐 **승인 주체·
+    소유권·서명을 보이지 않는다.** 서명 체계를 이 저장소가 만들 수는 없다. 대신 두 가지를
+    한다 — 승인자를 **적게 강제**하고(빈 파일에 이름 하나 없이 승인이 성립하지 않게),
+    그것이 서명이 아니라 자가기재라는 사실을 `ALLOWLIST_LIMITS` 로 증거에 같이 남긴다.
+    **할 수 없는 것을 한 척하지 않는 것**이 여기서 할 수 있는 전부다.
+
+    형식
+        `#@ key: value`   attestation. `approved_by`·`approved_at`·`contact`·
+                          `environment_is` 넷은 **필수**다
+        `#` …             보통 주석
+        그 밖의 줄        `db_unique_name` 하나
+
+    경로: `CE_ENV_ALLOWLIST` 환경변수(필수). **패키지 안을 가리키면 거부한다.**
+
+    반환: (이름 목록, 파일 digest, attestation)
+    """
+    path = os.environ.get("CE_ENV_ALLOWLIST", "").strip()
+    if not path:
+        die(2, "CE_ENV_ALLOWLIST 가 없다. 이 하네스는 쓰기·DDL 을 하므로 **패키지 밖**의 "
+               "allowlist 파일로 대상 환경을 승인해야 실행한다(8차 M0-5). "
+               "suite.yaml 의 expected_* 만으로는 승인이 되지 않는다 — 그 파일은 "
+               "패키지 안이라 고치면 그만이다.")
+    ap = Path(path).resolve()
+    if not ap.is_file():
+        die(2, f"CE_ENV_ALLOWLIST 파일이 없다: {ap}")
+    try:
+        ap.relative_to(root.resolve())
+    except ValueError:
+        pass          # 패키지 밖 — 정상
+    else:
+        die(2, f"CE_ENV_ALLOWLIST 가 패키지 안({root})을 가리킨다: {ap}. "
+               "패키지 안의 파일은 승인 근거가 되지 못한다 — 같은 커밋에서 함께 바뀐다.")
+
+    names: list[str] = []
+    attest: dict[str, str] = {}
+    for line in ap.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s.startswith("#@"):
+            k, _, v = s[2:].partition(":")
+            if k.strip():
+                attest[k.strip()] = v.strip()
+            continue
+        t = s.split("#", 1)[0].strip()
+        if t:
+            names.append(t)
+    if not names:
+        die(2, f"CE_ENV_ALLOWLIST 가 비어 있다: {ap}. 빈 allowlist 로는 실행하지 않는다.")
+
+    # **승인자를 적게 강제한다.** 서명을 검증할 수는 없지만, 아무도 이름을 적지 않은
+    # 파일을 "승인" 이라고 부르지는 않는다(9차 P0-07).
+    miss = [k for k in ATTEST_REQUIRED if not attest.get(k)]
+    if miss:
+        die(2, f"CE_ENV_ALLOWLIST 의 attestation 에 {miss} 가 없다: {ap}\n"
+               f"  파일 맨 위에 다음 네 줄을 적어라 — 이 하네스는 DDL/DML 을 한다.\n"
+               f"    #@ approved_by: 홍길동 (DBA팀)\n"
+               f"    #@ approved_at: 2026-08-31\n"
+               f"    #@ contact: hong@example.com\n"
+               f"    #@ environment_is: 폐기용 Oracle Free 컨테이너. 운영 데이터 없음\n"
+               f"  {ALLOWLIST_LIMITS}")
+    attest["_limits"] = ALLOWLIST_LIMITS
+    return names, sha256_file(ap), attest
+
+
+def enforce_guard(suite: dict, observed: dict, allowlist: list[str]) -> list[str]:
     """observed = {"primary_db_unique_name":..., "standby_db_unique_name":..., "schema":...}
     실패하면 즉시 종료한다. 통과 항목 목록을 돌려준다."""
     g = suite.get("environment_guard") or {}
     checks: list[str] = []
+
+    # **외부 allowlist 가 먼저다**(8차 M0-5). suite 의 expected 와 일치하더라도
+    # 관측된 primary 가 allowlist 에 없으면 실행하지 않는다.
+    obs_primary = str(observed.get("primary_db_unique_name", ""))
+    if obs_primary not in allowlist:
+        die(2, f"관측된 primary db_unique_name {obs_primary!r} 가 외부 allowlist 에 없다. "
+               f"승인된 것: {allowlist}. **이 검사는 suite.yaml 로 우회할 수 없다.**")
+    checks.append(f"external_allowlist_ok({obs_primary})")
 
     if g.get("class") != "DISPOSABLE_WRITABLE_PRIMARY_ADG":
         die(2, "environment_guard.class 가 DISPOSABLE_WRITABLE_PRIMARY_ADG 가 아니다.")
@@ -219,6 +311,12 @@ def enforce_guard(suite: dict, observed: dict) -> list[str]:
 # 실행 산출물(evidence)과 바이트코드도 제외한다.
 _HASH_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache"}
 
+def sha256_file(p: Path) -> str:
+    """suite.yaml 처럼 **코드 해시에서 제외되는 파일**을 따로 묶기 위한 것이다.
+    제외 자체는 옳지만(순환 참조), 그러면 필수 시나리오·budget·pass rule 이 어떤
+    digest 에도 묶이지 않는다 — 7차 교차 리뷰 P1-10."""
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "0" * 64
+
 def artifact_hash(root: Path, exclude: set[str]) -> str:
     h = hashlib.sha256()
     for p in sorted(root.rglob("*")):
@@ -252,7 +350,11 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
            "fixture": {"objects_created": [], "rows_written": 0},
            "observations": [], "cleanup": {"attempted": False, "succeeded": False,
                                            "leftover_objects": []},
-           "error": None}
+           "error": None,
+           # **child process 의 종료 코드.** runner 가 이것을 읽지 않던 것이 7차 교차 리뷰
+           # P0-02 다 — 통과 모양의 SCENARIO_RESULT 를 찍은 뒤 exit 1 로 죽어도 PASS 후보가
+           # 됐다. -1 은 '실행하지 않았다'(dry-run·entrypoint 부재·내부 예외)를 뜻한다.
+           "child_returncode": -1}
 
     entry = sdir / str(meta.get("entrypoint") or "run.py")
     if dry:
@@ -284,6 +386,7 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=per,
                              cwd=str(sdir),
                              env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        rec["child_returncode"] = out.returncode
         payload = None
         for line in reversed(out.stdout.splitlines()):
             if line.startswith("SCENARIO_RESULT "):
@@ -348,6 +451,18 @@ def run_scenario(sdir: Path, suite: dict, env: dict, dry: bool,
         rec["observations"].append({"name": "invalid_outcome", "value": str(rec["outcome"])})
         rec["outcome"] = "INCONCLUSIVE"
 
+    # R0 — **종료 코드가 0 이 아니면 payload 를 믿지 않는다.**
+    # 시나리오 stdout 은 신뢰 대상이 아니다(위 주석과 같은 이유). 통과 모양의 결과를 찍고
+    # 죽은 경우가 정확히 이 검사가 막는 것이다. 7차 교차 리뷰 P0-02.
+    if rec["child_returncode"] not in (0, -1):
+        rec["observations"].append({"name": "child_returncode_nonzero",
+                                    "value": rec["child_returncode"],
+                                    "note": "시나리오가 0 이 아닌 코드로 끝났다. 보고된 outcome 을 "
+                                            "그대로 받지 않는다."})
+        rec["outcome"] = "INCONCLUSIVE"
+        if not rec["error"]:
+            rec["error"] = f"child exit {rec['child_returncode']}"
+
     # R4 — 시나리오가 신고한 객체 이름이 object_prefix 를 벗어나면 실패로 본다.
     # prefix 강제는 _ce.Fixture 안에만 있어 시나리오가 우회할 수 있으므로 여기서 다시 본다.
     stray = [o for o in rec["fixture"]["objects_created"]
@@ -407,21 +522,29 @@ def verdict(suite: dict, scen: list[dict], partial: bool, skipped: list[str] | N
     if errored:  reasons.append(f"시나리오 오류: {errored}")
     if schema_errors: reasons.append(f"evidence 스키마 위반 {len(schema_errors)}건")
 
-    # **실행 완결(execution_complete)과 완화 성립(mitigation_holds)은 다르다**(7차 리뷰 P2).
-    # COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 도 pass=true 에 들어가는데, 그것은
-    # "하네스가 끝까지 돌았다" 는 뜻이지 "설계가 통과했다" 가 아니다.
-    holds = [s["id"] for s in scen if s["outcome"] == "MITIGATION_HOLDS"]
+    # **pass 하나로 두 가지 다른 것을 말하고 있었다**(7차 교차 리뷰 P2).
+    # COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 도 pass=true 에 포함된다. 하네스가
+    # 완주했다는 뜻으로는 맞지만 **설계가 통과했다는 뜻으로 오독된다.** 두 축을 나눈다.
+    #   execution_complete — 하네스가 required 를 다 돌리고 증거를 남겼는가 (불리언)
+    #   mitigation_holds   — 그 반례에 대해 **완화가 실제로 버텼는가** (불리언)
+    # mitigation_holds 는 **불리언이어야 한다.** '버틴 시나리오 목록' 으로 두면 holds 가
+    # 비어 있지 않은 동시에 reproduced 도 비어 있지 않은 상태를 "완화가 성립했다" 로
+    # 읽게 된다. 어느 시나리오가 버텼는지는 scenarios[].outcome 에 이미 있다.
     reproduced = [s["id"] for s in scen if s["outcome"] == "COUNTEREXAMPLE_REPRODUCED"]
-    mfail = [s["id"] for s in scen if s["outcome"] == "MITIGATION_FAIL"]
+    mit_fail = [s["id"] for s in scen if s["outcome"] == "MITIGATION_FAIL"]
+    holds = not (reproduced or mit_fail or not_obs or incon or missing) and bool(scen)
+
     return {"pass": not reasons, "rule": "all_required_executed_and_injection_observed",
+            "required_missing": missing, "not_observed": not_obs, "inconclusive": incon,
+            # 아래 두 필드가 실제 판단에 쓰는 값이다. pass 는 '하네스가 완주했는가' 에 가깝다.
             "execution_complete": not reasons,
             "mitigation_holds": holds,
             "counterexample_reproduced": reproduced,
-            "mitigation_failed": mfail,
-            "design_verdict_note": ("pass=true 는 **하네스가 끝까지 돌았다**는 뜻이다. "
-                                    "설계 판정이 아니다 — reproduced/mitigation_failed 가 있으면 "
-                                    "그것이 설계 결함이다."),
-            "required_missing": missing, "not_observed": not_obs, "inconclusive": incon,
+            "mitigation_failed": mit_fail,
+            "verdict_note": ("execution_complete 는 **하네스가 돌았다**는 뜻이고 "
+                             "mitigation_holds 가 **설계가 버텼다**는 뜻이다. "
+                             "COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 는 완주로는 정상이지만 "
+                             "설계로는 실패다 — 둘을 섞어 읽지 마라."),
             "reason": "; ".join(reasons) if reasons else "모든 required 시나리오가 실행되고 injection이 관측됨"}
 
 def validate_evidence(ev: dict, root: Path) -> list[str]:
@@ -464,6 +587,22 @@ def main() -> int:
     if suite.get("schema_version") != SCHEMA_VERSION or suite.get("suite_id") != SUITE_ID:
         die(2, "suite.yaml 의 schema_version/suite_id 가 runner와 맞지 않는다.")
 
+    # ── 외부 allowlist 를 **가장 먼저** 읽는다 (8차 M0-5) ─────────────
+    # preflight 보다 앞이어야 한다. preflight 는 CE_DSN 으로 실제 접속을 하므로,
+    # 승인 여부를 그 뒤에 확인하면 **승인되지 않은 DB 에 이미 붙은 뒤**가 된다.
+    # 이 하네스의 약속은 "폐기용 환경이 아니면 한 줄도 실행하지 않는다" 인데
+    # 접속도 한 줄이다.
+    if a.dry_run:
+        allowlist, allowlist_digest = [], "DRY_RUN_NOT_LOADED"
+        allowlist_attest = {"_limits": ALLOWLIST_LIMITS,
+                            "_note": "dry-run 이라 allowlist 를 읽지 않았다"}
+        print("[guard] --dry-run: 외부 allowlist 를 요구하지 않는다(접속도 실행도 하지 않으므로)")
+    else:
+        allowlist, allowlist_digest, allowlist_attest = load_external_allowlist(root)
+        print(f"[guard] 외부 allowlist {len(allowlist)}건 (digest {allowlist_digest[:16]}…)")
+        print(f"[guard] 승인 자가기재: approved_by={allowlist_attest['approved_by']!r} "
+              f"approved_at={allowlist_attest['approved_at']!r}")
+
     if a.dry_run:
         g = suite["environment_guard"]
         observed = {"primary_db_unique_name": g.get("expected_primary_db_unique_name", ""),
@@ -504,14 +643,17 @@ def main() -> int:
             die(2, f"CE_DOC_PATH={doc!r} 가 파일이 아니다.")
         print(f"[preflight] CE_DOC_PATH={doc}")
 
-    checks = enforce_guard(suite, observed)
+    if a.dry_run:
+        checks = ["external_allowlist=NOT_REQUIRED(dry-run)"]
+        checks += enforce_guard(suite, observed, [observed.get("primary_db_unique_name", "")])
+    else:
+        checks = enforce_guard(suite, observed, allowlist)
     print(f"[guard] 통과: {', '.join(checks)}")
 
     # **코드 digest 와 suite 설정 digest 를 따로 기록한다**(7차 리뷰 P1-10).
     # suite.yaml 을 해시에서 빼면 required_scenarios·budgets·versions·pass_rule 이
     # 증거에 묶이지 않아, 다른 설정으로 돌린 결과를 같은 것으로 오인할 수 있다.
     h = artifact_hash(root, exclude={Path(a.suite).resolve().name, Path(a.out).name})
-    suite_digest = hashlib.sha256(Path(a.suite).read_bytes()).hexdigest()
     declared = str(suite.get("artifact_sha256") or "")
     if declared and declared != h:
         die(2, f"artifact_sha256 불일치. 선언 {declared[:16]}… != 실제 {h[:16]}…")
@@ -557,12 +699,27 @@ def main() -> int:
     ev = {"schema_version": SCHEMA_VERSION, "suite_id": SUITE_ID,
           "run_id": str(uuid.uuid4()), "started_at": scen[0]["started_at"] if scen else now(),
           "finished_at": now(), "artifact_sha256": h,
-          "suite_config_sha256": suite_digest,
+          # artifact_sha256 은 순환 참조를 피하려고 suite.yaml 을 제외하고 계산한다.
+          # 그래서 필수 시나리오·budget·pass rule 이 어떤 digest 에도 묶이지 않았다
+          # (7차 리뷰 P1-10). code digest 와 config digest 를 **따로** 남긴다.
+          "suite_config_sha256": sha256_file(Path(a.suite)),
+          # **외부 allowlist 의 digest**(8차 M0-5). 어떤 승인 목록으로 돌았는지가
+          # 증거에 박혀야 사후에 "그 환경이 승인돼 있었다"를 확인할 수 있다.
+          "env_allowlist_sha256": allowlist_digest,
+          # 9차 조치 7(P0-07) — digest 는 "그 파일의 내용이 이것이었다" 만 보인다.
+          # 누가 승인했는지·정말 폐기용인지는 보이지 않는다. 그 사실을 증거가
+          # 스스로 적는다(`_limits`). **못 하는 것을 한 척하지 않는다.**
+          "env_allowlist_attestation": allowlist_attest,
           "environment": envrec,
           "versions": suite.get("versions", {}),
           "scenarios": scen,
+          # placeholder 도 schema 를 만족해야 한다 — 아래 validate_evidence 가 **판정 전에**
+          # 돌기 때문이다(판정이 schema_errors 를 입력으로 받으므로 순서를 뒤집을 수 없다).
+          # 새 required 필드를 verdict() 에만 넣고 여기 빠뜨리면 자기 검증이 스스로를
+          # 위반한다 — 2026-08-27 에 실제로 그렇게 됐다.
           "suite_verdict": {"pass": False, "rule": "all_required_executed_and_injection_observed",
                             "required_missing": [], "not_observed": [], "inconclusive": [],
+                            "execution_complete": False, "mitigation_holds": False,
                             "reason": "판정 전"}}
 
     # **runner 는 자기 출력을 스키마로 검증한다.** 스키마 설명이 그렇게 약속하고 있다.

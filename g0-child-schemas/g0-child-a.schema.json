@@ -1,0 +1,89 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "g0-child-a.schema.json",
+ "title": "G0-0A child 산출물 — JSONL 한 줄",
+ "description": "8차 교차 리뷰 M1-1. child 산출물을 **집계 전에** 이 스키마로 검증한다 — 통과하지 못한 산출물은 집계 입력이 되지 못한다. A 는 JSONL 이므로 이 스키마는 **한 줄**을 규정한다. 집계기가 줄마다 검증한다.",
+ "type": "object",
+ "oneOf": [
+  {
+   "required": [
+    "probe"
+   ],
+   "properties": {
+    "probe": {
+     "type": "string",
+     "minLength": 1,
+     "description": "probe id. 파일 안에서 유일해야 한다 — 중복은 여러 회차가 섞였다는 뜻이다."
+    },
+    "ok": {
+     "type": "boolean"
+    },
+    "value": {},
+    "sqlcode": {
+     "type": [
+      "integer",
+      "string",
+      "null"
+     ],
+     "description": "실제 SQLCODE. 성공을 가정한 리터럴 출력을 금지하는 근거다."
+    },
+    "error": {
+     "type": "string"
+    },
+    "skipped": {
+     "type": "boolean"
+    },
+    "note": {
+     "type": "string"
+    }
+   },
+   "additionalProperties": true
+  },
+  {
+   "required": [
+    "probe_summary"
+   ],
+   "properties": {
+    "probe_summary": {
+     "type": "object",
+     "required": [
+      "expected",
+      "emitted",
+      "manifest_ok"
+     ],
+     "properties": {
+      "expected": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "emitted": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "manifest_ok": {
+       "type": "boolean",
+       "description": "false 면 블록이 중간에 끊긴 것이고 결과 전체를 폐기한다."
+      },
+      "query_failed": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "value_mismatch": {
+       "type": "integer",
+       "minimum": 0
+      }
+     },
+     "additionalProperties": true
+    }
+   },
+   "additionalProperties": true
+  },
+  {
+   "required": [
+    "probe_run_end"
+   ],
+   "description": "완주 sentinel. 이것이 없으면 스크립트가 끝까지 갔다는 증거가 없다.",
+   "additionalProperties": true
+  }
+ ]
+}

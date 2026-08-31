@@ -5,7 +5,12 @@ evidence-*.json
 *-evidence.json
 *evidence*.log
 g0-0*-evidence-*
+*.rejected.json
+# child manifest 사이드카 — 실행 산출물이다(g0-child-contract.md).
+# 증거의 일부지만 원천 식별자·호스트 정보가 들어가므로 커밋하지 않는다.
+*.manifest.json
 !evidence.schema.json
+!g0-0-evidence.schema.json
 # 로컬 측정 기록은 산출물이 아니라 **측정 사실**이므로 추적한다
 !evidence/
 !evidence/*.json

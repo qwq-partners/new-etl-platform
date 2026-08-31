@@ -1,0 +1,22 @@
+{
+ "$comment": "**원천별 안전 봉투**(9차 조치 6 · P0-04). 9차 리뷰: 원천 보호가 반환 행 수와 한 Spark read 의 partition 상한에 치우쳐 있었고, `MAX_CONCURRENT_SESSIONS=12` 는 `partitions ≤ 8` 때문에 **어떤 정상 입력에서도 도달하지 않는 죽은 코드**였다. 그리고 `ROWNUM <= n` 은 반환 행 수만 제한할 뿐 block visit·wall-clock·physical read 의 상한이 아니다. 여기 값은 **원천 소유자가 승인한 정책**이며 하네스가 스스로 정하는 값이 아니다 — `default` 는 승인 전 임시값이고 그 사실을 `approved_by` 가 적는다.",
+ "schema_version": "1.0.0",
+ "how_to_use": "B0·B1 이 `--source-id` 로 이 파일에서 봉투를 찾아 요청값이 그 안인지 확인하고, 넘으면 원천에 붙기 전에 죽는다. 같은 원천에 동시 회차가 붙는 것은 `g0_source_lease.py` 의 lease 가 막는다 — 한 run 의 상한은 여러 run 이 겹칠 때 아무것도 보장하지 않기 때문이다.",
+ "envelopes": {
+  "default": {
+   "approved_by": "UNAPPROVED — 원천 소유자 승인 전 임시값이다. 사내 원천에 쓰기 전에 반드시 교체한다",
+   "max_partitions": 1,
+   "why_partitions_1": "**기본은 1이다**(9차 P0-04). partition 하나가 원천 세션 하나이고, 병렬이 필요하다는 근거는 측정 전에 없다. 늘리려면 원천 소유자가 이 파일에서 올린다",
+   "max_concurrent_sessions": 2,
+   "why_sessions": "partition 1 + driver 1. 이 값이 `max_partitions + 1` 보다 크지 않아야 검사가 실제로 걸린다 — 이전 판은 8 파티션에 상한 12 라 분기가 도달 불가였다",
+   "max_active_runs": 1,
+   "why_active_runs": "같은 원천에 동시에 붙는 G0-0 회차 수. 한 회차의 상한은 회차가 겹치면 아무것도 보장하지 않는다",
+   "statement_timeout_seconds": 30,
+   "why_timeout": "쿼리 하나의 벽시계 상한. `ROWNUM` 은 반환 행 수만 제한하고 empty/sparse heap 에서 읽는 block 수는 제한하지 않는다 — 시간 상한이 그것을 대신 막는다",
+   "retry_budget": 0,
+   "why_retry": "0 이다. ORA-03172 자기증폭 루프(권한 판정서 §4)를 하네스가 재현하지 않는다",
+   "target_touch_allowed": false,
+   "why_target_touch": "**대상 테이블 질의를 기본으로 허용하지 않는다**(M5c 는 아직 NO-GO). 열려면 원천 소유자가 access plan 또는 검증된 index path 와 함께 이 값을 true 로 바꾼다"
+  }
+ }
+}

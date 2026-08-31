@@ -72,8 +72,9 @@ spark-submit --jars /path/ojdbc11.jar g0-0b0-spark-smoke.py \
 # (3) G0-0C00 — fence fact collector. **G0-0A의 wm_column.leading_valid_visible 를 먼저 확인**하고,
 #     ACK_FULL_SCAN=N(기본)이면 **대상 테이블 질의가 하나도 실행되지 않는다** —
 #     Q1·Q2·Q4 는 물론 Q3 도 게이트 뒤에 있다(SAMPLE 은 표본 추출이지 I/O 절감이 아니다).
-#     즉 기본 설정으로는 **대상 테이블 질의가 0건**이다(skipped 레코드와 summary 는 나온다).
-#     승인 후 ACK_FULL_SCAN=Y 로 실행하라.
+#     즉 기본 설정으로 돌리면 **대상 테이블 질의가 0건**이다. 산출물 자체는 0건이 아니다 —
+#     skipped 레코드 3건과 fence.summary 가 나온다(7차 리뷰 P2 정정). 승인 후
+#     ACK_FULL_SCAN=Y 로 실행하라.
 sqlplus -S /nolog <<EOF | tee g0-0c00-evidence-$(date +%Y%m%d).log
 CONNECT $ORA_USER/$ORA_PW@//host:1521/service
 @g0-0c-fence-facts.sql
@@ -195,7 +196,7 @@ python3 g0-normalize.py --report-id "$(date -u +G0-0-%Y%m%dT%H%M%SZ)" --profile 
     --versions-lock versions.lock --out g0-0-evidence.json
 ```
 
-계약은 `g0-0-evidence.schema.json` 이고 도구가 자기 출력을 그것으로 검증한다.
+계약은 `g0-0-evidence.schema.json` 이고 도구가 자기 출력을 그것으로 검증한다. **검증에 실패하면 최종 경로에 쓰지 않고 exit 4 로 끝난다**(7차 리뷰 P0-02 조치). child 산출물은 `g0-run-child.sh` 로 실행해 manifest 사이드카를 남겨야 한다 — `g0-child-contract.md` 참조.
 `--report-id` 는 **회차마다 달라야 한다** — F-13(유휴 정지)과 ORA-03172 양성 대조처럼
 여러 회차를 조립해야 하는 측정이 있다.
 

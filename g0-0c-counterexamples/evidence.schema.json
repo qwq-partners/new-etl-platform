@@ -1,374 +1,389 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "g0-0c-counterexamples/evidence.schema.json",
-  "title": "G0-0C counterexample suite evidence",
-  "description": "시나리오 누락·injection 미관측은 PASS가 아니다. runner는 이 스키마로 자기 출력을 검증한 뒤 종료 코드를 정한다.",
-  "type": "object",
-  "required": [
-    "schema_version",
-    "suite_id",
-    "run_id",
-    "started_at",
-    "finished_at",
-    "environment",
-    "versions",
-    "artifact_sha256",
-    "scenarios",
-    "suite_verdict",
-    "suite_config_sha256"
-  ],
-  "additionalProperties": false,
-  "properties": {
-    "schema_version": {
-      "const": "1.0.0"
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "g0-0c-counterexamples/evidence.schema.json",
+ "title": "G0-0C counterexample suite evidence",
+ "description": "시나리오 누락·injection 미관측은 PASS가 아니다. runner는 이 스키마로 자기 출력을 검증한 뒤 종료 코드를 정한다.",
+ "type": "object",
+ "required": [
+  "artifact_sha256",
+  "environment",
+  "finished_at",
+  "run_id",
+  "scenarios",
+  "schema_version",
+  "started_at",
+  "suite_config_sha256",
+  "suite_id",
+  "suite_verdict",
+  "versions"
+ ],
+ "additionalProperties": false,
+ "properties": {
+  "schema_version": {
+   "const": "1.0.0"
+  },
+  "suite_id": {
+   "const": "G0-0C-COUNTEREXAMPLES"
+  },
+  "run_id": {
+   "type": "string",
+   "minLength": 1
+  },
+  "started_at": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "finished_at": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "artifact_sha256": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{64}$"
+  },
+  "environment": {
+   "type": "object",
+   "required": [
+    "class",
+    "primary_db_unique_name",
+    "standby_db_unique_name",
+    "schema",
+    "object_prefix",
+    "guard_passed"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "class": {
+     "const": "DISPOSABLE_WRITABLE_PRIMARY_ADG"
     },
-    "suite_id": {
-      "const": "G0-0C-COUNTEREXAMPLES"
+    "primary_db_unique_name": {
+     "type": "string",
+     "minLength": 1
     },
-    "run_id": {
+    "standby_db_unique_name": {
+     "type": "string",
+     "minLength": 1
+    },
+    "schema": {
+     "type": "string",
+     "minLength": 1
+    },
+    "object_prefix": {
+     "type": "string",
+     "minLength": 1
+    },
+    "guard_passed": {
+     "const": true
+    },
+    "guard_checks": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "standby_verified": {
+     "type": "boolean",
+     "description": "CE_STANDBY_DSN 으로 standby 신원을 서버에서 확인했는가. false 면 그 이름은 미검증 선언값이다."
+    },
+    "database_role": {
+     "type": "string",
+     "description": "preflight 가 서버에서 읽은 DATABASE_ROLE. PRIMARY 여야 한다."
+    },
+    "instance_name": {
+     "type": "string",
+     "description": "preflight 가 읽은 INSTANCE_NAME."
+    },
+    "session_timezone": {
+     "type": "string",
+     "description": "SESSIONTIMEZONE. DBTIMEZONE 과 다르면 시간 축 비교가 어긋날 수 있다."
+    },
+    "db_timezone": {
+     "type": "string",
+     "description": "DBTIMEZONE."
+    }
+   }
+  },
+  "versions": {
+   "type": "object",
+   "required": [
+    "oracle",
+    "ojdbc",
+    "spark",
+    "runner"
+   ],
+   "properties": {
+    "oracle": {
+     "type": "string",
+     "minLength": 1
+    },
+    "ojdbc": {
+     "type": "string",
+     "minLength": 1
+    },
+    "spark": {
+     "type": "string",
+     "minLength": 1
+    },
+    "runner": {
+     "type": "string",
+     "minLength": 1
+    }
+   }
+  },
+  "scenarios": {
+   "type": "array",
+   "minItems": 1,
+   "items": {
+    "type": "object",
+    "required": [
+     "child_returncode",
+     "cleanup",
+     "finished_at",
+     "fixture",
+     "id",
+     "injection_observed",
+     "observations",
+     "outcome",
+     "started_at"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "id": {
       "type": "string",
-      "minLength": 1
-    },
-    "started_at": {
+      "pattern": "^CE[0-9]{2,3}$",
+      "description": "CE01~CE09 는 현재 required 목록이다. 시나리오 추가는 suite.yaml 의 required_scenarios 로 관리하며 스키마가 개수를 막지 않는다(이전 판의 ^CE0[1-9]$ 는 CE10 이상을 거부해 harness 를 9종으로 고정했다)."
+     },
+     "title": {
+      "type": "string"
+     },
+     "traceability": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "started_at": {
       "type": "string",
       "format": "date-time"
-    },
-    "finished_at": {
+     },
+     "finished_at": {
       "type": "string",
       "format": "date-time"
-    },
-    "artifact_sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
-    },
-    "environment": {
+     },
+     "outcome": {
+      "enum": [
+       "COUNTEREXAMPLE_REPRODUCED",
+       "MITIGATION_HOLDS",
+       "MITIGATION_FAIL",
+       "INJECTION_NOT_OBSERVED",
+       "INCONCLUSIVE"
+      ],
+      "description": "INJECTION_NOT_OBSERVED와 INCONCLUSIVE는 PASS가 아니다."
+     },
+     "injection_observed": {
+      "type": "boolean",
+      "description": "주입이 실제로 일어났다는 **직접 증거**가 있는가. 오류 부재나 로그 문구가 아니라 서버 상태·오류 코드·타임스탬프 같은 관측이어야 한다."
+     },
+     "injection_evidence": {
+      "type": "array",
+      "description": "injection_observed=true 의 근거. runner 는 outcome 이 passing 이려면 이 배열이 **1건 이상이고 각 항목의 kind 가 허용값**일 것을 요구한다(빈 배열이면 강등).",
+      "items": {
+       "type": "object",
+       "required": [
+        "kind",
+        "value"
+       ],
+       "properties": {
+        "kind": {
+         "enum": [
+          "ORA_ERROR",
+          "SERVER_STATE",
+          "TIMING",
+          "ROW_STATE",
+          "LOG_WITH_SERVER_ID"
+         ]
+        },
+        "value": {
+         "type": "string"
+        },
+        "at": {
+         "type": "string",
+         "format": "date-time"
+        }
+       }
+      },
+      "minItems": 0
+     },
+     "fixture": {
       "type": "object",
       "required": [
-        "class",
-        "primary_db_unique_name",
-        "standby_db_unique_name",
-        "schema",
-        "object_prefix",
-        "guard_passed"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "class": {
-          "const": "DISPOSABLE_WRITABLE_PRIMARY_ADG"
-        },
-        "primary_db_unique_name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "standby_db_unique_name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "schema": {
-          "type": "string",
-          "minLength": 1
-        },
-        "object_prefix": {
-          "type": "string",
-          "minLength": 1
-        },
-        "guard_passed": {
-          "const": true
-        },
-        "guard_checks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "standby_verified": {
-          "type": "boolean",
-          "description": "CE_STANDBY_DSN 으로 standby 신원을 서버에서 확인했는가. false 면 그 이름은 미검증 선언값이다."
-        },
-        "database_role": {
-          "type": "string",
-          "description": "preflight 가 서버에서 읽은 DATABASE_ROLE. PRIMARY 여야 한다."
-        },
-        "instance_name": {
-          "type": "string",
-          "description": "preflight 가 읽은 INSTANCE_NAME."
-        },
-        "session_timezone": {
-          "type": "string",
-          "description": "SESSIONTIMEZONE. DBTIMEZONE 과 다르면 시간 축 비교가 어긋날 수 있다."
-        },
-        "db_timezone": {
-          "type": "string",
-          "description": "DBTIMEZONE."
-        }
-      }
-    },
-    "versions": {
-      "type": "object",
-      "required": [
-        "oracle",
-        "ojdbc",
-        "spark",
-        "runner"
+       "objects_created",
+       "rows_written"
       ],
       "properties": {
-        "oracle": {
-          "type": "string",
-          "minLength": 1
-        },
-        "ojdbc": {
-          "type": "string",
-          "minLength": 1
-        },
-        "spark": {
-          "type": "string",
-          "minLength": 1
-        },
-        "runner": {
-          "type": "string",
-          "minLength": 1
+       "objects_created": {
+        "type": "array",
+        "items": {
+         "type": "string"
         }
+       },
+       "rows_written": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "sessions_peak": {
+        "type": "integer",
+        "minimum": 0
+       }
       }
-    },
-    "scenarios": {
+     },
+     "observations": {
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "object",
-        "required": [
-          "id",
-          "outcome",
-          "injection_observed",
-          "started_at",
-          "finished_at",
-          "fixture",
-          "observations",
-          "cleanup"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^CE[0-9]{2,3}$",
-            "description": "CE01~CE09 는 현재 required 목록이다. 시나리오 추가는 suite.yaml 의 required_scenarios 로 관리하며 스키마가 개수를 막지 않는다(이전 판의 ^CE0[1-9]$ 는 CE10 이상을 거부해 harness 를 9종으로 고정했다)."
-          },
-          "title": {
-            "type": "string"
-          },
-          "traceability": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "finished_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "outcome": {
-            "enum": [
-              "COUNTEREXAMPLE_REPRODUCED",
-              "MITIGATION_HOLDS",
-              "MITIGATION_FAIL",
-              "INJECTION_NOT_OBSERVED",
-              "INCONCLUSIVE"
-            ],
-            "description": "INJECTION_NOT_OBSERVED와 INCONCLUSIVE는 PASS가 아니다."
-          },
-          "injection_observed": {
-            "type": "boolean",
-            "description": "주입이 실제로 일어났다는 **직접 증거**가 있는가. 오류 부재나 로그 문구가 아니라 서버 상태·오류 코드·타임스탬프 같은 관측이어야 한다."
-          },
-          "injection_evidence": {
-            "type": "array",
-            "description": "injection_observed=true 의 근거. runner 는 outcome 이 passing 이려면 이 배열이 **1건 이상이고 각 항목의 kind 가 허용값**일 것을 요구한다(빈 배열이면 강등).",
-            "items": {
-              "type": "object",
-              "required": [
-                "kind",
-                "value"
-              ],
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "ORA_ERROR",
-                    "SERVER_STATE",
-                    "TIMING",
-                    "ROW_STATE",
-                    "LOG_WITH_SERVER_ID"
-                  ]
-                },
-                "value": {
-                  "type": "string"
-                },
-                "at": {
-                  "type": "string",
-                  "format": "date-time"
-                }
-              }
-            },
-            "minItems": 0
-          },
-          "fixture": {
-            "type": "object",
-            "required": [
-              "objects_created",
-              "rows_written"
-            ],
-            "properties": {
-              "objects_created": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "rows_written": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "sessions_peak": {
-                "type": "integer",
-                "minimum": 0
-              }
-            }
-          },
-          "observations": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "required": [
-                "name",
-                "value"
-              ],
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "value": {},
-                "expected": {},
-                "matches_expected": {
-                  "type": [
-                    "boolean",
-                    "null"
-                  ]
-                },
-                "note": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "cleanup": {
-            "type": "object",
-            "required": [
-              "attempted",
-              "succeeded",
-              "leftover_objects"
-            ],
-            "properties": {
-              "attempted": {
-                "type": "boolean"
-              },
-              "succeeded": {
-                "type": "boolean"
-              },
-              "leftover_objects": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "leftover_objects가 비어 있지 않으면 suite_verdict는 PASS가 될 수 없다."
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
+       "type": "object",
+       "required": [
+        "name",
+        "value"
+       ],
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "value": {},
+        "expected": {},
+        "matches_expected": {
+         "type": [
+          "boolean",
+          "null"
+         ]
+        },
+        "note": {
+         "type": "string"
         }
-      },
-      "description": "required_scenarios 를 모두 실행했는지는 runner 의 verdict 가 판정한다. 스키마는 하한만 본다."
-    },
-    "suite_verdict": {
+       }
+      }
+     },
+     "cleanup": {
       "type": "object",
       "required": [
-        "pass",
-        "rule",
-        "required_missing",
-        "not_observed",
-        "inconclusive"
+       "attempted",
+       "succeeded",
+       "leftover_objects"
       ],
-      "additionalProperties": false,
       "properties": {
-        "pass": {
-          "type": "boolean"
-        },
-        "rule": {
-          "const": "all_required_executed_and_injection_observed"
-        },
-        "required_missing": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "not_observed": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "inconclusive": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "reason": {
-          "type": "string"
-        },
-        "execution_complete": {
-          "type": "boolean",
-          "description": "하네스가 끝까지 돌았는가. **설계 판정이 아니다.**"
-        },
-        "mitigation_holds": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "완화가 실제로 막은 시나리오"
-        },
-        "counterexample_reproduced": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "반례가 재현된 시나리오 — **설계 결함이다**"
-        },
-        "mitigation_failed": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "완화가 있었으나 막지 못한 시나리오 — **설계 결함이다**"
-        },
-        "design_verdict_note": {
-          "type": "string",
-          "description": "pass 의 의미를 오독하지 않게 하는 문구"
+       "attempted": {
+        "type": "boolean"
+       },
+       "succeeded": {
+        "type": "boolean"
+       },
+       "leftover_objects": {
+        "type": "array",
+        "items": {
+         "type": "string"
         }
-      }
-    },
-    "suite_config_sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$",
-      "description": "suite.yaml 의 digest. artifact_sha256(코드)과 분리해 설정 변경을 추적한다."
+       }
+      },
+      "description": "leftover_objects가 비어 있지 않으면 suite_verdict는 PASS가 될 수 없다."
+     },
+     "error": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "child_returncode": {
+      "type": "integer",
+      "description": "시나리오 child process 의 종료 코드. **runner 가 이것을 읽지 않던 것이 7차 교차 리뷰 P0-02 였다** — 통과 모양의 SCENARIO_RESULT 를 찍은 뒤 exit 1 로 죽어도 suite PASS 후보가 됐다. -1 은 실행하지 않았다는 뜻이다(dry-run·entrypoint 부재)."
+     }
     }
+   },
+   "description": "required_scenarios 를 모두 실행했는지는 runner 의 verdict 가 판정한다. 스키마는 하한만 본다."
+  },
+  "suite_verdict": {
+   "type": "object",
+   "required": [
+    "execution_complete",
+    "inconclusive",
+    "mitigation_holds",
+    "not_observed",
+    "pass",
+    "required_missing",
+    "rule"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "pass": {
+     "type": "boolean"
+    },
+    "rule": {
+     "const": "all_required_executed_and_injection_observed"
+    },
+    "required_missing": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "not_observed": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "inconclusive": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "reason": {
+     "type": "string"
+    },
+    "execution_complete": {
+     "type": "boolean",
+     "description": "하네스가 required 를 다 돌리고 증거를 남겼는가. **설계 판정이 아니다.**"
+    },
+    "mitigation_holds": {
+     "type": "boolean",
+     "description": "그 반례들에 대해 완화가 실제로 버텼는가. COUNTEREXAMPLE_REPRODUCED·MITIGATION_FAIL 가 하나라도 있으면 false 다(7차 리뷰 P2 — pass 하나로 두 가지를 말하던 것을 나눴다)."
+    },
+    "counterexample_reproduced": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "반례가 재현된 시나리오 — **설계 결함이다**"
+    },
+    "mitigation_failed": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "완화가 있었으나 막지 못한 시나리오 — **설계 결함이다**"
+    },
+    "verdict_note": {
+     "type": "string",
+     "description": "execution_complete 와 mitigation_holds 를 섞어 읽지 않게 하는 문구"
+    }
+   }
+  },
+  "suite_config_sha256": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{64}$",
+   "description": "suite.yaml 자체의 sha256. artifact_sha256 은 순환 참조를 피하려고 suite.yaml 을 제외하고 계산하므로(runner.py 주석 참조), 필수 시나리오·budget·pass rule 이 어떤 digest 에도 묶이지 않았다(7차 리뷰 P1-10). code digest 와 config digest 를 **별도로** 기록해 둘 다 증거에 bind 한다."
+  },
+  "env_allowlist_sha256": {
+   "type": "string",
+   "description": "8차 M0-5 — 어떤 외부 승인 목록으로 돌았는지의 digest."
+  },
+  "env_allowlist_attestation": {
+   "type": "object",
+   "description": "9차 조치 7(P0-07) — allowlist 의 자가기재 승인 정보와 **그것이 증명하지 못하는 것**. digest 는 파일 내용만 보이고 승인 주체·소유권·서명은 보이지 않는다. `_limits` 가 그 사실을 증거 안에 남긴다.",
+   "additionalProperties": {
+    "type": "string"
+   }
   }
+ }
 }

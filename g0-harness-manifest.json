@@ -1,0 +1,263 @@
+{
+ "$comment": "**저장소의 모든 파일(미커밋 포함)을 세 갈래로 선언한다**(9차 조치 5 · P1-01). harness 는 측정 결과를 바꾸는 파일이고 harness_digest 에 들어간다. tooling 은 바꾸지 않는 파일(시험·생성기·lint·과거 산출물)이다. excluded_globs 는 문서 등이며 **이유와 함께** 선언한다. `g0-harness-manifest.py` 가 대조해 미선언 파일이 있으면 실패한다 — **새 파일을 만들면 어느 쪽인지 사람이 정해야 한다.** 이전 판은 11개를 하드코딩해서 provider Java source·ServiceLoader 등록·build.sh·child schema·CE 시나리오가 전부 빠져 있었고, 그 파일을 바꿔도 digest 가 그대로였다.",
+ "schema_version": "1.0.0",
+ "digest_algorithm": "sha256 over sorted lines of '<path>\\u0000<sha256(content)>\\n' for harness[], plus a final '__manifest__\\u0000<sha256(this file)>' line",
+ "excluded_globs": [
+  {
+   "glob": "*.md",
+   "why": "문서. 규범·판정서·리뷰는 사람이 읽는 것이며 측정 결과를 바꾸지 않는다. 규범이 바뀌면 그것을 구현한 harness 파일이 함께 바뀌고 digest 는 그때 바뀐다"
+  },
+  {
+   "glob": "versions.lock",
+   "why": "**실행 판본**이며 이미 versions_lock_digest 로 따로 결속된다(M1). 여기 넣으면 같은 사실을 두 번 세게 된다"
+  },
+  {
+   "glob": "g0-harness-manifest.json",
+   "why": "manifest 자신. 경로 목록이 아니라 **내용 digest** 로 계산에 들어간다"
+  }
+ ],
+ "harness": [
+  {
+   "path": "g0-0-evidence.schema.json",
+   "role": "증거 레코드 계약. 위반이면 최종 경로에 쓰지 않는다"
+  },
+  {
+   "path": "g0-0a-capability-inventory.sql",
+   "role": "A — 87 probe 를 내는 SQL. 측정 자체다"
+  },
+  {
+   "path": "g0-0a-preflight.sql",
+   "role": "A 신원 preflight — DUAL 만 읽고 대상이 아니면 멈춘다(9차 조치 6)"
+  },
+  {
+   "path": "g0-0b0-spark-smoke.py",
+   "role": "B0 — Spark JDBC 대조군 + 세션·partition 상한"
+  },
+  {
+   "path": "g0-0b1-connection-provider/analyze-trace.py",
+   "role": "B1 판정기"
+  },
+  {
+   "path": "g0-0b1-connection-provider/build.sh",
+   "role": "provider jar 를 만든다. 무엇이 실리는지가 실행 의미다"
+  },
+  {
+   "path": "g0-0b1-connection-provider/run-g0-0b1.py",
+   "role": "B1 driver — phase 선언·terminal token"
+  },
+  {
+   "path": "g0-0b1-connection-provider/run.sh",
+   "role": "B1 launcher — 회차 이름·주입 설정을 정한다"
+  },
+  {
+   "path": "g0-0b1-connection-provider/src/main/java/etl/g0b1/Preamble.java",
+   "role": "세션 단언과 주입 판정"
+  },
+  {
+   "path": "g0-0b1-connection-provider/src/main/java/etl/g0b1/Trace.java",
+   "role": "phase 파일·추적 파일 규칙"
+  },
+  {
+   "path": "g0-0b1-connection-provider/src/main/java/etl/g0b1/TracingConnectionProvider.java",
+   "role": "SPI 구현체"
+  },
+  {
+   "path": "g0-0b1-connection-provider/src/main/resources/META-INF/services/org.apache.spark.sql.jdbc.JdbcConnectionProvider",
+   "role": "ServiceLoader 등록. 이 파일이 없으면 provider 가 조용히 안 쓰인다"
+  },
+  {
+   "path": "g0-0c-counterexamples/evidence.schema.json",
+   "role": "CE 증거 계약"
+  },
+  {
+   "path": "g0-0c-counterexamples/runner.py",
+   "role": "CE suite 실행기 · 환경 가드"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE01-typed-successor/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE01-typed-successor/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE02-equal-wm-late-commit/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE02-equal-wm-late-commit/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE03-future-outlier-max/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE03-future-outlier-max/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE04-null-empty-bootstrap/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE04-null-empty-bootstrap/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE05-two-wm-independent-seal/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE05-two-wm-independent-seal/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE06-multiconnection-skew/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE06-multiconnection-skew/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE07-rowscn-shard-race/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE07-rowscn-shard-race/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE08-mid-sweep-crash/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE08-mid-sweep-crash/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE09-transient-delete-pk-reuse/run.py",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/CE09-transient-delete-pk-reuse/scenario.yaml",
+   "role": "CE 시나리오 — 무엇을 반례로 세우는가가 판정 의미다"
+  },
+  {
+   "path": "g0-0c-counterexamples/scenarios/_ce.py",
+   "role": "CE 시나리오 공통 코드"
+  },
+  {
+   "path": "g0-0c-counterexamples/suite.yaml",
+   "role": "CE 기대 신원·시나리오 목록"
+  },
+  {
+   "path": "g0-0c-fence-facts.sql",
+   "role": "C00 — fence 사실 SQL"
+  },
+  {
+   "path": "g0-child-schemas/g0-0a-probe-manifest.json",
+   "role": "A 의 87 probe 집합 계약(9차 조치 3)"
+  },
+  {
+   "path": "g0-child-schemas/g0-child-a.schema.json",
+   "role": "A child 산출물 계약"
+  },
+  {
+   "path": "g0-child-schemas/g0-child-b0.schema.json",
+   "role": "B0 child 산출물 계약"
+  },
+  {
+   "path": "g0-child-schemas/g0-child-b1.schema.json",
+   "role": "B1 child 산출물 계약"
+  },
+  {
+   "path": "g0-child-schemas/g0-child-c00.schema.json",
+   "role": "C00 child 산출물 계약"
+  },
+  {
+   "path": "g0-final-contract.json",
+   "role": "최종 G0 항목 집합. not_covered 가 여기서 나온다"
+  },
+  {
+   "path": "g0-normalize.py",
+   "role": "집계기 — 판정의 본체"
+  },
+  {
+   "path": "g0-run-child.sh",
+   "role": "모든 child 를 감싸 manifest 를 만든다"
+  },
+  {
+   "path": "g0-source-envelope.json",
+   "why": "번들된 기본 봉투. $G0_SOURCE_ENVELOPE 로 덮어쓰지 않으면 이 값이 실제 정책이다 — 실행 의미를 바꾸므로 digest 에 들어간다"
+  },
+  {
+   "path": "g0-sqlplus.sh",
+   "role": "sqlplus 호출 경로. 비밀번호를 stdin 으로만 넘긴다"
+  },
+  {
+   "path": "g0_axes.py",
+   "role": "축 파생 · SQLCODE taxonomy · floor"
+  },
+  {
+   "path": "g0_final_gate.py",
+   "role": "최종 게이트 입구. 무엇을 받아들이는지가 실행 의미다"
+  },
+  {
+   "path": "g0_source_envelope.py",
+   "why": "원천 안전 봉투·회차 lease. 이 코드가 어떤 요청을 원천에 붙게 할지 정한다(9차 조치 6)"
+  }
+ ],
+ "tooling": [
+  {
+   "path": ".gitignore",
+   "why": "빌드 산출물 제외 규칙"
+  },
+  {
+   "path": "evidence/g0-0b1-local-s2s3.json",
+   "why": "과거 회차 산출물. 코드가 아니다"
+  },
+  {
+   "path": "g0-0a-probe-manifest.py",
+   "why": "probe 목록 생성기. 그 **산출물**이 harness 에 있다"
+  },
+  {
+   "path": "g0-0b1-connection-provider/g0-b1-wiring-tests.py",
+   "why": "종단 배선 시험"
+  },
+  {
+   "path": "g0-0b1-connection-provider/run-tests.sh",
+   "why": "Java 시험 실행기"
+  },
+  {
+   "path": "g0-0b1-connection-provider/test/etl/g0b1/InjectionMatrix.java",
+   "why": "Java 시험"
+  },
+  {
+   "path": "g0-axes-tests.py",
+   "why": "회귀 시험"
+  },
+  {
+   "path": "g0-b1-analyzer-tests.py",
+   "why": "회귀 시험"
+  },
+  {
+   "path": "g0-harness-manifest.py",
+   "why": "이 manifest 의 검사기·생성기. digest 대상은 manifest 자신이다"
+  },
+  {
+   "path": "g0-m0-safety-tests.py",
+   "why": "회귀 시험"
+  },
+  {
+   "path": "g0-normalize-tests.py",
+   "why": "회귀 시험. 측정 결과를 바꾸지 않는다"
+  },
+  {
+   "path": "g0-runbook-lint.py",
+   "why": "절차서 lint. 문서를 검사할 뿐 측정에 관여하지 않는다"
+  }
+ ]
+}
