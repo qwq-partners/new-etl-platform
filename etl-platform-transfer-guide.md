@@ -28,20 +28,20 @@
 
 ### 2.1 GitHub 에 닿는 경우
 
-저장소는 **private** 이므로 인증이 필요하다. 셋 중 하나.
+저장소는 **public** 이다(2026-08-31 — 사내 반입 편의를 위한 결정). **읽기(clone·pull)에는 인증이 필요 없다.**
 
 ```bash
-# ① SSH (권장 — 계정 단위 권한이라 저장소 목록 제한을 받지 않는다)
-git clone git@github.com:qwq-partners/new-etl-platform.git
-
-# ② HTTPS + fine-grained PAT
-#    주의: 토큰이 이 저장소를 selected repositories 에 포함해야 한다.
-#    포함되지 않으면 403(push) / 404(read) 가 난다 — "저장소 없음"이 아니라 "안 보임"이다.
+# ① HTTPS — 인증 없이 clone 된다. 사내 반입은 대개 이것이면 된다
 git clone https://github.com/qwq-partners/new-etl-platform.git
 
-# ③ gh CLI
+# ② gh CLI
 gh repo clone qwq-partners/new-etl-platform
+
+# ③ SSH — 결과를 push 로 되돌릴 때
+git clone git@github.com:qwq-partners/new-etl-platform.git
 ```
+
+**push 는 여전히 인증이 필요하다.** fine-grained PAT 을 쓰면 토큰이 이 저장소를 selected repositories 에 포함해야 한다 — 포함되지 않으면 403 이 난다.
 
 사내 프록시가 있으면 `git config --global http.proxy` 를 먼저 건다. SSH 는 22번이 막혔을 때 `ssh.github.com:443` 으로 우회할 수 있다.
 
