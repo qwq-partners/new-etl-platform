@@ -20,7 +20,7 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 | PoC 시험·합격 기준서 8차 | 완료(649줄) |
 | Profile U(무권한) 재설계 범위 | 제안 완료 · **규격 동결은 NO-GO** |
 | **8차 Codex 교차 리뷰** | 완료(2026-08-30) — 7차 P0 재판정 **CLOSED 0 / PARTIAL 2 / OPEN 4** |
-| **G0-0 실측** | 원천 미실행. **M0~M4 완료**(2026-08-30). 하네스·계약·문서 쪽 차단은 닫혔고 남은 것은 **M5 — 사내 원천에서 실행하는 것 자체**다 |
+| **G0-0 실측** | 원천 미실행. **9차 리뷰가 M0~M4 를 PARTIAL·OPEN 으로 재판정했다**(2026-08-31, 기각 0건) — 사내 원천 실행 **NO-GO**. 판정서 `etl-platform-v2.0-codex-ninth-review-assessment.md` |
 | G0-0B1 로컬 부분 실측 | partial Maven classpath compile·SPI linkage만 확인. full Spark/Oracle runtime·fail-closed는 미실행 |
 | A v2.0 / P v2.0 | raw G0-0 → 축/composition 확정 후 착수 |
 
@@ -69,7 +69,7 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 
 | 결정 | 이유 |
 |---|---|
-| **`FLASHBACK` 권한 요청 보류 유지** | 승인 판정 후보가 0건이고 28건이 미검증이므로 지금 요청하지 않는다. **근거는 2026-08-30(M4-4)에 정정됐다** — '받아도 순이익이 아니다'가 아니라 **'G0·object 수·DDL·LOB·retention·Spark 전파를 실증하기 전에는 활성화·요청하지 않는다'**. passive grant(딕셔너리 row 1건)와 runtime 활성화(undo·DDL·standby 부하, primary `UNDO_RETENTION` 상향 요구)는 **비용이 다르므로 분리해 센다**. 이전 판이 세지 않은 이득: 같은 `AS OF TIMESTAMP` 리터럴은 connection 에 매이지 않아 **여러 물리 connection 을 같은 anchor 에 묶는다** — 현 코어(`SET TRANSACTION READ ONLY`, connection scope)는 그것을 낼 수 없다. timestamp mapping 은 ±3초가 아니라 **최대 3초 이전**이다 |
+| **`FLASHBACK` 권한 요청 보류 유지** | 승인 판정 후보가 0건이고 28건이 미검증이므로 지금 요청하지 않는다. **근거는 2026-08-30(M4-4)에 정정됐다** — '받아도 순이익이 아니다'가 아니라 **'G0·object 수·DDL·LOB·retention·Spark 전파를 실증하기 전에는 활성화·요청하지 않는다'**. passive grant(primary 에서 `GRANT` 1회 — 일회성 metadata·redo·audit·invalidation 영향이며 **정확한 양은 미측정**)와 runtime 활성화(undo·DDL·standby 부하, primary `UNDO_RETENTION` 상향 요구)는 **비용이 다르므로 분리해 센다**. 이전 판이 세지 않은 이득: 같은 `AS OF TIMESTAMP` 리터럴은 connection 에 매이지 않아 **여러 물리 connection 을 같은 anchor 에 묶는다** — 현 코어(`SET TRANSACTION READ ONLY`, connection scope)는 그것을 낼 수 없다. timestamp mapping 은 ±3초가 아니라 **최대 3초 이전**이다 |
 | **`ZERO_GAP` 계열 24.6% 를 지금 안 자름** | 도달 불가로 보이지만 **아직 측정하지 않았다.** 지우면 되살릴 때 잃는다 |
 | **감축안 중 가장 공격적인 것(58%)을 채택 안 함** | 3명이 독립 심사해 **전원 최하위**를 줬다. `ORA-01555` 분기를 `AS OF SCN` 계열로 묶어 삭제하려 했는데, **`AS OF SCN` 이 사라져도 `ORA-01555` 는 사라지지 않는다** |
 | **overlay 9축 재설계를 미룸** | 지금 확정하면 또 측정 없이 규격을 짜는 것이다 |
@@ -97,7 +97,7 @@ Job 약 10,000 / Run 약 40,000건·일 / 정시 burst 500 / Full 60%·Append 20
 | 증거 계약 | `g0-0-evidence.schema.json` + `g0-normalize.py` |
 | 판본 고정 | `versions.lock` (**`UNSET` 17건 — 채우기 전엔 그 항목 의존 측정이 미확정**) |
 
-**G0-0 산출물 실행 순서**: 사내 원천 승인 후 A → B0 → **B1** → C00 → C01~C09 → `g0-normalize.py`
+**G0-0 산출물 실행 순서**(9차 조치 1~7 전에는 실행 금지): A → B0 → **B1** → C00 → C01~C09 → `g0-normalize.py`
 
 ---
 
@@ -150,14 +150,15 @@ P1-09 child contract는 normalizer 수용 전에 필수라고 구분했다.
 2. ~~**M1 child evidence contract**~~ — 완료(2026-08-30). child schema 4종 · `source_id`/`harness_digest`/start·end · 회차 집합 검사 · run 별 불변 경로
 3. ~~**M2 B1 재작성**~~ — 완료(2026-08-30). explicit `connectionProvider` · 선언된 phase 로 injection 구동(스택 추정과 actuator 분리) · schema/task/metadata 독립 시나리오 · terminal token·business SQL 0·trace completeness
 4. ~~**M3 normalizer**~~ — 완료(2026-08-30). schema 통과 산출물만 집계 · SQLCODE taxonomy + probe별 typed predicate · `effective_value` floor 실동작 · `not_covered` 를 최종 계약과의 차집합으로 · 최종 게이트(`g0_final_gate.py`) 분리 · current 포인터 무효화
-5. ~~**M4 사실·규범 문서 정정**~~ — 완료(2026-08-30). Oracle 사실 3건은 1차 출처로 재확인했다: `AS OF TIMESTAMP` 는 **±3초가 아니라 최대 3초 이전**(방향 있음) · `ORA-08181` 은 SCN 이 유효 범위 밖일 때이고 timestamp 매핑 실패는 **`ORA-08180`** · flashback query 권한은 `READ|SELECT ∧ (object FLASHBACK | FLASHBACK ANY TABLE)`. 그리고 grant 보류의 근거를 '순이익 부재'에서 '실증 전 미활성화'로 낮추고 **passive grant 와 runtime 활성화를 분리**했다. Spark provider 는 전역 비활성화가 아니라 `connectionProvider` 옵션이 주 수단이다. overlay 의 자기모순 4건과 §10 문서 상태 오류 6건도 함께 닫았다
-6. **M5 — pinned 사내 환경에서 raw G0-0 수집** ← **지금 여기**. C00은 scan 승인, C01~09는 외부 allowlist 폐기 환경만
-7. 측정 분포로 capability 축/composition을 확정하고 **A v2.0 / P v2.0** 착수
+5. ~~**M4 사실·규범 문서 정정**~~ — 코드까지 갔으나 **9차에서 PARTIAL 로 재판정**. Oracle·Spark 사실 정정 7건은 전부 맞다고 확인됐고, 과대 문구("딕셔너리 row 1건" 등)와 stale runbook 이 남았다
+6. **9차 조치 1~11** ← **지금 여기**. 판정서 §7 이 권위다. 중심은 개별 결함이 아니라 **시험의 경계를 producer 뒤로 미는 것** — 조치 1(실물 `run.sh` 통합 시험)과 조치 2(runbook dry-run 시험)가 그 성질을 만든다
+7. 그 뒤 **M5a→M5b→M5c→M5d→M5e** 순으로 단계별 해제(9차 리뷰 §7). "사내 원천 실행" 을 한 단계로 두지 않는다
+8. 측정 분포로 capability 축/composition을 확정하고 **A v2.0 / P v2.0** 착수
 
-**회귀 시험 397건**(normalize 147 · axes 127 · b1-analyzer 43 · m0-safety 51 · Java 29).
-synthetic negative suite 는 incomplete·mixed·stale·relabel·unbound 를 전부 fail-closed 로
-막는다 — 다만 **그것은 하네스가 옳게 거부한다는 뜻이지 원천을 쟀다는 뜻이 아니다.**
-
+> **9차의 한 줄.** 8차는 *"고쳤다고 쓰기 전에 실행했는가"* 를 물었고, 9차는 **그 질문을 시험에도
+> 해야 한다**고 답했다. 회귀 397건은 재현되지만 그중 B1 관련 72건은 실물 producer 를 건너뛴다 —
+> `InjectionMatrix` 는 `shouldFail()` 을 순수 함수로 시험하고, analyzer 시험은 producer 가 만들지
+> **않는** 토큰을 합성해 넣는다. 그래서 `PROVEN` 이 도달 불가능한 채로 둘 다 통과했다.
 ---
 
 ## 9. LLM 에게

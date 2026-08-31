@@ -18,7 +18,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 목표 아키텍처 v1 → v1.2.4 | **완료**(다섯 차례 교차 리뷰 + UI 도출 개정 요청 13건 반영) |
 | **제약 변경**(2026-08-24, 표현 통일 2026-08-27) | **정합성을 DBA 협조에 걸 수 없다.** 비critical 권한 요청은 가능하나 **현재 보류이며 절대 가정하지 않는다.** v1.2.3.1이 전제하던 DBA 의존이 무효화됨 |
 | Profile U(무권한) 재설계 범위 제안 | 작성 완료 · 6차 교차 리뷰 완료 · **v2.0 규격 동결은 NO-GO** |
-| **G0-0 실측** | **사내 원천에 대해서는, 그리고 full G0-0 sequence 로는 한 번도 실행되지 않았다.** 돈 것은 Oracle 없는 회차의 S1~S3(하네스 빌드·SPI 배선)뿐이다 — 그 회차도 **실행이긴 했다**(§10-6 한정: '한 번도 미실행'은 원천·full sequence 에 대한 말이고, 하네스 빌드·SPI 배선 기록까지 부정하는 말이 아니다). M0~M4 는 닫혔고 남은 것은 **M5(사내 원천 실행)** 다 |
+| **G0-0 실측** | **사내 원천에 대해서는, 그리고 full G0-0 sequence 로는 한 번도 실행되지 않았다.** 돈 것은 Oracle 없는 회차의 S1~S3(하네스 빌드·SPI 배선)뿐이다. **9차 리뷰가 M0~M4 를 PARTIAL·OPEN 으로 재판정했다**(2026-08-31) — 사내 원천 실행은 **NO-GO** 이며 M5 는 M5a~M5e 로 쪼갠다 |
 | 감축 1차 | **완료**(2026-08-27) — 변경 이력 분리로 −16.2%. 나머지는 G0-0 이후 |
 | DBA 권한 요청 방향 | **보류 유지** — 승인 판정 후보 0건·28건 미검증. **근거는 정정됐다**(2026-08-30, M4-4): '받아도 순이익이 아니다'가 아니라 **'G0·object 수·DDL·LOB·retention·Spark 전파를 실증하기 전에는 활성화·요청하지 않는다'**. 이전 판이 세지 않은 이득이 하나 있다 — 같은 timestamp 리터럴에 의한 cross-connection 공통 anchor |
 | 로컬 G0-0 실행 계획 | 작성 완료(2026-08-27) — S0~S8. **S2(B1 컴파일)가 최속 신호** |
@@ -26,12 +26,13 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | **B1 부분 검증**(2026-08-28) | **다른 회차다.** partial Maven classpath 에서 compile·SPI linkage 만 확인했다(spark-submit 없음). **이 회차에 한해** full distribution runtime 미실행이며, 앞 행의 2026-08-27 회차를 무효화하지 않는다 — 두 줄이 서로를 부정하는 것처럼 읽히던 것이 8차 §10-2 였다 |
 | **7차 교차 리뷰 판정·조치** | 판정 `…-seventh-review-assessment.md`(기각 0건) · 조치 `…-seventh-review-fixes.md`. 회귀 시험 **204건**. **8차 재검증 결과 P0 6건은 CLOSED 0 / PARTIAL 2 / OPEN 4** |
 | **8차 교차 리뷰**(2026-08-30) | 완료 — 현 normalizer 결과 수용·B1 `PROVEN`·G0 PASS·v2.0 동결은 **NO-GO** |
-| **8차 M0(실행 안전성)** | **완료**(2026-08-30) — 6건 처리, 회귀 41건 신설(`g0-m0-safety-tests.py`). 상세는 §3 |
-| **8차 M1(child 증거 계약)** | **완료**(2026-08-30) — 4건 처리. 회귀 283건 |
-| **8차 M2(B1 재작성)** | **완료**(2026-08-30) — 5건 처리. 회귀 289건 |
-| **8차 M3(normalizer)** | **완료**(2026-08-30) — 5건 처리. 회귀 397건. 상세는 §3 |
-| **8차 M4(사실·규범 문서 정정)** | **완료**(2026-08-30) — 5건 + §10 문서 상태 오류 6건. Oracle 사실 3건은 1차 출처로 재확인 |
-| 8차 M5(그 뒤 G0-0) | 남음 ← **지금 여기**. 사내 원천 실행 |
+| 8차 M0(실행 안전성) | ~~완료~~ → **9차 재판정 PARTIAL**. 원천 전체 세션 budget·시간/IO 상한·A SQL identity fail-fast 가 없다 |
+| 8차 M1(child 증거 계약) | ~~완료~~ → **9차 재판정 OPEN**. manifest `source_id` 를 서버가 밝힌 `DB_UNIQUE_NAME` 과 대조하지 않고, A probe 집합을 검증하지 않는다 |
+| 8차 M2(B1 재작성) | ~~완료~~ → **9차 재판정 OPEN**. run 식별자가 세 이름으로 갈려 **실물 launcher 에서 `PROVEN` 이 도달 불가능**하다 |
+| 8차 M3(normalizer) | ~~완료~~ → **9차 재판정 PARTIAL**. taxonomy·floor 방향은 GO, 입력 결속과 기본 TTL·final gate 가 fail-open |
+| 8차 M4(사실·규범 문서 정정) | ~~완료~~ → **9차 재판정 PARTIAL**. Oracle·Spark 사실 정정 7건은 전부 맞다고 확인됐고, 과대 문구와 stale runbook 이 남았다 |
+| **9차 교차 리뷰**(2026-08-31) | 완료 — **M5 NO-GO**. 판정서 `etl-platform-v2.0-codex-ninth-review-assessment.md`(기각 0건, P0 7 · P1 7 전부 확정) |
+| 9차 조치 1~11 | 진행 중 ← **지금 여기**. 중심은 **시험의 경계를 producer 뒤로 미는 것** |
 | A v2.0 / P v2.0 규범 개정 | raw G0-0 수집 → 축/composition 확정 후 착수 |
 
 **핵심 원칙**: 실측 전 규범 문서를 대규모로 고치지는 않는다. 다만 **실측을 신뢰할 수 있게 만드는 실행 안전성과 증거 결속은 실측보다 먼저 고친다.**
@@ -77,7 +78,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 파일 | 설명 |
 |---|---|
 | **`etl-platform-v2.0-unprivileged-redesign-scope.md`** | DBA 없는 세계의 재설계 범위 제안. 죽는 것 / 살아남는 무권한 수단 / 보증 축 재정의 / 결정 4건 |
-| **`etl-platform-v2.0-capability-overlay.md`** | 이기종 원천 대응. 코어는 권한 0·최저 버전에서 성립하고 capability 는 원천별 측정 오버레이로 붙는다. **§3 의 7축 표는 폐기** — 권위는 부록 A 와 `g0_axes.py` 다 |
+| **`etl-platform-v2.0-capability-overlay.md`** | 이기종 원천 대응. 코어는 권한 0·최저 버전에서 성립하고 capability 는 원천별 측정 오버레이로 붙는다. **§3 의 축 표(9행)는 폐기** — 권위는 부록 A 의 **13축**과 `g0_axes.py` 다 |
 | **`etl-platform-v2.0-simplification-decision.md`** | 감축 결정 기록. 무엇을 잘랐고 **무엇을 왜 안 잘랐는지** |
 | **`etl-platform-v2.0-grant-request-verdict.md`** | DBA 권한 요청 방향 — **보류 유지**. 8차 리뷰에서 일부 사실·실체 판정 재검토 요구 |
 | `etl-platform-v2.0-grant-request-candidates.md` | 후보 37건 working reconstruction. 9건 검토·28건 미검증이며 journal/source 결속은 미완료 |
@@ -193,22 +194,27 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 
 ## 5. 다음 작업
 
-**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). **8차 교차 리뷰의 M0~M4 도 끝났다**(2026-08-30).
-남은 것은 M5 — **사내 원천에서 실제로 돌리는 것**이며, 그 앞을 막던 것들은 닫혔다.
+**S1~S3 은 끝났다**(`g0-0-s1-s3-results.md`). 8차 M0~M4 도 코드까지 갔다.
+**그러나 9차 교차 리뷰가 그 넷을 PARTIAL·OPEN 으로 재판정했다**(2026-08-31, 기각 0건).
+사내 원천 실행은 **NO-GO** 다.
 
-- ~~**M0 실행 안전성**~~ — wrapper `pipefail`/producer exit, B0 `sys.exit(main())`,
-  partition/session cap, 대상 접촉 전 identity hard preflight, CE 외부 allowlist
-- ~~**M1 child evidence contract**~~ — child schema 4종, `source_id`·`harness_digest`·
-  start/end, 회차 집합 검사, run 별 불변 경로
-- ~~**M2 B1 재설계**~~ — explicit `connectionProvider`, schema/task/metadata 독립 시나리오,
-  **주입을 스택 추정에서 분리**, terminal token·business SQL 0·trace 완결성
-- ~~**M3 normalizer**~~ — schema 통과 산출물만 집계, SQLCODE taxonomy + probe별 typed
-  predicate, `effective_value` floor 실동작, 최종 계약과의 차집합, current 포인터 무효화
-- ~~**M4 사실·규범 문서 정정**~~ — Oracle 사실 3건 1차 출처 재확인, grant 보류 근거 하향,
-  Spark provider 선택 수단, overlay 자기모순 4건, §10 문서 상태 오류 6건
-- synthetic negative suite 는 incomplete·mixed·stale·relabel·unbound 를 전부 fail-closed 로
-  막는다(회귀 397건). **그것은 하네스가 옳게 거부한다는 뜻이지 원천을 쟀다는 뜻이 아니다**
+> **핵심은 "397건이 적다"가 아니다.** 397건이 잘 검증하는 경계와 M5 가 요구하는 경계가 다르다 —
+> **시험이 실물 producer 앞에서 끝난다.** 판정기를 시험하는 것과 그 판정기가 받을 입력을
+> 만드는 쪽을 시험하는 것은 다르다. 대표 사례가 B1 이다: Java 29건은 `shouldFail()` 을 순수
+> 함수로 시험하고 analyzer 43건은 producer 가 만들지 **않는** 토큰을 합성해 넣는다. 둘 다
+> 통과하는데 그 사이 배선은 아무도 안 본다 — 그래서 `PROVEN` 이 도달 불가능한 채로 남았다.
 
-1. **Oracle 이 붙는 환경 확보** ← **지금 여기**. S4~S8 이 전부 여기에 걸려 있다
-2. pinned 사내 환경에서 raw G0-0 수집 → capability composition 확정 →
-   **A v2.0 / P v2.0**(단일 core + ConnectionRevision capability overlay, v1.2.3.1은 archive)
+판정서: `etl-platform-v2.0-codex-ninth-review-assessment.md`. 조치 순서는 그 §7 이 권위다.
+
+1. **B1 run identity 통일 + 실물 `run.sh` 통합 시험** ← **지금 여기**
+2. **runbook 정정 + clean shell dry-run 시험**
+3. A 87-ID exact manifest 검증
+4. profile attestation + 서버 신원 결속
+5. harness manifest 를 versioned 선언으로
+6. source safety envelope · identity fail-fast
+7. corporate / CE evidence scope 분리
+8~11. TTL 기본값 · final gate hard-disable · trace 완결성 · stale 문구 동기화
+
+그 뒤 M5 는 하나가 아니라 **M5a(도구 사전검증) → M5b(DUAL·dictionary only) → M5c(제한적 target
+touch) → M5d(Spark B0/B1) → M5e(CE, 폐기 환경 전용)** 로 나눠 연다. 9차 리뷰 §7 이 각 단계의
+해제 조건을 준다.

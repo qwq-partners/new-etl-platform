@@ -13,7 +13,9 @@
 > | `ORA-08181` | "같은 SCN 재사용이 이 오류의 표적" | **아니다.** 08181 은 SCN 이 유효 범위 **밖**일 때다. timestamp 매핑 실패는 **ORA-08180** 이고, 오래된 image 소실은 **ORA-01555** 다(§3-2) |
 > | 빠져 있던 것 | — | **공통 anchor 의 가치.** 같은 timestamp 리터럴을 모든 partition 쿼리에 bind 하면 여러 connection 이 같은 flashback anchor 에 묶인다. 현 코어는 그것을 낼 수 없다(§3-0) |
 >
-> **passive grant 와 runtime 활성화를 분리한다.** object grant 자체는 딕셔너리 row 하나이고, undo·DDL·standby 부하는 그 overlay 를 **실제로 쓸 때** 생긴다. 이전 판은 둘을 한 덩어리로 계산해 "권한 = 부하"로 읽었다.
+> **passive grant 와 runtime 활성화를 분리한다.** object grant 자체는 primary 에서의 1회성 변경이고, undo·DDL·standby 부하는 그 overlay 를 **실제로 쓸 때** 생긴다. 이전 판은 둘을 한 덩어리로 계산해 "권한 = 부하"로 읽었다.
+>
+> **2026-08-31(9차 §5.2) 재정정** — 위 문장을 "딕셔너리 row 하나"라고 썼던 것은 **측정하지 않은 수치**다. `GRANT` 1회가 만드는 것은 metadata 변경 + redo + audit row 이고, 의존 객체 invalidation 도 따라올 수 있다. **일회성인 것은 맞지만 양은 모른다** — 그것이 "작다"는 주장의 근거가 되지 못한다.
 
 ---
 
@@ -145,7 +147,7 @@ the bounds of a valid SCN"; [ORA-08180](https://docs.oracle.com/en/error-help/db
 
 | | passive(권한을 받아 두기만) | runtime(overlay 를 실제로 쓰기) |
 |---|---|---|
-| 무엇이 생기나 | primary 에서 `GRANT` 1회 — 딕셔너리 row + redo | undo 요구량 증가, DDL 조우, standby 읽기 부하 |
+| 무엇이 생기나 | primary 에서 `GRANT` 1회 — metadata 변경 + redo + audit, 의존 객체 invalidation 가능. **일회성이나 양은 미측정**(9차 §5.2) | undo 요구량 증가, DDL 조우, standby 읽기 부하 |
 | 되돌리기 | `REVOKE` | 그 회차를 되돌릴 수 없다 |
 | 생산 primary 영향 | 1회성 | **`UNDO_RETENTION` 상향 요구가 여기서 나온다** |
 
