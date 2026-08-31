@@ -71,8 +71,10 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 6차 | `etl-platform-v2.0-codex-review-assessment-recheck.md`(재검증) | — |
 | 7차 | `etl-platform-v2.0-codex-seventh-cross-review.md` | `etl-platform-v2.0-codex-seventh-review-assessment.md` — **P0 6 / P1 12 / P2 5 재판정. 기각 0건.** 조치 내역은 `…-seventh-review-fixes.md`. **8차에서 종결 여부 재기각** |
 | **8차** | **`etl-platform-v2.0-codex-eighth-cross-review.md`** | 후속 검토서 대기 — **CLOSED 0 / PARTIAL 2 / OPEN 4** |
+| **9차** | **`etl-platform-v2.0-codex-ninth-cross-review.md`** | `etl-platform-v2.0-codex-ninth-review-assessment.md` — **기각 0건. P0 7 / P1 7 전부 확정.** §7 이 조치 1~11 의 권위이고 §8 이 재리뷰 합격 기준 13건이다. **M5 NO-GO** |
+| **10차** | 요청 중 — `codex-cross-review-prompt-10th.md` | 대기. 실질 질문은 **M5a 를 열어도 되는가** |
 
-리뷰 요청서: `codex-cross-review-prompt.md`(1차) · `codex-cross-review-prompt-v2.0.md`(v2.0) · `codex-cross-review-prompt-8th.md`(8차)
+리뷰 요청서: `codex-cross-review-prompt.md`(1차) · `codex-cross-review-prompt-v2.0.md`(v2.0) · `codex-cross-review-prompt-8th.md`(8차) · `codex-cross-review-prompt-9th.md`(9차) · **`codex-cross-review-prompt-10th.md`(10차)**
 
 ### 2.4 Profile U 재설계
 
