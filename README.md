@@ -31,7 +31,7 @@ Dagster OSS + 얇은 Java Control Plane(PostgreSQL) 기반 신규 ETL 플랫폼�
 | 8차 M2(B1 재작성) | ~~완료~~ → **9차 재판정 OPEN**. run 식별자가 세 이름으로 갈려 **실물 launcher 에서 `PROVEN` 이 도달 불가능**하다 |
 | 8차 M3(normalizer) | ~~완료~~ → **9차 재판정 PARTIAL**. taxonomy·floor 방향은 GO, 입력 결속과 기본 TTL·final gate 가 fail-open |
 | 8차 M4(사실·규범 문서 정정) | ~~완료~~ → **9차 재판정 PARTIAL**. Oracle·Spark 사실 정정 7건은 전부 맞다고 확인됐고, 과대 문구와 stale runbook 이 남았다. **잔여는 9차 조치 11 에서 처리**(2026-08-31) — 등급 재판정은 10차의 몫 |
-| **9차 조치 1~11** | **완료**(2026-08-31). 회귀 397 → **571건**(Python 542 + Java 29). 다음은 M5a~M5e 단계별 해제이며, **조치를 다 했다는 것이 M5 GO 를 뜻하지 않는다** |
+| **9차 조치 1~11** | **완료**(2026-08-31). 회귀 397 → **576건**(Python 547 + Java 29). 다음은 M5a~M5e 단계별 해제이며, **조치를 다 했다는 것이 M5 GO 를 뜻하지 않는다** |
 | **9차 교차 리뷰**(2026-08-31) | 완료 — **M5 NO-GO**. 판정서 `etl-platform-v2.0-codex-ninth-review-assessment.md`(기각 0건, P0 7 · P1 7 전부 확정) |
 | 9차 조치 1~11 | 진행 중 ← **지금 여기**. 중심은 **시험의 경계를 producer 뒤로 미는 것** |
 | A v2.0 / P v2.0 규범 개정 | raw G0-0 수집 → 축/composition 확정 후 착수 |

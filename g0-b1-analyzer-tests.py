@@ -96,7 +96,20 @@ def fc_runs_ok():
              terminal("failclosed_task", "EXPECTED_FAILURE_OBSERVED")])
 
 
-def run_analyzer_streams(streams: dict, results, terminals=()):
+def _realistic_counts(recs):
+    """sentinel 의 `lines_written` 을 그 파일이 실제로 담은 줄 수로 맞춘다.
+
+    **픽스처가 현실과 다르면 아무것도 시험하지 않는다**(9차가 M1 에서 지적한 것).
+    기존 픽스처는 `trace_end(lines=1)` 을 그대로 쓰면서 레코드는 여러 건 넣었다 —
+    tracer 가 실제로 낼 수 없는 조합이다. 일부러 어긋나게 주는 시험만
+    `fix_counts=False` 로 빠진다.
+    """
+    body = [r for r in recs if r.get("event") != "trace_end"]
+    return [dict(r, lines_written=len(body)) if r.get("event") == "trace_end" else r
+            for r in recs]
+
+
+def run_analyzer_streams(streams: dict, results, terminals=(), fix_counts=True):
     """**stream(=파일) 여러 개**를 쓴다 (9차 조치 10 / P1-02).
 
     `streams` 는 `{파일접미사: [추적 레코드…]}` 다. 파일이 곧 JVM 이므로, driver 와
@@ -106,6 +119,8 @@ def run_analyzer_streams(streams: dict, results, terminals=()):
     w = pathlib.Path(tempfile.mkdtemp(prefix="g0b1an-"))
     td = w / "trace"; td.mkdir()
     for suffix, recs in streams.items():
+        if fix_counts:
+            recs = _realistic_counts(recs)
         (td / f"g0-0b1-trace-t-{suffix}.jsonl").write_text(
             "\n".join(json.dumps(t, ensure_ascii=False) for t in recs) + "\n",
             encoding="utf-8")
@@ -126,7 +141,8 @@ def run_analyzer(traces, results, terminals=()):
     w = pathlib.Path(tempfile.mkdtemp(prefix="g0b1an-"))
     td = w / "trace"; td.mkdir()
     (td / "g0-0b1-trace-t-1@t.jsonl").write_text(
-        "\n".join(json.dumps(t, ensure_ascii=False) for t in traces) + "\n", encoding="utf-8")
+        "\n".join(json.dumps(t, ensure_ascii=False) for t in _realistic_counts(traces)) + "\n",
+        encoding="utf-8")
     log = w / "run.log"
     lines = ["G0B1_RESULT " + json.dumps(r, ensure_ascii=False) for r in results]
     lines += ["G0B1_TERMINAL " + json.dumps(t, ensure_ascii=False) for t in terminals]
@@ -386,7 +402,7 @@ def t_a9_lost_lines_detected():
     streams, terms = _two_stream_run(executor_end=True, exec_lines_written=99)
     rc, ev = run_analyzer_streams(streams, [result("coverage", "OK"),
                                             result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])],
-                                  terms)
+                                  terms, fix_counts=False)
     check("trace_complete=false", ev.get("trace_complete") is False, str(ev.get("trace_complete")))
     check("exit 5", rc == 5, f"rc={rc}")
     rows = {r["file"]: r for r in ev["trace_streams"]}
@@ -394,6 +410,23 @@ def t_a9_lost_lines_detected():
     check("sentinel 은 있었다", ex["trace_end_records"] == 1, str(ex))
     check("모자란 줄 수를 센다", ex["lost_lines"] == 99 + 1 - ex["lines"], str(ex))
     check("사유가 줄 부족이다", "모자란다" in (ex["why"] or ""), str(ex["why"]))
+
+
+def t_a9_extra_lines_detected():
+    print("\n[15] 조치 10 — 이 회차가 쓰지 않은 줄이 섞여도 측정 실패다")
+    # `Trace.file()` 은 CREATE·APPEND 로 연다. 같은 (run, jvm) 이름의 파일이 남아 있으면
+    # 이어 쓴다 — 추적 디렉터리 재사용·JVM 이름 충돌·이전 회차 잔존이 그 경로다.
+    # 첫 판은 '모자란' 쪽만 봤고 이 형태를 complete 로 통과시켰다.
+    streams, terms = _two_stream_run(executor_end=True, exec_lines_written=0)
+    rc, ev = run_analyzer_streams(streams, [result("coverage", "OK"),
+                                            result("failclosed", "EXPECTED_FAILURE_OBSERVED", [])],
+                                  terms, fix_counts=False)
+    check("trace_complete=false", ev.get("trace_complete") is False, str(ev.get("trace_complete")))
+    check("exit 5", rc == 5, f"rc={rc}")
+    ex = {r["file"]: r for r in ev["trace_streams"]}["g0-0b1-trace-t-2@exec.jsonl"]
+    check("sentinel 은 있었다", ex["trace_end_records"] == 1, str(ex))
+    check("사유가 줄 초과다", "많다" in (ex["why"] or ""), str(ex["why"]))
+    check("섞였다는 것을 말한다", "섞였다" in (ex["why"] or ""), str(ex["why"]))
 
 
 def main() -> int:
@@ -407,7 +440,7 @@ def main() -> int:
               t_measurement_failed, t_swallowed_path_still_no,
               # 9차 조치 10
               t_a9_one_stream_missing_sentinel, t_a9_all_streams_complete_positive,
-              t_a9_lost_lines_detected):
+              t_a9_lost_lines_detected, t_a9_extra_lines_detected):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

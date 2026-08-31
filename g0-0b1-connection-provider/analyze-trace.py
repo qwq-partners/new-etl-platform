@@ -46,9 +46,17 @@ def stream_status(streams: dict) -> list[dict]:
 
     sentinel 이 있는 것만으로는 부족하다. `trace_end.lines_written` 은 tracer 가
     `line()` 으로 **센** 줄 수이고 sentinel 자신은 세지 않으므로, 온전한 파일이면
-    물리 줄 수가 정확히 `lines_written + 1` 이다. 모자라면 센 줄 중 일부가 파일에
-    닿지 않은 것이다(write 실패는 삼켜진다 — `rawLine` 의 catch). 그것은 구멍이며,
-    구멍 뚫린 추적으로 '없었다' 를 말할 수 없다.
+    물리 줄 수가 정확히 `lines_written + 1` 이다. **양쪽 다 본다.**
+
+    - 모자라면 센 줄 중 일부가 파일에 닿지 않은 것이다(write 실패는 삼켜진다 —
+      `rawLine` 의 catch). 구멍 뚫린 추적으로 '없었다' 를 말할 수 없다.
+    - 많으면 이 회차 tracer 가 쓰지 않은 줄이 섞인 것이다. `Trace.file()` 은
+      `CREATE, APPEND` 로 열므로 같은 `(run, jvm)` 이름의 파일이 남아 있으면 이어
+      쓴다 — 추적 디렉터리 재사용·JVM 이름 충돌·이전 회차 잔존이 그 경로다.
+      다른 회차의 레코드를 이 회차의 관측으로 세면 그것도 거짓이다.
+
+    한쪽만 막으면 반쪽이다. 첫 판은 '모자란' 쪽만 봤고, 물리 6줄에
+    `lines_written = 1` 인 파일이 complete 로 통과했다.
     """
     out = []
     for name, st in sorted(streams.items()):
@@ -72,6 +80,11 @@ def stream_status(streams: dict) -> list[dict]:
                 if st["lines"] < lw + 1:
                     row["why"] = (f"줄이 {row['lost_lines']}건 모자란다 — tracer 는 {lw}건을 "
                                   f"썼다고 세는데 파일에는 {st['lines']}건뿐이다")
+                elif st["lines"] > lw + 1:
+                    row["why"] = (f"줄이 {-row['lost_lines']}건 많다 — tracer 는 {lw}건을 썼다고 "
+                                  f"세는데 파일에는 {st['lines']}건이다. 이 회차가 쓰지 않은 "
+                                  f"줄이 섞였다(추적 디렉터리 재사용·JVM 이름 충돌·이전 회차 "
+                                  f"잔존). 다른 회차의 레코드를 이 회차의 관측으로 셀 수 없다")
                 elif st["unparsable"]:
                     row["why"] = f"JSON 이 아닌 줄이 {st['unparsable']}건이다"
                 else:

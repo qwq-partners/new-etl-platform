@@ -151,7 +151,7 @@ P1-09 child contract는 normalizer 수용 전에 필수라고 구분했다.
 3. ~~**M2 B1 재작성**~~ — 완료(2026-08-30). explicit `connectionProvider` · 선언된 phase 로 injection 구동(스택 추정과 actuator 분리) · schema/task/metadata 독립 시나리오 · terminal token·business SQL 0·trace completeness
 4. ~~**M3 normalizer**~~ — 완료(2026-08-30). schema 통과 산출물만 집계 · SQLCODE taxonomy + probe별 typed predicate · `effective_value` floor 실동작 · `not_covered` 를 최종 계약과의 차집합으로 · 최종 게이트(`g0_final_gate.py`) 분리 · current 포인터 무효화
 5. ~~**M4 사실·규범 문서 정정**~~ — 코드까지 갔으나 **9차에서 PARTIAL 로 재판정**. Oracle·Spark 사실 정정 7건은 전부 맞다고 확인됐고, 과대 문구("딕셔너리 row 1건" 등)와 stale runbook 이 남았다. **그 잔여는 조치 11 에서 처리했다(2026-08-31)** — 다만 M4 의 등급 재판정은 10차의 몫이지 우리가 스스로 CLOSED 로 올릴 것이 아니다
-6. ~~**9차 조치 1~11**~~ — 완료(2026-08-31). 판정서 §7 이 권위였다. 중심은 개별 결함이 아니라 **시험의 경계를 producer 뒤로 미는 것**이었고, 조치 1(실물 `run.sh` 통합 시험)과 조치 2(runbook dry-run 시험)가 그 성질을 만들었다. 회귀는 397건 → **571건**(Python 542 + Java 29)
+6. ~~**9차 조치 1~11**~~ — 완료(2026-08-31). 판정서 §7 이 권위였다. 중심은 개별 결함이 아니라 **시험의 경계를 producer 뒤로 미는 것**이었고, 조치 1(실물 `run.sh` 통합 시험)과 조치 2(runbook dry-run 시험)가 그 성질을 만들었다. 회귀는 397건 → **576건**(Python 547 + Java 29)
 7. **M5a→M5b→M5c→M5d→M5e 순으로 단계별 해제**(9차 리뷰 §7) ← **지금 여기**. "사내 원천 실행" 을 한 단계로 두지 않는다. **조치 1~11 을 다 했다는 것이 M5 GO 를 뜻하지 않는다** — 9차는 M5 를 NO-GO 로 판정했고 그 판정을 뒤집는 것은 10차 리뷰다
 8. 측정 분포로 capability 축/composition을 확정하고 **A v2.0 / P v2.0** 착수
 
