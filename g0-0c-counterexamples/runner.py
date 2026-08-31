@@ -170,16 +170,42 @@ def preflight(suite: dict) -> dict:
 
 
 # ── 1. 환경 가드 ─────────────────────────────────────────────────────
-def load_external_allowlist(root: Path) -> tuple[list[str], str]:
-    """**패키지 밖**의 allowlist 를 읽는다 (8차 M0-5).
+#: allowlist 가 **증명하지 못하는 것**. 증거에 그대로 실어 보낸다(9차 조치 7 · P0-07).
+ALLOWLIST_LIMITS = (
+    "이 allowlist 는 **'승인 목록이 패키지 밖에 있다'와 '그 파일의 내용이 이것이었다'**만 "
+    "보인다. 다음은 보이지 않는다 — (1) 그 파일을 **누가** 두었는지(파일시스템 권한은 "
+    "runner 가 확인하지 않는다), (2) 아래 attestation 에 적힌 승인자가 **실제로 승인했는지** "
+    "(서명이 아니라 자가기재다), (3) 그 DB 가 **정말 폐기용인지**. 마지막은 어떤 코드도 "
+    "확인할 수 없다 — 조직 절차만 할 수 있다."
+)
+
+#: attestation 에 반드시 있어야 하는 키. 없으면 실행하지 않는다.
+ATTEST_REQUIRED = ("approved_by", "approved_at", "contact", "environment_is")
+
+
+def load_external_allowlist(root: Path) -> tuple[list[str], str, dict]:
+    """**패키지 밖**의 allowlist 를 읽는다 (8차 M0-5 · 9차 조치 7).
 
     왜 밖이어야 하는가 — v1 은 `environment_guard.expected_*` 를 `suite.yaml` 에서만
     읽었다. suite.yaml 은 이 패키지 안에 있으므로, **그 파일을 고치면 어떤 DB 든
     파괴적 시나리오의 대상이 될 수 있다.** `suite_config_sha256` 은 그 변경을
     기록할 뿐 막지 못한다. 이 하네스는 쓰기·DDL 을 하므로 그 차이가 사고의 크기다.
 
-    형식: 한 줄에 하나씩 `db_unique_name`. `#` 주석과 빈 줄은 무시한다.
+    **9차 P0-07 이 지적한 한계.** 파일이 밖에 있다는 것은 *위치*를 보일 뿐 **승인 주체·
+    소유권·서명을 보이지 않는다.** 서명 체계를 이 저장소가 만들 수는 없다. 대신 두 가지를
+    한다 — 승인자를 **적게 강제**하고(빈 파일에 이름 하나 없이 승인이 성립하지 않게),
+    그것이 서명이 아니라 자가기재라는 사실을 `ALLOWLIST_LIMITS` 로 증거에 같이 남긴다.
+    **할 수 없는 것을 한 척하지 않는 것**이 여기서 할 수 있는 전부다.
+
+    형식
+        `#@ key: value`   attestation. `approved_by`·`approved_at`·`contact`·
+                          `environment_is` 넷은 **필수**다
+        `#` …             보통 주석
+        그 밖의 줄        `db_unique_name` 하나
+
     경로: `CE_ENV_ALLOWLIST` 환경변수(필수). **패키지 안을 가리키면 거부한다.**
+
+    반환: (이름 목록, 파일 digest, attestation)
     """
     path = os.environ.get("CE_ENV_ALLOWLIST", "").strip()
     if not path:
@@ -198,14 +224,34 @@ def load_external_allowlist(root: Path) -> tuple[list[str], str]:
         die(2, f"CE_ENV_ALLOWLIST 가 패키지 안({root})을 가리킨다: {ap}. "
                "패키지 안의 파일은 승인 근거가 되지 못한다 — 같은 커밋에서 함께 바뀐다.")
 
-    names = []
+    names: list[str] = []
+    attest: dict[str, str] = {}
     for line in ap.read_text(encoding="utf-8").splitlines():
-        t = line.split("#", 1)[0].strip()
+        s = line.strip()
+        if s.startswith("#@"):
+            k, _, v = s[2:].partition(":")
+            if k.strip():
+                attest[k.strip()] = v.strip()
+            continue
+        t = s.split("#", 1)[0].strip()
         if t:
             names.append(t)
     if not names:
         die(2, f"CE_ENV_ALLOWLIST 가 비어 있다: {ap}. 빈 allowlist 로는 실행하지 않는다.")
-    return names, sha256_file(ap)
+
+    # **승인자를 적게 강제한다.** 서명을 검증할 수는 없지만, 아무도 이름을 적지 않은
+    # 파일을 "승인" 이라고 부르지는 않는다(9차 P0-07).
+    miss = [k for k in ATTEST_REQUIRED if not attest.get(k)]
+    if miss:
+        die(2, f"CE_ENV_ALLOWLIST 의 attestation 에 {miss} 가 없다: {ap}\n"
+               f"  파일 맨 위에 다음 네 줄을 적어라 — 이 하네스는 DDL/DML 을 한다.\n"
+               f"    #@ approved_by: 홍길동 (DBA팀)\n"
+               f"    #@ approved_at: 2026-08-31\n"
+               f"    #@ contact: hong@example.com\n"
+               f"    #@ environment_is: 폐기용 Oracle Free 컨테이너. 운영 데이터 없음\n"
+               f"  {ALLOWLIST_LIMITS}")
+    attest["_limits"] = ALLOWLIST_LIMITS
+    return names, sha256_file(ap), attest
 
 
 def enforce_guard(suite: dict, observed: dict, allowlist: list[str]) -> list[str]:
@@ -548,10 +594,14 @@ def main() -> int:
     # 접속도 한 줄이다.
     if a.dry_run:
         allowlist, allowlist_digest = [], "DRY_RUN_NOT_LOADED"
+        allowlist_attest = {"_limits": ALLOWLIST_LIMITS,
+                            "_note": "dry-run 이라 allowlist 를 읽지 않았다"}
         print("[guard] --dry-run: 외부 allowlist 를 요구하지 않는다(접속도 실행도 하지 않으므로)")
     else:
-        allowlist, allowlist_digest = load_external_allowlist(root)
+        allowlist, allowlist_digest, allowlist_attest = load_external_allowlist(root)
         print(f"[guard] 외부 allowlist {len(allowlist)}건 (digest {allowlist_digest[:16]}…)")
+        print(f"[guard] 승인 자가기재: approved_by={allowlist_attest['approved_by']!r} "
+              f"approved_at={allowlist_attest['approved_at']!r}")
 
     if a.dry_run:
         g = suite["environment_guard"]
@@ -656,6 +706,10 @@ def main() -> int:
           # **외부 allowlist 의 digest**(8차 M0-5). 어떤 승인 목록으로 돌았는지가
           # 증거에 박혀야 사후에 "그 환경이 승인돼 있었다"를 확인할 수 있다.
           "env_allowlist_sha256": allowlist_digest,
+          # 9차 조치 7(P0-07) — digest 는 "그 파일의 내용이 이것이었다" 만 보인다.
+          # 누가 승인했는지·정말 폐기용인지는 보이지 않는다. 그 사실을 증거가
+          # 스스로 적는다(`_limits`). **못 하는 것을 한 척하지 않는다.**
+          "env_allowlist_attestation": allowlist_attest,
           "environment": envrec,
           "versions": suite.get("versions", {}),
           "scenarios": scen,

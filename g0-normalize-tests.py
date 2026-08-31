@@ -35,6 +35,9 @@ def sha(p: pathlib.Path) -> str:
 # **서버가 밝히는 값과 같아야 한다**(9차 조치 4 · P0-02). 이전 픽스처는 manifest 에
 # TESTSTBY, A probe 에 ETLSTB 를 넣고도 통과했다 — 한 레코드가 두 원천을 말했다.
 SOURCE_ID = "ETLSTB"
+# 9차 조치 7 — CE 는 **폐기용 쓰기 가능 DB** 에서 돈다. 원천과 같은 이름을 쓰면
+# 집계기가 거부한다(P0-07). 픽스처도 실제 절차와 같은 이름을 쓴다.
+CE_SOURCE_ID = "CEFREE1"
 HARNESS = "b" * 64
 
 # **고정 날짜를 쓰지 않는다.** M3-3 이 TTL 기반 stale 판정을 넣었으므로, 픽스처의 측정
@@ -50,7 +53,8 @@ def write_manifest(art: pathlib.Path, child: str, *, run_id=RUN_ID, profile=PROF
                    lock_digest: str, exit_code=0, artifact_sha: str | None = None,
                    source_id: str = SOURCE_ID, harness_digest: str = HARNESS,
                    overwrote: bool = False, drop: tuple[str, ...] = (),
-                   age_days: float = 0.02, env_kind: str = "host") -> None:
+                   age_days: float = 0.02, env_kind: str = "host",
+                   env_scope: str | None = None) -> None:
     """`drop` 으로 필드를 빼면 M1-2 결속 검사를 반례로 시험할 수 있다.
 
     `age_days` 는 측정 시각을 과거로 미는 값이다 — M3-3 stale 시험용. 기본값이 0 이 아닌
@@ -66,6 +70,9 @@ def write_manifest(art: pathlib.Path, child: str, *, run_id=RUN_ID, profile=PROF
         "overwrote_existing": overwrote,
         # 9차 조치 4 — 래퍼가 관측한 실행 환경. 시험은 'host'(반증 불가)로 둔다.
         "env_kind": env_kind,
+        # 9차 조치 7 — scope 는 래퍼가 CHILD 에서 **유도**한다. 시험도 같은 규칙을 쓴다.
+        "environment_scope": env_scope or
+                             ("COUNTEREXAMPLE" if child == "G0_0C_SUITE" else "SOURCE"),
         "artifact": {"path": str(art), "sha256": artifact_sha or sha(art),
                      "lines": len(art.read_text(encoding="utf-8").splitlines())},
         "runtime": {"uname": "test"}, "command": ["test"],
@@ -454,10 +461,15 @@ def full_fixture(w: pathlib.Path, ld: str, **mk) -> dict:
     write_manifest(c00, "G0_0C00", lock_digest=ld, **mk)
 
     ce = w / f"ce-{RUN_ID}.json"
-    ce.write_text(json.dumps({"suite_verdict": {"pass": True}, "scenarios": [
+    ce.write_text(json.dumps({
+        # CE 는 자기 환경의 서버 신원을 증거에 남긴다 — 집계기가 CE manifest 의
+        # source_id 를 이 값과 대조한다(9차 조치 7).
+        "environment": {"primary_db_unique_name": CE_SOURCE_ID},
+        "suite_verdict": {"pass": True}, "scenarios": [
         {"id": "CE01", "outcome": "MITIGATION_HOLDS", "child_returncode": 0},
         {"id": "CE02", "outcome": "MITIGATION_HOLDS", "child_returncode": 0}]}), encoding="utf-8")
-    write_manifest(ce, "G0_0C_SUITE", lock_digest=ld, **mk)
+    write_manifest(ce, "G0_0C_SUITE", lock_digest=ld,
+                   **{**mk, "source_id": CE_SOURCE_ID})
 
     return {"a": a_art, "b0": b0, "b1": b1, "c00": c00, "c_suite": ce}
 
@@ -1197,6 +1209,131 @@ def t_a9_profile_positive_control() -> None:
     shutil.rmtree(w); shutil.rmtree(w2)
 
 
+# ── 9차 조치 7 ───────────────────────────────────────────────────────
+def _ce_pair(w: pathlib.Path, ld: str, *, ce_source: str, ce_observed: str | None = None,
+             ce_scope: str | None = None) -> dict:
+    """A(SOURCE) 와 CE(COUNTEREXAMPLE) 를 한 회차에 넣는 최소 픽스처."""
+    a = w / f"a-{RUN_ID}.log"
+    a.write_text(a_log(), encoding="utf-8")
+    write_manifest(a, "G0_0A", lock_digest=ld)
+    ce = w / f"ce-{RUN_ID}.json"
+    ce.write_text(json.dumps({
+        "environment": {"primary_db_unique_name": ce_observed
+                        if ce_observed is not None else ce_source},
+        "suite_verdict": {"pass": True},
+        "scenarios": [{"id": "CE01", "outcome": "MITIGATION_HOLDS",
+                       "child_returncode": 0}]}), encoding="utf-8")
+    write_manifest(ce, "G0_0C_SUITE", lock_digest=ld, source_id=ce_source,
+                   env_scope=ce_scope)
+    return {"a": a, "c_suite": ce}
+
+
+def t_a9_scope_allows_two_environments() -> None:
+    """**양성 대조가 먼저다.** 조치 7 의 요점은 거부가 아니라 *정상 회차를 통과시키는 것*이다.
+
+    이전 판은 CE 를 한 회차에 넣는 순간 `source_id` 균일성 검사가 거부했다. 그래서 운영자
+    앞에 남은 선택지가 **CE 가 원천 이름을 거짓 신고하는 것** 뿐이었다(9차 P0-07).
+    """
+    print("\n[56] 조치 7 — CE 와 원천을 한 회차에 넣어도 통과한다 (P0-07 의 본체)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    f = _ce_pair(w, ld, ce_source=CE_SOURCE_ID)
+    rc, out, err = run_norm(w, **f)
+    check("서로 다른 원천인데 회차가 거부되지 않는다", rc == 3,
+          f"rc={rc} {err[:300]}")
+    rec = json.loads(pathlib.Path(out["out"]).read_text(encoding="utf-8"))
+    check("contract_violations 가 비어 있다", not rec.get("contract_violations"),
+          str(rec.get("contract_violations"))[:300])
+    shutil.rmtree(w)
+
+
+def t_a9_scope_recorded_in_record() -> None:
+    print("\n[57] 조치 7 — 레코드가 **스스로** 몇 개 환경의 증거인지 말한다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    f = _ce_pair(w, ld, ce_source=CE_SOURCE_ID)
+    rc, out, _ = run_norm(w, **f)
+    rec = json.loads(pathlib.Path(out["out"]).read_text(encoding="utf-8"))
+    es = rec.get("environment_scopes") or {}
+    check("SOURCE·COUNTEREXAMPLE 두 scope 가 기록된다",
+          set(es) == {"SOURCE", "COUNTEREXAMPLE"}, str(sorted(es)))
+    check("각 scope 가 자기 원천 이름을 적는다",
+          es.get("SOURCE", {}).get("source_ids") == [SOURCE_ID] and
+          es.get("COUNTEREXAMPLE", {}).get("source_ids") == [CE_SOURCE_ID], str(es)[:300])
+    check("scope 의 뜻이 레코드 안에 있다 — 다른 문서를 찾지 않아도 된다",
+          "capability" in es.get("COUNTEREXAMPLE", {}).get("means", ""),
+          str(es.get("COUNTEREXAMPLE", {}).get("means"))[:200])
+    shutil.rmtree(w)
+
+
+def t_a9_ce_same_source_rejected() -> None:
+    print("\n[58] 조치 7 — CE 가 원천과 **같은 DB** 를 신고하면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    # 운영자가 CE 단계에서 G0_SOURCE_ID 를 바꾸지 않은 경우. 그러면 파괴적 시나리오가
+    # 사내 원천에서 돌았다는 뜻이 되고, 그것은 통과시킬 수 있는 값이 아니다.
+    f = _ce_pair(w, ld, ce_source=SOURCE_ID)
+    rc, out, err = run_norm(w, **f)
+    check("exit 4(거부)", rc == 4, f"rc={rc}")
+    check("사유가 CE 와 원천의 동일 DB 다",
+          "폐기용" in err and "P0-07" in err, err[:300])
+    shutil.rmtree(w)
+
+
+def t_a9_ce_identity_bound_to_own_server() -> None:
+    """scope 를 도입하면 CE 는 A 의 서버 신원 대조에서 빠진다. 거기서 끝내면 **파괴적
+    시나리오를 도는 쪽만 신원 대조를 면제받는다.** CE 는 자기 환경의 서버 값에 묶인다."""
+    print("\n[59] 조치 7 — CE manifest 가 CE 증거의 서버 신원과 다르면 거부")
+    w = new_work(); ld = sha(w / "versions.lock")
+    f = _ce_pair(w, ld, ce_source=CE_SOURCE_ID, ce_observed="SOMEOTHERDB")
+    rc, out, err = run_norm(w, **f)
+    check("exit 4(거부)", rc == 4, f"rc={rc}")
+    check("사유가 CE manifest ↔ CE 증거 불일치다",
+          "CE runner 가 서버에서" in err, err[:300])
+    shutil.rmtree(w)
+
+
+def t_a9_scope_is_derived_not_declared() -> None:
+    """scope 가 선언값이면 CE 를 SOURCE 로 신고해 원래 결함으로 되돌아갈 수 있다."""
+    print("\n[60] 조치 7 — CE 를 SOURCE 로 재라벨하면 거부 (scope 는 유도값이다)")
+    w = new_work(); ld = sha(w / "versions.lock")
+    f = _ce_pair(w, ld, ce_source=CE_SOURCE_ID, ce_scope="SOURCE")
+    rc, out, err = run_norm(w, **f)
+    check("exit 4(거부)", rc == 4, f"rc={rc}")
+    check("사유가 계약이 정한 scope 와 다름이다",
+          "계약이 정한 값은" in err, err[:300])
+
+    # scope 를 아예 빼도 거부한다 — 조치 7 이전 판본의 래퍼로 돌린 경우.
+    w2 = new_work(); ld2 = sha(w2 / "versions.lock")
+    a2 = w2 / f"a-{RUN_ID}.log"
+    a2.write_text(a_log(), encoding="utf-8")
+    write_manifest(a2, "G0_0A", lock_digest=ld2, drop=("environment_scope",))
+    rc2, _, err2 = run_norm(w2, a=a2)
+    check("scope 가 없으면 거부", rc2 == 4, f"rc={rc2}")
+    check("사유가 옛 래퍼다", "이전 판본의 래퍼" in err2, err2[:300])
+    shutil.rmtree(w); shutil.rmtree(w2)
+
+
+def t_a9_ce_raises_no_axis() -> None:
+    """**CE 는 어떤 capability 축도 올리지 못한다.**
+
+    지금은 코드 구조가 이것을 지킨다 — 축은 A·B0·B1 의 probe 사전에서만 나오고 `cov_ce`
+    는 축에 손대지 않는다. 구조가 바뀌면 조용히 깨지므로 여기서 못박는다.
+    """
+    print("\n[61] 조치 7 — CE 만 있는 회차는 축을 하나도 올리지 못한다")
+    w = new_work(); ld = sha(w / "versions.lock")
+    ce = w / f"ce-{RUN_ID}.json"
+    ce.write_text(json.dumps({
+        "environment": {"primary_db_unique_name": CE_SOURCE_ID},
+        "suite_verdict": {"pass": True},
+        "scenarios": [{"id": "CE01", "outcome": "MITIGATION_HOLDS",
+                       "child_returncode": 0}]}), encoding="utf-8")
+    write_manifest(ce, "G0_0C_SUITE", lock_digest=ld, source_id=CE_SOURCE_ID)
+    rc, out, _ = run_norm(w, c_suite=ce)
+    eff = out.get("capability_axes_effective") or {}
+    decided = [k for k, v in eff.items() if v not in (None, "UNDETERMINED")]
+    check("확정된 축이 하나도 없다", not decided, str(decided)[:300])
+    check("축이 실제로 존재하기는 한다 — 빈 사전으로 통과하지 않는다", bool(eff))
+    shutil.rmtree(w)
+
+
 # ── 9차 조치 5 ───────────────────────────────────────────────────────
 def t_a9_harness_manifest_complete() -> None:
     print("\n[54] 조치 5 — harness manifest 가 저장소 전체를 덮는가 (9차 §9-6)")
@@ -1291,7 +1428,11 @@ def main() -> int:
               t_a9_env_kind_required, t_a9_profile_positive_control,
               # 9차 조치 5
               t_a9_harness_manifest_complete, t_a9_harness_digest_changes,
-              t_a9_undeclared_file_fails):
+              t_a9_undeclared_file_fails,
+              # 9차 조치 7
+              t_a9_scope_allows_two_environments, t_a9_scope_recorded_in_record,
+              t_a9_ce_same_source_rejected, t_a9_ce_identity_bound_to_own_server,
+              t_a9_scope_is_derived_not_declared, t_a9_ce_raises_no_axis):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

@@ -70,11 +70,11 @@ Oracle 도 Spark 도 필요 없다. **여기서 실패하면 뒤 단계의 결�
 ```bash
 python3 g0-harness-manifest.py     #  저장소 전 파일이 선언돼 있는가(9차 조치 5)
 python3 g0-0a-probe-manifest.py    #  A probe 목록이 SQL 과 같은가(9차 조치 3)
-python3 g0-normalize-tests.py      # 193건 — 증거 봉투 fail-closed
+python3 g0-normalize-tests.py      # 208건 — 증거 봉투 fail-closed · scope 분리
 python3 g0-axes-tests.py           # 127건 — capability 축 파생·SQLCODE taxonomy·floor
 python3 g0-b1-analyzer-tests.py    #  43건 — B1 판정기
-python3 g0-m0-safety-tests.py      #  51건 — 실행 안전성(M0)
-python3 g0-0b1-connection-provider/g0-b1-wiring-tests.py   # 16건 — **B1 종단 배선**
+python3 g0-m0-safety-tests.py      #  74건 — 실행 안전성(M0)·원천 봉투·CE 승인
+python3 g0-0b1-connection-provider/g0-b1-wiring-tests.py   # 21건 — **B1 종단 배선**
 python3 g0-runbook-lint.py         #  19건 — **이 문서를 그대로 실행할 수 있는가**
 # 여덟 다 exit 0 이어야 한다. **건수는 참고값이다** — 판정은 종료 코드로 한다
 # (여기 적힌 숫자가 늘어나 있으면 그건 시험이 늘어난 것이지 실패가 아니다).
@@ -406,17 +406,32 @@ export CE_USER=ETL_CE CE_DSN='localhost:1521/FREEPDB1'
 export CE_DOC_PATH="$PWD/../etl-platform-target-architecture-v1.2.4.md"     # 필수 (현행 A)
 # ★ 패키지 **밖** 의 환경 allowlist. 이것이 없으면 runner 가 접속 전에 멈춘다(M0-5).
 #   저장소 안에 두지 마라 — "이 환경은 폐기용이다" 를 저장소가 스스로 주장하면 안 된다.
+#   9차 조치 7: attestation 네 줄이 **필수**다. 없으면 runner 가 거부한다.
+#     #@ approved_by: 홍길동 (DBA팀)
+#     #@ approved_at: 2026-08-31
+#     #@ contact: hong@example.com
+#     #@ environment_is: 폐기용 Oracle Free 컨테이너. 운영 데이터 없음
+#     FREEPDB1
 export CE_ENV_ALLOWLIST=/etc/g0/ce-allowlist.yaml
 read -rs -p 'CE password: ' CE_PASSWORD && export CE_PASSWORD && echo
 
 python3 runner.py --suite suite.yaml --dry-run      # 가드·계획만. 먼저 이것부터
-# 경로에 RUN_ID 가 있어야 한다(M1-4). CE 는 **다른 환경의 증거**이므로 corporate source
-# 회차와 같은 회차로 묶지 마라 — 9차 P0-07, 조치 7 에서 scope 를 분리한다.
+
+# ★ CE 는 **다른 환경의 증거**다(9차 조치 7 · P0-07). 래퍼가 CHILD 이름에서
+#   environment_scope=COUNTEREXAMPLE 을 유도해 manifest 에 적고, 집계기는 이 scope 안에서만
+#   source_id 균일성을 본다. 그러니 **여기서 G0_SOURCE_ID 를 CE DB 의 것으로 바꿔라** —
+#   원천 이름 그대로 두면 집계기가 "CE 가 사내 원천에서 돌았다"로 읽고 거부한다.
+#   그 값은 CE runner 가 서버에서 읽은 db_unique_name 과 대조된다.
+G0_SOURCE_ID_SOURCE="$G0_SOURCE_ID"          # 원천 회차용. S9 에서 되돌린다
+export G0_SOURCE_ID=FREEPDB1                 # ← 폐기용 CE DB 의 DB_UNIQUE_NAME
+
+# 경로에 RUN_ID 가 있어야 한다(M1-4).
 ../g0-run-child.sh G0_0C_SUITE "$RUN_ID" "$PROFILE" "$EVID/ce-evidence.json" -- \
   python3 runner.py --suite suite.yaml \
     --observed-env '{"primary_db_unique_name":"...","standby_db_unique_name":"...","schema":"..."}' \
     --out "$EVID/ce-evidence.json"
 unset CE_PASSWORD
+export G0_SOURCE_ID="$G0_SOURCE_ID_SOURCE"   # 원천 이름으로 되돌린다
 # runner 가 이미 $EVID 에 직접 쓴다 — 예전 cp 줄은 없는 파일을 복사하고 있었다
 cd ..
 ```

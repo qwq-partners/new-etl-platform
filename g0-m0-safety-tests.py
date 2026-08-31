@@ -171,6 +171,39 @@ if suite.is_file():
         r = run([sys.executable, str(CE), "--suite", str(suite), "--out", os.devnull],
                 env={"CE_ENV_ALLOWLIST": str(empty)})
         check("빈 allowlist → exit 2", r.returncode == 2, f"returncode={r.returncode}")
+
+    # ── 9차 조치 7(P0-07 후반부) — allowlist 는 **위치**만 보인다 ──────
+    # 파일이 패키지 밖에 있다는 것은 승인 주체·소유권·서명을 증명하지 않는다. 서명 체계를
+    # 여기서 만들 수는 없으므로 할 수 있는 둘만 한다 — 승인자를 적게 강제하고, 그것이
+    # 자가기재라는 사실을 증거에 남긴다. **못 하는 것을 한 척하지 않는다.**
+    with tempfile.TemporaryDirectory() as td:
+        bare = Path(td) / "bare.txt"
+        bare.write_text("FREEPDB1\n", encoding="utf-8")
+        r = run([sys.executable, str(CE), "--suite", str(suite), "--out", os.devnull],
+                env={"CE_ENV_ALLOWLIST": str(bare)})
+        out = r.stdout + r.stderr
+        check("attestation 없는 allowlist → exit 2", r.returncode == 2,
+              f"returncode={r.returncode}")
+        check("네 항목을 이름으로 지목한다",
+              all(k in out for k in
+                  ("approved_by", "approved_at", "contact", "environment_is")), out[-300:])
+        check("증명하지 못하는 것을 함께 말한다", "서명이 아니라 자가기재다" in out,
+              out[-300:])
+        check("접속 전에 죽는다 — preflight 까지 가지 않는다",
+              "preflight" not in out, out[-300:])
+
+        ok = Path(td) / "ok.txt"
+        ok.write_text("#@ approved_by: 시험자\n#@ approved_at: 2026-08-31\n"
+                      "#@ contact: t@example.com\n#@ environment_is: 폐기용 컨테이너\n"
+                      "FREEPDB1\n", encoding="utf-8")
+        r = run([sys.executable, str(CE), "--suite", str(suite), "--out", os.devnull],
+                env={"CE_ENV_ALLOWLIST": str(ok)})
+        out = r.stdout + r.stderr
+        # **양성 대조.** attestation 을 채우면 allowlist 게이트를 지나야 한다. 이 뒤에서
+        # 멈추는 것은 이 컨테이너에 oracledb 가 없기 때문이지 allowlist 때문이 아니다.
+        check("attestation 을 채우면 allowlist 게이트를 지난다",
+              "CE_ENV_ALLOWLIST" not in out, out[-300:])
+        check("승인 자가기재를 화면에 적는다", "승인 자가기재" in out, out[-300:])
 else:
     print("  SKIP  suite.yaml 이 없어 CE 실행 시험을 건너뛴다")
 

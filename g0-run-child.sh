@@ -30,6 +30,29 @@ case " $CHILDREN " in *" $CHILD "*) ;; *) echo "알 수 없는 CHILD: $CHILD" >&
 case " $PROFILES " in *" $PROFILE "*) ;; *) echo "알 수 없는 PROFILE: $PROFILE" >&2; usage;; esac
 case "$RUN_ID" in ""|*[!A-Za-z0-9._-]*) echo "RUN_ID 에는 [A-Za-z0-9._-] 만 쓴다: $RUN_ID" >&2; exit 2;; esac
 
+# ── 9차 조치 7: environment_scope ────────────────────────────────────
+#
+# 9차 P0-07. CE(G0_0C_SUITE)는 **폐기용 쓰기 가능 primary** 에서 돌고 A·B0·B1·C00 은
+# 사내 standby 를 본다. 그런데 M1-3 의 `check_run_set` 은 child 들의 `source_id` 가
+# 갈리면 회차를 거부한다. 그래서 한 회차에 CE 를 넣으면 둘 중 하나였다.
+#
+#   · CE 가 corporate source 의 이름을 **거짓으로 신고**하거나
+#   · 집계가 회차 전체를 거부하거나
+#
+# **계약에 "이 child 는 다른 환경의 것" 을 표현할 자리가 없었다.** 그 자리를 만든다.
+#
+# scope 는 **선언값이 아니라 child 로부터 유도한다.** 운영자가 고르게 하면 그것은
+# 또 하나의 자가선언이고(profile 이 그래서 문제였다), CE 를 SOURCE 로 신고하는 순간
+# 원래 결함으로 돌아간다. child 이름은 계약이 정한 것이므로 유도가 안전하다.
+#
+#   SOURCE          이 회차가 capability 를 재는 그 DB. A·B0·B1·C00
+#   COUNTEREXAMPLE  완화책이 실제로 막는지 보이려고 **파괴적 시나리오를 도는** 폐기용 DB.
+#                   원천에 대해 아무것도 말하지 않는다. C_SUITE
+case "$CHILD" in
+  G0_0C_SUITE) ENV_SCOPE=COUNTEREXAMPLE ;;
+  *)           ENV_SCOPE=SOURCE ;;
+esac
+
 # ── 9차 조치 4: 실행 환경을 **관측한다** ─────────────────────────────
 #
 # 9차 P0-02. profile 이 caller 가 고르는 label 이라 **WSL 에서 PROFILE=CORP_POC 로
@@ -132,7 +155,7 @@ HARNESS_DIGEST=$(harness_digest)
 STARTED=$(now)
 
 echo "[child] $CHILD run_id=$RUN_ID profile=$PROFILE"
-echo "[child] source_id=$SOURCE_ID"
+echo "[child] source_id=$SOURCE_ID scope=$ENV_SCOPE"
 echo "[child] versions_lock_digest=$LOCK_DIGEST"
 echo "[child] harness_digest=$HARNESS_DIGEST"
 echo "[child] 명령: $*"
@@ -173,6 +196,7 @@ MAN="$ARTIFACT.manifest.json"
   echo "    \"lines\": $ART_LINES"
   echo '  },'
   echo "  \"env_kind\": $(jq_str "$ENV_KIND"),"
+  echo "  \"environment_scope\": $(jq_str "$ENV_SCOPE"),"
   echo '  "runtime": {'
   echo "    \"uname\": $(jq_str "$(uname -srmo 2>/dev/null || uname -a)"),"
   echo "    \"python\": $(jq_str "$(python3 -V 2>&1 | head -1)"),"

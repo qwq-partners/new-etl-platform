@@ -179,6 +179,40 @@ emitted:86}` 이 `MEASURED`** 가 됐다. `cov_b0` 는 step 차집합을, `cov_c
 
 `CORP_POC` 의 실질적 근거는 fingerprint 가 아니라 **①의 서버 신원 대조**다.
 
+### 3.0 `environment_scope` — 한 회차가 두 환경을 담을 때 (9차 조치 7 · P0-07)
+
+CE(`G0_0C_SUITE`)는 **폐기용 쓰기 가능 primary** 에서 DDL/DML 을 하고, A·B0·B1·C00 은 사내
+standby 를 읽는다. 그런데 M1-3 의 회차 검사가 `source_id` 균일성을 요구했다. 그래서 한 회차에
+CE 를 넣으면 둘 중 하나였다 — **CE 가 원천 이름을 거짓 신고**하거나 **회차 전체가 거부**되거나.
+계약에 *"이 child 는 다른 환경의 것"* 을 표현할 자리가 없었다.
+
+`environment_scope` 가 그 자리다.
+
+| scope | child | 뜻 |
+|---|---|---|
+| `SOURCE` | `G0_0A` · `G0_0B0` · `G0_0B1` · `G0_0C00` | 이 회차가 capability 를 재는 DB. **모든 축 값이 여기서 나온다** |
+| `COUNTEREXAMPLE` | `G0_0C_SUITE` | 완화책이 실제로 막는지 보이려고 파괴적 시나리오를 도는 폐기용 DB. **원천의 capability 에 대해 아무것도 말하지 않는다** |
+
+**선언값이 아니라 유도값이다.** 운영자가 고르게 하면 그것은 또 하나의 자가선언이고 — `profile`
+이 그래서 P0-02 가 됐다 — CE 를 `SOURCE` 로 신고하는 순간 원래 결함으로 되돌아간다. 래퍼가
+`CHILD` 이름에서 유도해 적고, 집계기는 manifest 값이 계약과 **같은지**만 본다.
+
+집계기가 scope 로 바꾸는 검사 넷.
+
+| 검사 | scope 도입 전 | 지금 |
+|---|---|---|
+| `run_id` · `versions_lock_digest` · `harness_digest` | 회차 전체 균일 | **그대로** — 같은 회차·같은 코드라야 "CE 가 보인 완화책은 이 하네스의 것" 이 성립한다 |
+| `source_id` | 회차 전체 균일 | **scope 안에서만** 균일 |
+| CE 와 원천의 `source_id` | — | **같으면 거부.** CE 가 사내 원천에서 돌았거나 운영자가 CE 단계에서 `G0_SOURCE_ID` 를 안 바꿨다 |
+| CE 의 신원 대조 | A 의 서버 신원과 대조(항상 실패) | **CE runner 가 `V$DATABASE` 에서 읽은 값**과 대조 |
+
+마지막 줄이 중요하다. scope 를 도입하면 CE 는 A 의 신원 대조에서 빠지는데, 거기서 끝내면
+**파괴적 시나리오를 도는 쪽만 신원 대조를 면제받는 것**이 된다. 방향이 거꾸로다. CE 는 자기
+환경의 서버 신원(`environment.primary_db_unique_name`)에 묶는다.
+
+레코드는 `environment_scopes` 블록으로 **스스로 몇 개 환경의 증거인지 말한다.** 그것이 없으면
+읽는 쪽이 `source_id` 하나만 보고 회차 전체를 그 DB 의 것으로 읽는다.
+
 ### 3.1 `expected` — "한 줄이면 통과"를 막는 것
 
 manifest 만으로는 B0 한 줄이 `MEASURED` 가 되는 것을 막지 못한다. 각 child 는 **몇 개를 낼

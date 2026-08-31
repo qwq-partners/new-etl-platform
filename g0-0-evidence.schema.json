@@ -106,6 +106,38 @@
     }
    }
   },
+  "environment_scopes": {
+   "type": "object",
+   "description": "9차 조치 7(P0-07) — 이 레코드가 담은 **환경별 증거 구분**. CE 는 폐기용 쓰기 가능 DB 에서 파괴적 시나리오를 돌고 나머지는 원천을 본다. scope 가 없으면 읽는 쪽이 source_id 하나만 보고 회차 전체를 그 DB 의 것으로 읽는다. scope 는 child 로부터 **유도**되며 운영자가 선언하지 않는다.",
+   "additionalProperties": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "children",
+     "source_ids",
+     "means"
+    ],
+    "properties": {
+     "children": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "source_ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "이 scope 안의 child 들이 신고한 원천 이름. **한 scope 안에서는 하나여야 한다.**"
+     },
+     "means": {
+      "type": "string",
+      "description": "이 scope 가 무엇을 뜻하는지. 레코드를 읽는 쪽이 뜻을 다른 문서에서 찾지 않아도 되게 한다."
+     }
+    }
+   }
+  },
   "source": {
    "type": "object",
    "description": "서버가 스스로 밝힌 신원. 운영자 신고값이 아니다. **테이블 단위 축을 하나라도 확정값으로 내려면 target_owner·target_table 이 있어야 한다** — 그 강제는 capability_axes[*].binding 에서 한다.",
@@ -808,6 +840,15 @@
     "env_kind": {
      "type": "string",
      "description": "래퍼가 **관측한** 실행 환경(9차 조치 4). wsl|container|host|UNRECORDED. caller 가 고르는 profile label 과 다르다 — 판정은 비대칭이다: wsl·container 관측은 CORP_POC 선언을 반증하지만 host 는 아무것도 입증하지 않는다."
+    },
+    "environment_scope": {
+     "type": "string",
+     "enum": [
+      "SOURCE",
+      "COUNTEREXAMPLE",
+      "UNDECLARED"
+     ],
+     "description": "9차 조치 7 — 이 child 가 어느 환경의 것인가. 래퍼가 CHILD 이름으로부터 유도해 적는다(선언값이 아니다). UNDECLARED 는 조치 7 이전 판본의 래퍼로 실행했다는 뜻이며 계약 위반이다."
     }
    }
   },

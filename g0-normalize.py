@@ -77,6 +77,32 @@ CHILD_KEYS = [("g0_0a", "G0_0A", "a"), ("g0_0b0", "G0_0B0", "b0"), ("g0_0b1", "G
 # check_run_set 이 '계약에 없는 child' 를 가리는 데 쓴다(8차 M1-3).
 CHILD_CONSTS = [k for k, _c, _a in CHILD_KEYS]
 
+# ── 9차 조치 7: environment_scope ────────────────────────────────────
+#
+# 9차 P0-07. CE 는 **폐기용 쓰기 가능 primary** 에서 돌고 나머지는 사내 standby 를 본다.
+# `check_run_set` 이 `source_id` 균일성을 요구하므로 한 회차에 CE 를 넣으면 CE 가 원천
+# 이름을 거짓 신고하거나 회차 전체가 거부됐다. **계약에 "이 child 는 다른 환경의 것"을
+# 표현할 자리가 없었다.**
+#
+# 자리를 만들되 **선언이 아니라 유도**한다. 운영자가 고르는 값이면 그것은 또 하나의
+# 자가선언이고 — profile 이 그래서 P0-02 가 됐다 — CE 를 SOURCE 로 신고하는 순간
+# 원래 결함으로 되돌아간다. child 이름은 계약이 정한 것이므로 유도가 안전하다.
+SCOPE_SOURCE = "SOURCE"
+SCOPE_CE = "COUNTEREXAMPLE"
+CHILD_SCOPE = {"g0_0a": SCOPE_SOURCE, "g0_0b0": SCOPE_SOURCE, "g0_0b1": SCOPE_SOURCE,
+               "g0_0c00": SCOPE_SOURCE, "g0_0c_suite": SCOPE_CE}
+SCOPE_MEANING = {
+    SCOPE_SOURCE: "이 회차가 capability 를 재는 DB. 축 값은 전부 여기서 나온다",
+    SCOPE_CE: "완화책이 실제로 막는지 보이려고 파괴적 시나리오를 도는 폐기용 DB. "
+              "**원천의 capability 에 대해 아무것도 말하지 않는다**",
+    "UNDECLARED": "래퍼가 scope 를 적지 않았다 — 어느 환경의 것인지 말하지 못한다",
+}
+
+# **CE 는 어떤 capability 축도 올리지 못한다.** 축은 A·B0·B1 의 probe 에서만 나오고
+# (`P` 사전), `cov_ce` 는 축에 손대지 않는다. 이것은 코드 구조가 이미 지키는 성질이라
+# 여기서 새로 강제할 것이 없지만, 구조가 바뀌면 깨지므로 회귀 시험으로 못박는다
+# (g0-normalize-tests.py [15]).
+
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 # ── 9차 조치 3: A probe 목록 계약 ────────────────────────────────────
@@ -210,6 +236,8 @@ def check_child(child_const: str, art: pathlib.Path,
         "overwrote_existing": bool(man.get("overwrote_existing", False)),
         # 9차 조치 4 — 래퍼가 **관측한** 실행 환경. caller 가 고른 profile label 과 다르다.
         "env_kind": str(man.get("env_kind", "")) or "UNRECORDED",
+        # 9차 조치 7 — 이 child 가 **어떤 환경의 것인가**. SOURCE 인지 COUNTEREXAMPLE 인지.
+        "environment_scope": str(man.get("environment_scope", "")) or "UNDECLARED",
     }
     measured = str(man.get("ended_at") or man.get("started_at") or "")
     if measured:
@@ -233,13 +261,38 @@ def check_child(child_const: str, art: pathlib.Path,
     if rec["exit_code"] != 0:
         V.append(f"{child_const}: exit_code={rec['exit_code']} — 실행이 성공으로 끝나지 않았다")
 
+    # ── 9차 조치 7: scope 는 유도값이므로 manifest 가 계약과 같아야 한다 ──
+    want_scope = SCOPE_CE if child_const == "G0_0C_SUITE" else SCOPE_SOURCE
+    if rec["environment_scope"] == "UNDECLARED":
+        V.append(f"{child_const}: manifest 에 environment_scope 가 없다 — 9차 조치 7 이전 "
+                 f"판본의 래퍼로 실행했는가. **이 산출물이 어느 환경의 것인지 말하지 "
+                 f"못하면 원천 증거와 반례 증거를 가를 수 없다**(9차 P0-07)")
+    elif rec["environment_scope"] != want_scope:
+        V.append(f"{child_const}: environment_scope={rec['environment_scope']!r} 인데 계약이 "
+                 f"정한 값은 {want_scope!r} 다. scope 는 child 로부터 **유도**되므로 이것이 "
+                 f"다르다는 것은 manifest 를 손댔다는 뜻이다 — 특히 CE 를 SOURCE 로 바꾸면 "
+                 f"파괴적 시나리오의 결과가 원천 증거로 섞인다(9차 P0-07)")
+
     # ── M1-2: source·harness·시각 결속 ──────────────────────────────
     if not rec["source_id"]:
         V.append(f"{child_const}: manifest 에 source_id 가 없다 — **어느 원천에서 잰 값인지 "
                  f"말하지 못한다.** 여러 원천의 산출물을 한 회차로 섞어도 알 수 없다(8차 M1-2)")
-    elif source_id and rec["source_id"] != source_id:
+    elif source_id and rec["environment_scope"] == SCOPE_SOURCE \
+            and rec["source_id"] != source_id:
+        # `--source-id` 는 **SOURCE scope 의 이름**이다. CE 는 다른 DB 에서 돌므로
+        # 여기에 걸면 안 된다 — 그것이 P0-07 이 만든 막다른 골목이었다.
         V.append(f"{child_const}: source_id 불일치 (manifest={rec['source_id']!r}, "
                  f"요청={source_id!r}) — 서로 다른 원천의 산출물을 섞었다")
+    elif source_id and rec["environment_scope"] == SCOPE_CE \
+            and rec["source_id"].upper() == source_id.upper():
+        # **CE 가 원천과 같은 DB 를 신고했다.** 둘 중 하나다 — 운영자가 CE 단계에서
+        # G0_SOURCE_ID 를 안 바꿨거나, CE 가 정말 사내 원천에서 돌았거나.
+        # 앞이면 증거가 거짓이고 뒤면 사고다. 어느 쪽이든 통과시키지 않는다.
+        V.append(f"{child_const}: CE 의 source_id={rec['source_id']!r} 가 원천과 같다. "
+                 f"CE 는 **폐기용 쓰기 가능 DB** 에서 돌아야 하고 파괴적 시나리오를 "
+                 f"수행한다 — 사내 원천과 같은 이름을 신고하는 것은 운영자가 CE 단계에서 "
+                 f"G0_SOURCE_ID 를 바꾸지 않았거나 CE 가 실제로 원천에서 돌았다는 "
+                 f"뜻이다(9차 P0-07)")
 
     if rec["harness_digest"] in ("", "MISSING", "NO_HARNESS_FILES", "MANIFEST_INCOMPLETE"):
         V.append(f"{child_const}: manifest 에 harness_digest 가 없다 — versions.lock 은 "
@@ -398,6 +451,11 @@ def check_source_identity(P: dict[str, dict], children: dict[str, dict],
     for name, rec in children.items():
         if not (isinstance(rec, dict) and rec.get("present")):
             continue
+        # **SOURCE scope 만 본다**(9차 조치 7 · P0-07). A 가 읽은 DB_UNIQUE_NAME 은
+        # 원천의 것이고, CE 는 폐기용 DB 에서 돈다 — 그 둘을 대조하면 정상 회차가
+        # 거부된다. CE 의 신원은 `check_ce_identity()` 가 CE 자신의 증거로 대조한다.
+        if str(rec.get("environment_scope") or "") != SCOPE_SOURCE:
+            continue
         sid = str(rec.get("source_id") or "")
         if sid and sid.upper() != server.upper():
             V.append(f"{name}: manifest 의 source_id={sid!r} 인데 서버가 밝힌 "
@@ -407,6 +465,39 @@ def check_source_identity(P: dict[str, dict], children: dict[str, dict],
     if declared_source_id and declared_source_id.upper() != server.upper():
         V.append(f"--source-id={declared_source_id!r} 인데 서버가 밝힌 DB_UNIQUE_NAME 은 "
                  f"{server!r} 다 — 운영자가 지정한 원천과 실제로 붙은 원천이 다르다")
+    return V, W
+
+
+def check_ce_identity(children: dict[str, dict], ce_env: dict) -> tuple[list[str], list[str]]:
+    """CE manifest 의 `source_id` 를 **CE runner 가 서버에서 읽은 값**과 대조한다.
+
+    9차 조치 7. SOURCE scope 를 A 의 서버 신원에 묶었듯이(조치 4), CE 도 자기 환경의
+    서버 신원에 묶여야 한다. 그러지 않으면 scope 를 도입한 것이 **CE 만 신원 대조에서
+    면제해 주는 결과**가 된다 — 파괴적 시나리오를 도는 쪽을 느슨하게 두는 것은 방향이
+    거꾸로다.
+
+    CE runner 는 `CE_DSN` 으로 직접 붙어 `V$DATABASE` 에서 `db_unique_name` 을 읽고
+    증거의 `environment.primary_db_unique_name` 에 남긴다. 그것이 대조 상대다.
+
+    반환은 (위반, 경고). CE 를 안 돌린 회차는 둘 다 비어 있다.
+    """
+    V: list[str] = []
+    W: list[str] = []
+    rec = children.get("g0_0c_suite")
+    if not (isinstance(rec, dict) and rec.get("present")):
+        return V, W
+
+    observed = str((ce_env or {}).get("primary_db_unique_name") or "")
+    sid = str(rec.get("source_id") or "")
+    if not observed:
+        W.append("CE 증거에 environment.primary_db_unique_name 이 없다 — **CE manifest 의 "
+                 "source_id 를 대조할 상대가 없다.** CE 가 어느 DB 에서 돌았는지는 "
+                 "운영자 신고값뿐이며 그것은 증거가 아니다(9차 조치 7)")
+        return V, W
+    if sid and sid.upper() != observed.upper():
+        V.append(f"g0_0c_suite: manifest 의 source_id={sid!r} 인데 CE runner 가 서버에서 "
+                 f"읽은 db_unique_name 은 {observed!r} 다 — **CE 증거와 그 manifest 가 "
+                 f"서로 다른 DB 를 말한다**(9차 조치 7)")
     return V, W
 
 
@@ -432,18 +523,49 @@ def check_run_set(children: dict[str, dict]) -> list[str]:
     if not present:
         return V
 
-    def spread(field: str) -> list[str]:
-        return sorted({str(v.get(field, "")) for v in present.values()})
+    def spread(field: str, pool: dict) -> list[str]:
+        return sorted({str(v.get(field, "")) for v in pool.values()})
 
+    # ── 회차 전체에서 균일해야 하는 것 ─────────────────────────────────
+    # scope 가 갈려도 이 셋은 같아야 한다. **같은 회차·같은 코드·같은 실행 판본**이라야
+    # "CE 가 보인 완화책은 이 하네스의 것이다" 를 말할 수 있다. scope 를 도입한다고 해서
+    # 이 결속까지 푸는 것이 아니다.
     for field, why in (("run_id", "서로 다른 회차"),
-                       ("source_id", "서로 다른 원천"),
                        ("versions_lock_digest", "서로 다른 실행 판본"),
                        ("harness_digest", "서로 다른 하네스 코드")):
-        vals = [v for v in spread(field) if v and v != "MISSING"]
+        vals = [v for v in spread(field, present) if v and v != "MISSING"]
         if len(vals) > 1:
             V.append(f"child 들이 {why}의 것이다 — {field}: {vals}. "
                      f"각 child 는 자기 manifest 와 일관되므로 개별 검사로는 잡히지 않는다. "
                      f"**이어 붙인 회차는 하나의 회차가 아니다**(8차 M1-3)")
+
+    # ── 9차 조치 7: `source_id` 는 **scope 안에서** 균일해야 한다 ──────
+    #
+    # 이전 판은 회차 전체에서 균일할 것을 요구했다. CE 는 폐기용 DB 에서 도는데도
+    # 그랬으므로, 한 회차에 CE 를 넣으려면 CE 가 원천 이름을 거짓 신고하는 수밖에
+    # 없었다(9차 P0-07). scope 를 도입한 이유가 이것이다.
+    by_scope: dict[str, dict] = {}
+    for k, v in present.items():
+        by_scope.setdefault(str(v.get("environment_scope") or "UNDECLARED"), {})[k] = v
+
+    for scope, pool in sorted(by_scope.items()):
+        vals = [v for v in spread("source_id", pool) if v and v != "MISSING"]
+        if len(vals) > 1:
+            V.append(f"scope={scope} 안에서 child 들이 서로 다른 원천의 것이다 — "
+                     f"source_id: {vals}. 같은 scope 는 같은 DB 를 봐야 한다(8차 M1-3)")
+
+    # 그리고 **scope 가 다르면 원천도 달라야 한다.** 같으면 CE 가 사내 원천에서 돌았다는
+    # 뜻이고, CE 는 DDL/DML 을 한다. 위의 per-child 검사가 `--source-id` 를 준 회차에서
+    # 잡지만, 주지 않은 회차에서는 여기가 유일한 방어다.
+    def names(scope: str) -> set[str]:
+        return {n.upper() for n in spread("source_id", by_scope.get(scope, {}))
+                if n and n != "MISSING"}
+
+    overlap = names(SCOPE_SOURCE) & names(SCOPE_CE)
+    if overlap:
+        V.append(f"CE 와 원천이 같은 DB 를 가리킨다 — {sorted(overlap)}. **CE 는 파괴적 "
+                 f"시나리오를 도는 폐기용 환경 전용이다.** 사내 원천에서 돌았거나, CE "
+                 f"단계에서 G0_SOURCE_ID 를 바꾸지 않은 것이다(9차 P0-07)")
 
     return V
 
@@ -644,7 +766,17 @@ def cov_ce(path: pathlib.Path | None) -> tuple[dict, dict, list[str]]:
     scen = [s for s in (e.get("scenarios") or []) if isinstance(s, dict)]
     ces = {"pass": v.get("pass"), "reason": str(v.get("reason", ""))[:300],
            "outcomes": {s.get("id"): s.get("outcome") for s in scen},
-           "scenario_count": len(scen)}
+           "scenario_count": len(scen),
+           # 9차 조치 7 — **CE 가 어느 DB 에서 돌았는가.** manifest 의 source_id 를
+           # 이 값과 대조한다(`check_ce_identity`). 이것을 버리면 CE 만 신원 대조에서
+           # 빠지고, 파괴적 시나리오를 도는 쪽을 느슨하게 두는 셈이 된다.
+           "environment": e.get("environment") if isinstance(e.get("environment"), dict)
+                          else {},
+           # allowlist 가 **증명하지 못하는 것**도 함께 옮긴다(P0-07 후반부).
+           "env_allowlist_sha256": str(e.get("env_allowlist_sha256") or ""),
+           "env_allowlist_attestation": e.get("env_allowlist_attestation")
+                                        if isinstance(e.get("env_allowlist_attestation"), dict)
+                                        else {}}
 
     if not scen:
         return ({"status": "FAILED",
@@ -895,6 +1027,28 @@ def main() -> int:
     W.extend(w_src)
     source_identity_verified = not v_src and not w_src
 
+    # ── CE 신원 결속 (9차 조치 7 · P0-07) ─────────────────────────
+    # scope 를 도입하면 CE 는 A 의 서버 신원 대조에서 빠진다. 거기서 끝내면 **파괴적
+    # 시나리오를 도는 쪽만 신원 대조를 면제받는 것**이 되므로, CE 는 자기 환경의 서버
+    # 신원(CE runner 가 V$DATABASE 에서 읽은 값)에 묶는다.
+    v_ce, w_ce = check_ce_identity(children, ces.get("environment") or {})
+    V.extend(v_ce)
+    W.extend(w_ce)
+
+    # 레코드가 **스스로 scope 를 말한다.** 이것이 없으면 읽는 쪽이 source_id 하나만 보고
+    # 회차 전체가 그 DB 의 것이라고 읽는다 — P0-07 이 만든 오독이 정확히 그것이다.
+    environment_scopes = {}
+    for name, rec in sorted(children.items()):
+        if not (isinstance(rec, dict) and rec.get("present")):
+            continue
+        sc = str(rec.get("environment_scope") or "UNDECLARED")
+        e = environment_scopes.setdefault(
+            sc, {"children": [], "source_ids": [], "means": SCOPE_MEANING.get(sc, "")})
+        e["children"].append(name)
+        sid = str(rec.get("source_id") or "")
+        if sid and sid not in e["source_ids"]:
+            e["source_ids"].append(sid)
+
     # ── 축 파생 + effective floor (8차 M3-3) ──────────────────────
     # `value` 는 관측 사실이고 `effective_value` 는 실행에 쓰는 값이다. 아래 사유가 하나라도
     # 붙으면 그 축의 effective_value 는 floor 로 내려간다 — **요약도 exit 판정도
@@ -950,6 +1104,9 @@ def main() -> int:
         "normalized_at": now_iso(),
         "versions_lock_digest": lock_digest,
         "children": children,
+        # 9차 조치 7 — **이 레코드가 몇 개 환경의 증거를 담고 있는가.** source_id 하나만
+        # 보고 회차 전체를 그 DB 의 것으로 읽지 못하게 한다(P0-07).
+        "environment_scopes": environment_scopes,
         "coverage": coverage,
         "not_covered": not_covered,
         "final_contract_digest": contract_digest,
