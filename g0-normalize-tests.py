@@ -1457,6 +1457,108 @@ def t_a9_ttl_declared_positive_control() -> None:
     shutil.rmtree(w)
 
 
+def _gate():
+    sys.path.insert(0, str(NORM.parent))
+    import importlib
+    return importlib.import_module("g0_final_gate")
+
+
+def _forged_5_1() -> dict:
+    """9차 판정 §5-1 이 실증한 그 레코드. **전부 쓰레기 문자열이다.**
+
+    이전 판은 이것을 `admitted = True, reasons = []` 로 승인했다. 값을 안 봐서만이
+    아니라 `admit()` 이 `item` 이름을 경로로 해석했기 때문이다 — 계약이 표시용으로 적어
+    둔 `hash_vector_result (V-01~V-16)` 이라는 이름의 키 하나면 그 항목이 충족됐다.
+    """
+    return {
+        "record_type": "g0_evidence", "gate_eligible": True,
+        "g0_report_id": "쓰레기", "executed_at": "언젠가",
+        "versions_lock_digest": "digest아님",
+        "oracle_env": {"nls_characterset": "아무거나",
+                       "nls_nchar_characterset": "아무거나",
+                       "max_string_size": "아무거나"},
+        "hash_vector_result (V-01~V-16)": "FORGED", "ddl_digest": "FORGED",
+        "verdict_sql_digest": "FORGED", "canonical_hash_spec_digest": "FORGED",
+        "submission_path_result": "FORGED", "source_kind": "FORGED",
+        "same_lock (G0-5)": "FORGED",
+    }
+
+
+def t_a9_forged_record_rejected() -> None:
+    print("\n[64] 조치 9 — §5-1 의 위조 레코드는 무조건 거부된다 (§8 재리뷰 기준 12)")
+    gate = _gate()
+    ok, reasons = gate.admit(_forged_5_1())
+    check("승인하지 않는다", ok is False, str(reasons)[:160])
+    check("게이트가 닫혀 있다고 말한다",
+          any("GATE_OPEN=False" in r for r in reasons), str(reasons)[:200])
+    # 문이 닫힌 것 하나에 기대지 않는다 — `where` 검사도 같은 레코드를 독립으로 잡아야 한다.
+    check("where 로도 잡는다 — executed_at",
+          any("executed_at@children[*].measured_at" in r for r in reasons),
+          str(reasons)[:300])
+    check("where 로도 잡는다 — nls_characterset",
+          any("oracle_env.nls_characterset@source.characterset" in r for r in reasons),
+          str(reasons)[:300])
+    # 표시 이름을 키로 박아 넣어도 그 항목은 충족되지 않는다(P2-4).
+    check("표시 이름 키로는 충족되지 않는다",
+          any("hash_vector_result" in r and "위치가 정해지지 않은" in r for r in reasons),
+          str(reasons)[:300])
+    shutil.rmtree(new_work())
+
+
+def t_a9_where_is_the_only_path_authority() -> None:
+    print("\n[65] 조치 9 — 경로 권위는 `where` 하나다 (§5-1)")
+    gate = _gate()
+    # **양성 대조.** `where` 가 가리키는 자리에 실제로 값을 두면 그 항목은 누락에서 빠진다.
+    # 이것이 서지 않으면 [64] 의 '누락' 은 무엇을 넣어도 실패하는 공허한 검사다.
+    good = {"record_type": "g0_evidence", "gate_eligible": True,
+            "g0_report_id": "G0-0-20260831T000000Z",
+            "versions_lock_digest": "a" * 64,
+            "children": {"g0_0a": {"measured_at": "2026-08-31T00:00:00+00:00"}},
+            "source": {"characterset": "AL32UTF8"}}
+    ok, reasons = gate.admit(good)
+    missing = [r for r in reasons if r.startswith("최종 계약 항목 누락")]
+    check("where 를 채우면 누락 사유가 사라진다", not missing, str(missing)[:300])
+    # 같은 값을 **item 이름 자리**에 두면 충족되지 않는다 — 이전 판이 통과시킨 형태다.
+    by_name = {"record_type": "g0_evidence", "gate_eligible": True,
+               "g0_report_id": "G0-0-20260831T000000Z",
+               "versions_lock_digest": "a" * 64,
+               "executed_at": "2026-08-31T00:00:00+00:00",
+               "oracle_env": {"nls_characterset": "AL32UTF8"}}
+    ok2, reasons2 = gate.admit(by_name)
+    m2 = [r for r in reasons2 if r.startswith("최종 계약 항목 누락")]
+    check("item 이름 자리에 두면 충족되지 않는다", len(m2) == 1, str(reasons2)[:300])
+    check("둘 다 어차피 거부다", ok is False and ok2 is False, f"{ok} {ok2}")
+    shutil.rmtree(new_work())
+
+
+def t_a9_gate_closed_admits_nothing() -> None:
+    print("\n[66] 조치 9 — 문이 닫혀 있는 동안에는 무엇도 승인되지 않는다")
+    gate = _gate()
+    check("GATE_OPEN 이 False 다", gate.GATE_OPEN is False, str(gate.GATE_OPEN))
+    # 계약의 COVERED 항목을 where 기준으로 전부 채운 '가장 좋은' 레코드도 거부다.
+    best = {"record_type": "g0_evidence", "gate_eligible": True,
+            "g0_report_id": "G0-0-20260831T000000Z",
+            "versions_lock_digest": "a" * 64,
+            "children": {"g0_0a": {"measured_at": "2026-08-31T00:00:00+00:00"}},
+            "source": {"characterset": "AL32UTF8"}}
+    ok, reasons = gate.admit(best)
+    check("그래도 거부한다", ok is False, str(reasons)[:200])
+    # **문을 억지로 열어도** 위치 미정 항목이 남아 여전히 거부다 — 방벽이 하나가 아니다.
+    gate.GATE_OPEN = True
+    try:
+        ok2, reasons2 = gate.admit(best)
+        check("문을 열어도 위치 미정 때문에 거부", ok2 is False, str(reasons2)[:200])
+        check("사유가 위치 미정이다",
+              any("위치가 정해지지 않은" in r for r in reasons2), str(reasons2)[:200])
+        # 위조 레코드는 문이 열려도 거부다.
+        ok3, _ = gate.admit(_forged_5_1())
+        check("문을 열어도 위조는 거부", ok3 is False)
+    finally:
+        gate.GATE_OPEN = False
+    check("시험이 문을 되돌려 놓았다", gate.GATE_OPEN is False)
+    shutil.rmtree(new_work())
+
+
 def main() -> int:
     print("=" * 70)
     print("g0-normalize.py 반례 회귀 시험 — 7차 §5.1 + 8차 M1·M3 + 9차 조치 3·4·5")
@@ -1494,7 +1596,10 @@ def main() -> int:
               t_a9_ce_same_source_rejected, t_a9_ce_identity_bound_to_own_server,
               t_a9_scope_is_derived_not_declared, t_a9_ce_raises_no_axis,
               # 9차 조치 8
-              t_a9_ttl_undeclared_by_default, t_a9_ttl_declared_positive_control):
+              t_a9_ttl_undeclared_by_default, t_a9_ttl_declared_positive_control,
+              # 9차 조치 9
+              t_a9_forged_record_rejected, t_a9_where_is_the_only_path_authority,
+              t_a9_gate_closed_admits_nothing):
         t()
     print("\n" + "=" * 70)
     print(f"통과 {PASS}건 · 실패 {len(FAIL)}건")

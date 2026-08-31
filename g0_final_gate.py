@@ -18,12 +18,30 @@ aggregator 를 미리 쓰면 그것이 무엇을 집계하는지 스스로도 �
 
     admit(record) -> (bool, [사유…])
 
-세 가지를 본다.
+**게이트는 닫혀 있다**(9차 조치 9 / P1-04 · §5-1). `GATE_OPEN = False` 인 동안
+`admit()` 은 어떤 레코드에도 True 를 주지 않는다. 이유는 단순하다 — 들여보낼 곳이 없다.
+G0-1~G0-5 산출물이 하나도 없고 `aggregate()` 는 `NotImplementedError` 다. 열어 둘 이유가
+없는 문을 열어 놓고 위조를 하나씩 막는 것보다 문을 닫는 것이 근본이다.
 
-1. `record_type == "g0_evidence"` — `g0_0_evidence` 는 **무조건** 거절이다.
+9차 판정 §5-1 이 실증한 것이 그 위조다. 전부 쓰레기 문자열인 레코드가 `admitted = True,
+reasons = []` 로 승인됐다. 값의 schema·digest 를 안 보기 때문만이 아니라, 그 앞에
+**`admit()` 이 계약의 `where` 를 쓰지 않고 `item` 이름을 경로로 해석했기** 때문이다.
+`hash_vector_result (V-01~V-16)` 이라는 이름의 키 하나면 그 항목이 충족됐다.
+
+값 검증(schema·digest)은 **여기서 미리 만들지 않는다.** 최종 레코드의 실물이 없는 상태에서
+검증기를 쓰면 나중에 실물을 검증기에 맞추게 된다 — `aggregate()` 를 구현하지 않은 것과
+같은 이유다. 문은 실물이 생길 때 그 실물에 맞춰 연다.
+
+닫힌 채로도 사유는 전부 모은다. 거절 하나로 끝내면 그 레코드가 **왜** 자격이 없는지가
+안 보이고, 그러면 게이트를 여는 날 무엇을 고쳐야 하는지도 모른다.
+
+1. `GATE_OPEN` — 닫혀 있으면 무조건 거절이다.
+2. `record_type == "g0_evidence"` — `g0_0_evidence` 는 **무조건** 거절이다.
    completeness 가 COMPLETE 든 아니든, 계약 위반이 0건이든 아니든 상관없다.
-2. `gate_eligible is True` — G0-0 스키마에서 이 값은 `const false` 라 바꿀 수단이 없다.
-3. `g0-final-contract.json` 의 항목이 전부 있는가 — 부분 레코드로 게이트를 통과하지 못한다.
+3. `gate_eligible is True` — G0-0 스키마에서 이 값은 `const false` 라 바꿀 수단이 없다.
+4. `g0-final-contract.json` 의 항목이 **`where` 가 가리키는 자리에** 전부 있는가.
+   `where` 가 null 인 항목은 위치가 아직 정해지지 않았다는 뜻이고, 그런 항목은 어떤
+   레코드로도 충족되지 않는다.
 
 사용:
 
@@ -38,6 +56,13 @@ import sys
 CONTRACT_FILE = pathlib.Path(__file__).resolve().parent / "g0-final-contract.json"
 FINAL_RECORD_TYPE = "g0_evidence"
 
+# 최종 G0 게이트는 **닫혀 있다**(9차 조치 9). 이 값을 True 로 바꾸려면 그 전에 전부
+# 참이어야 한다: (a) G0-1~G0-5 산출물이 실재하고, (b) `aggregate()` 가 그 실물에 맞춰
+# 구현됐고, (c) 계약의 모든 항목에 `where` 가 정해졌고, (d) 값의 schema·digest 검증이
+# 실물 레코드에 대고 세워졌다. 넷 중 하나라도 아니면 여는 것은 이르다 —
+# **닫힌 문은 위조를 전부 막지만, 열린 문은 우리가 생각해 낸 위조만 막는다.**
+GATE_OPEN = False
+
 
 def load_contract(path: pathlib.Path | None = None) -> dict:
     p = path or CONTRACT_FILE
@@ -45,8 +70,19 @@ def load_contract(path: pathlib.Path | None = None) -> dict:
 
 
 def contract_items(contract: dict | None = None) -> list[str]:
+    """계약 항목의 **식별자** 목록. 표시 이름(`label`)도 위치(`where`)도 아니다."""
     c = contract or load_contract()
     return [str(i["item"]) for i in c.get("items", []) if isinstance(i, dict) and "item" in i]
+
+
+def item_locations(contract: dict | None = None) -> list[tuple[str, str | None]]:
+    """`(식별자, where)` 목록. `where` 가 None 이면 **위치 미정**이다(9차 조치 9).
+
+    `item` 을 경로로 쓰지 않는다 — 그것이 §5-1 이 실증한 위조 경로였다.
+    """
+    c = contract or load_contract()
+    return [(str(i["item"]), (str(i["where"]) if i.get("where") else None))
+            for i in c.get("items", []) if isinstance(i, dict) and "item" in i]
 
 
 def covered_items(contract: dict | None = None) -> list[dict]:
@@ -92,6 +128,12 @@ def admit(record: dict, contract: dict | None = None) -> tuple[bool, list[str]]:
     if not isinstance(record, dict):
         return False, ["레코드가 객체가 아니다"]
 
+    if not GATE_OPEN:
+        reasons.append(
+            "최종 G0 게이트가 닫혀 있다(GATE_OPEN=False) — G0-1~G0-5 산출물이 하나도 없고 "
+            "aggregate() 도 구현되지 않았다. 들여보낼 곳이 없으므로 **어떤 레코드도** "
+            "승인하지 않는다. 여는 조건은 g0_final_gate.GATE_OPEN 주석에 있다")
+
     rt = record.get("record_type")
     if rt != FINAL_RECORD_TYPE:
         reasons.append(
@@ -104,12 +146,26 @@ def admit(record: dict, contract: dict | None = None) -> tuple[bool, list[str]]:
         reasons.append(f"gate_eligible={record.get('gate_eligible')!r} — 게이트 입력은 "
                        f"스스로 true 를 선언해야 한다")
 
+    # **`where` 가 경로의 유일한 권위다**(9차 조치 9 / §5-1). `item` 을 경로로 해석하면
+    # 계약이 표시용으로 적어 둔 이름과 같은 키 하나로 항목이 충족된다.
     c = contract or load_contract()
-    missing = [it for it in contract_items(c) if not resolve(record, it)]
+    missing: list[str] = []
+    undefined: list[str] = []
+    for name, where in item_locations(c):
+        if where is None:
+            undefined.append(name)
+        elif not resolve(record, where):
+            missing.append(f"{name}@{where}")
+    if undefined:
+        reasons.append(f"위치가 정해지지 않은 계약 항목 {undefined} — `where` 가 null 인 "
+                       f"항목은 어떤 레코드로도 충족되지 않는다. 그 위치는 G0-1~G0-5 실물이 "
+                       f"생길 때 정한다")
     if missing:
         reasons.append(f"최종 계약 항목 누락 {missing} — 부분 레코드는 게이트 입력이 아니다")
 
-    return (not reasons), reasons
+    # 닫혀 있으면 사유가 비어도 통과시키지 않는다. 두 조건을 곱으로 두는 이유는,
+    # 사유 수집 로직이 나중에 바뀌어도 문이 열리는 일이 없게 하기 위해서다.
+    return (GATE_OPEN and not reasons), reasons
 
 
 def aggregate(*_args, **_kwargs):

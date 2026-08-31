@@ -1,5 +1,5 @@
 {
- "$comment": "최종 G0 증거 레코드(P §8.1 8번 `g0_evidence`)의 **항목 집합**이다. 8차 교차 리뷰 M3-4 의 조치. 이 파일이 있는 이유는 하나다 — `g0-0-evidence.schema.json` 의 `not_covered` 가 '아홉 항' 이라는 것을 스스로 선언할 뿐, **무엇에 대한 아홉 항인지** 를 말하지 못했다. 덮은 것과 덮지 못한 것의 합이 최종 계약과 같은지 기계가 확인할 대상이 없었다. 이 파일이 그 대상이다. 값이 아니라 목록이며, 값을 채우는 aggregator 는 여기 없다(`g0_final_gate.py` 머리말 참조).",
+ "$comment": "최종 G0 증거 레코드(P §8.1 8번 `g0_evidence`)의 **항목 집합**이다. 8차 교차 리뷰 M3-4 의 조치. 이 파일이 있는 이유는 하나다 — `g0-0-evidence.schema.json` 의 `not_covered` 가 '아홉 항' 이라는 것을 스스로 선언할 뿐, **무엇에 대한 아홉 항인지** 를 말하지 못했다. 덮은 것과 덮지 못한 것의 합이 최종 계약과 같은지 기계가 확인할 대상이 없었다. 이 파일이 그 대상이다. 값이 아니라 목록이며, 값을 채우는 aggregator 는 여기 없다(`g0_final_gate.py` 머리말 참조). **9차 조치 9(P2-4).** `item` 은 식별자이고 `label` 은 사람에게 보이는 이름이며, 레코드 안에서의 위치는 오직 `where` 가 말한다. 이전 판은 셋이 한 문자열에 섞여 있었고 `g0_final_gate.admit()` 이 `item` 을 경로로 해석했다 — `hash_vector_result (V-01~V-16)` 이라는 이름의 키 하나만 있으면 그 항목이 충족된 것으로 읽혔다. `where` 가 null 인 항목은 **위치가 아직 정해지지 않았다**는 뜻이고, 그런 항목은 어떤 레코드로도 충족되지 않는다. 그 위치는 G0-1~G0-5 실물이 생길 때 정한다 — 없는 것을 미리 지어내지 않는다.",
  "record_type": "g0_evidence",
  "authority": "etl-platform-poc-test-plan-v1.md §8.1 8번 — 'G0 증거 레코드 g0_evidence'",
  "final_aggregator": "NOT_IMPLEMENTED",
@@ -7,72 +7,93 @@
  "items": [
   {
    "item": "g0_report_id",
+   "label": "g0_report_id",
    "g0_0": "COVERED",
    "where": "g0_report_id",
    "why": "정규화 회차 식별자. G0-0 레코드가 자기 것을 발급한다. 최종 레코드의 id 와 같은 값일 필요는 없으며, 최종 aggregator 는 자기 id 를 따로 발급하고 이 값을 입력 목록으로 참조한다."
   },
   {
    "item": "executed_at",
+   "label": "executed_at",
    "g0_0": "COVERED",
    "where": "children[*].measured_at",
    "why": "**`normalized_at` 이 아니다.** 7차 P0-03 이 지적한 것이 정확히 그 혼동이었다 — 정규화 시각을 측정 시각으로 적었다. 측정 시각의 권위는 child 래퍼가 적은 `ended_at` 이며 집계기는 그것을 옮길 뿐 만들지 않는다."
   },
   {
    "item": "versions_lock_digest",
+   "label": "versions_lock_digest",
    "g0_0": "COVERED",
    "where": "versions_lock_digest",
    "why": "집계 시점 `versions.lock` 의 sha256 이며 모든 child manifest 의 실행 시점 digest 와 같아야 통과한다. 다르면 계약 위반이다."
   },
   {
    "item": "oracle_env.nls_characterset",
+   "label": "oracle_env.nls_characterset",
    "g0_0": "COVERED",
    "where": "source.characterset",
    "why": "G0-0A probe `nls.characterset` 이 값을 읽는다. 축 `db_charset` 은 같은 값을 등급이 아니라 관측값 그대로 싣는다."
   },
-
   {
-   "item": "hash_vector_result (V-01~V-16)",
+   "item": "hash_vector_result",
+   "label": "hash_vector_result (V-01~V-16)",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "canonical hash 벡터 시험은 G0-3 소관이다. G0-0 은 STANDARD_HASH 가용성만 본다."
   },
   {
    "item": "ddl_digest",
+   "label": "ddl_digest",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "target(Iceberg) DDL 이 아직 없다. 플랫폼을 세운 뒤에 생긴다."
   },
   {
    "item": "verdict_sql_digest",
+   "label": "verdict_sql_digest",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "판정 SQL 이 규범 확정 후에 나온다."
   },
   {
    "item": "canonical_hash_spec_digest",
+   "label": "canonical_hash_spec_digest",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "ETL_CANON 함수·pinned 매핑표가 아직 없다(원천 DDL 불가로 보류)."
   },
   {
    "item": "submission_path_result",
+   "label": "submission_path_result",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "Dagster 제출 경로 시험은 G1 소관이다."
   },
   {
    "item": "source_kind",
+   "label": "source_kind",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "ORACLE_TEST_INSTANCE / ORACLE_COMPATIBLE_STUB 구분은 G0-1~5 aggregator 가 정한다. G0-0 은 접속한 서버가 스스로 밝힌 신원만 기록한다."
   },
   {
    "item": "oracle_env.nls_nchar_characterset",
+   "label": "oracle_env.nls_nchar_characterset",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "**값은 G0-0A 가 수집한다**(probe `nls.nchar_characterset`) — source 에 담는다. 덮지 못하는 것은 그 값이 STRING 경로의 TO_NCHAR 결과에 미치는 영향 판정이며 그것은 G0-3 V-01~V-16 소관이다."
   },
   {
    "item": "oracle_env.max_string_size",
+   "label": "oracle_env.max_string_size",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "**값은 G0-0A 가 수집한다**(probe `v$parameter.max_string`) — source 에 담는다. 덮지 못하는 것은 그 값이 canonical hash 규격에 미치는 영향 판정이며 G0-3 소관이다."
   },
   {
-   "item": "same_lock (G0-5)",
+   "item": "same_lock",
+   "label": "same_lock (G0-5)",
    "g0_0": "NOT_COVERED",
+   "where": null,
    "why": "동일 lock 실증은 G0-1~G0-4 산출물이 모두 있어야 성립한다. G0-0 하나로는 불가능하다."
   }
  ]

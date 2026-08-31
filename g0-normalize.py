@@ -65,7 +65,7 @@ import g0_axes
 import g0_final_gate
 
 SCHEMA_FILE = "g0-0-evidence.schema.json"
-SCHEMA_VERSION = "2.2.0"
+SCHEMA_VERSION = "2.3.0"   # 9차 조치 9 — not_covered 항목 식별자에서 표시 이름을 뗐다
 FINAL_CONTRACT_FILE = "g0-final-contract.json"
 
 # capability 값의 유효기간에는 **기본값이 없다**(9차 조치 8 / P1-03).
